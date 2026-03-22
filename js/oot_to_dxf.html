@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vulcan .00t → DXF Converter — blastingapps.com</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg-deep:#0c0c14;--bg:#12121e;--bg-card:#181828;--bg-raised:#1e1e32;
+  --border:#2a2a44;--border-hi:#3a3a5a;
+  --txt:#c8cce0;--txt-dim:#6a6e88;--txt-bright:#eef0ff;
+  --red:#f05068;--red-dim:#c0384e;--red-glow:rgba(240,80,104,0.15);
+  --blue:#5898ff;--blue-dim:#3a6acc;--blue-glow:rgba(88,152,255,0.12);
+  --green:#48d888;--green-dim:#2eaa66;
+  --amber:#e8a838;
+  --pink:#e878b8;
+  --mono:'JetBrains Mono','Consolas','Courier New',monospace;
+  --sans:'DM Sans','Segoe UI',system-ui,sans-serif;
+  --radius:8px;--radius-sm:5px;
+}
+html,body{height:100%;font-family:var(--sans);background:var(--bg-deep);color:var(--txt);overflow:hidden}
+body{display:flex;flex-direction:column}
+
+/* ─── Header ─── */
+.header{
+  padding:16px 24px 12px;
+  background:linear-gradient(180deg,var(--bg) 0%,var(--bg-deep) 100%);
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:16px;flex-shrink:0;
+}
+.header .logo{
+  width:36px;height:36px;border-radius:50%;
+  background:linear-gradient(135deg,var(--red),#c03858);
+  display:flex;align-items:center;justify-content:center;
+  font-size:18px;font-weight:700;color:#fff;font-family:var(--mono);
+  box-shadow:0 2px 12px var(--red-glow);
+}
+.header h1{font-size:17px;font-weight:700;color:var(--red);font-family:var(--mono);letter-spacing:-0.3px}
+.header .sub{font-size:11.5px;color:var(--txt-dim);margin-left:-8px}
+.header .spacer{flex:1}
+.header .badge{
+  font-size:10px;font-family:var(--mono);padding:3px 10px;
+  border:1px solid var(--border);border-radius:20px;color:var(--txt-dim);
+}
+
+/* ─── Main layout ─── */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden;padding:12px 20px 8px}
+
+/* ─── Toolbar ─── */
+.toolbar{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-shrink:0;flex-wrap:wrap}
+.btn{
+  font-family:var(--sans);font-size:12.5px;font-weight:600;
+  padding:7px 18px;border:1px solid var(--border);border-radius:var(--radius-sm);
+  cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:6px;
+  background:var(--bg-raised);color:var(--txt);
+}
+.btn:hover{border-color:var(--border-hi);background:var(--bg-card);color:var(--txt-bright)}
+.btn:active{transform:scale(.97)}
+.btn.primary{background:var(--red);color:#fff;border-color:var(--red);font-size:13px;padding:8px 28px}
+.btn.primary:hover{background:var(--red-dim);border-color:var(--red-dim)}
+.btn.primary:disabled{opacity:.35;cursor:not-allowed;transform:none}
+.btn.accent{background:var(--blue);color:#fff;border-color:var(--blue)}
+.btn.accent:hover{background:var(--blue-dim);border-color:var(--blue-dim)}
+.btn svg{width:14px;height:14px;fill:currentColor;flex-shrink:0}
+.toolbar .sep{width:1px;height:24px;background:var(--border);margin:0 4px}
+.toolbar select{
+  font-family:var(--sans);font-size:12px;padding:6px 10px;
+  background:var(--bg-raised);color:var(--txt);border:1px solid var(--border);
+  border-radius:var(--radius-sm);cursor:pointer;
+}
+.toolbar select:hover{border-color:var(--border-hi)}
+.toolbar label{font-size:12px;color:var(--txt-dim);display:flex;align-items:center;gap:5px;cursor:pointer}
+.toolbar label input[type=checkbox]{accent-color:var(--blue);width:14px;height:14px}
+.toolbar .spacer{flex:1}
+
+/* ─── Drop zone ─── */
+.dropzone{
+  flex:1;min-height:0;display:flex;flex-direction:column;
+  border:2px dashed var(--border);border-radius:var(--radius);
+  background:var(--bg);transition:all .2s;position:relative;overflow:hidden;
+}
+.dropzone.dragover{border-color:var(--blue);background:var(--bg-card);box-shadow:inset 0 0 40px var(--blue-glow)}
+.dropzone.has-files{border-style:solid;border-color:var(--border)}
+.drop-prompt{
+  position:absolute;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:10px;
+  pointer-events:none;transition:opacity .2s;
+}
+.dropzone.has-files .drop-prompt{opacity:0}
+.drop-prompt svg{width:48px;height:48px;stroke:var(--txt-dim);stroke-width:1.5;fill:none}
+.drop-prompt p{font-size:13px;color:var(--txt-dim)}
+.drop-prompt p b{color:var(--blue)}
+
+/* ─── File table ─── */
+.file-table-wrap{flex:1;overflow-y:auto;overflow-x:hidden}
+.file-table{width:100%;border-collapse:collapse;font-size:12px}
+.file-table thead{position:sticky;top:0;z-index:2}
+.file-table th{
+  background:var(--bg-deep);color:var(--txt-dim);font-weight:600;font-size:11px;
+  text-transform:uppercase;letter-spacing:.8px;padding:8px 12px;text-align:left;
+  border-bottom:1px solid var(--border);
+}
+.file-table th:nth-child(2),
+.file-table td:nth-child(2){text-align:right;width:90px}
+.file-table th:nth-child(3),
+.file-table td:nth-child(3){width:80px;text-align:center}
+.file-table td{
+  padding:6px 12px;border-bottom:1px solid rgba(42,42,68,.4);
+  font-family:var(--mono);font-size:11.5px;
+  transition:background .1s;
+}
+.file-table tr:hover td{background:var(--bg-raised)}
+.file-table .fname{color:var(--txt-bright);font-weight:500}
+.file-table .fsize{color:var(--txt-dim);font-family:var(--mono)}
+.file-table .status-ok{color:var(--green);font-weight:600}
+.file-table .status-fail{color:var(--red);font-weight:600}
+.file-table .status-wait{color:var(--txt-dim)}
+.file-table .status-run{color:var(--amber);font-weight:600}
+.file-table .detail{color:var(--txt-dim);font-family:var(--sans);font-size:11.5px}
+.file-table .detail .vcount{color:var(--blue)}
+.file-table .detail .fcount{color:var(--pink)}
+.file-table .remove{
+  cursor:pointer;color:var(--txt-dim);font-size:16px;padding:0 6px;
+  transition:color .1s;line-height:1;
+}
+.file-table .remove:hover{color:var(--red)}
+
+/* ─── Progress ─── */
+.progress-bar{
+  height:4px;background:var(--bg-raised);border-radius:2px;
+  margin-top:8px;overflow:hidden;flex-shrink:0;opacity:0;transition:opacity .2s;
+}
+.progress-bar.active{opacity:1}
+.progress-bar .fill{height:100%;background:var(--blue);border-radius:2px;transition:width .3s ease-out;width:0}
+
+/* ─── Footer ─── */
+.footer{
+  padding:8px 24px;font-size:11px;color:var(--txt-dim);
+  border-top:1px solid var(--border);background:var(--bg);
+  display:flex;align-items:center;gap:12px;flex-shrink:0;
+}
+.footer .dot{width:6px;height:6px;border-radius:50%;background:var(--green)}
+.footer .dot.idle{background:var(--txt-dim)}
+
+/* ─── Scrollbar ─── */
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--border-hi)}
+
+/* ─── Animation ─── */
+@keyframes fadeSlideIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.file-table tr{animation:fadeSlideIn .25s ease-out both}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">K</div>
+  <div>
+    <h1>Vulcan .00t → DXF Converter</h1>
+    <div class="sub">Batch convert Maptek Vulcan triangulations • blastingapps.com</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="badge">v1.0 • vulZ decoder</div>
+</div>
+
+<div class="main">
+  <div class="toolbar">
+    <button class="btn accent" id="btnAdd" onclick="addFiles()">
+      <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> Add Files
+    </button>
+    <button class="btn" id="btnFolder" onclick="addFolder()">
+      <svg viewBox="0 0 24 24"><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg> Add Folder
+    </button>
+    <div class="sep"></div>
+    <label>Format: <select id="selFormat">
+      <option value="3dface">3DFACE DXF</option>
+      <option value="points">Point Cloud DXF</option>
+      <option value="obj">OBJ (Wavefront)</option>
+      <option value="csv">Vertex CSV</option>
+    </select></label>
+    <div class="sep"></div>
+    <label><input type="checkbox" id="chkSidecar" checked> Use .dxf sidecar for faces</label>
+    <div class="spacer"></div>
+    <button class="btn" onclick="clearAll()">Clear All</button>
+    <button class="btn primary" id="btnConvert" onclick="convertAll()" disabled>Convert All</button>
+  </div>
+
+  <div class="dropzone" id="dropzone">
+    <div class="drop-prompt">
+      <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+      <p>Drag & drop <b>.00t files</b> here, or click <b>Add Files</b></p>
+    </div>
+    <div class="file-table-wrap" id="tableWrap">
+      <table class="file-table" id="fileTable">
+        <thead><tr><th>File</th><th>Size</th><th>Status</th><th>Details</th><th></th></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="progress-bar" id="progressBar"><div class="fill" id="progressFill"></div></div>
+</div>
+
+<div class="footer">
+  <div class="dot idle" id="statusDot"></div>
+  <span id="statusText">Ready — drag & drop .00t files to begin</span>
+</div>
+
+<!-- Hidden file inputs -->
+<input type="file" id="fileInput" multiple accept=".00t,.00T" style="display:none">
+<input type="file" id="folderInput" webkitdirectory style="display:none">
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+// 00t PARSER (pure JS, zero dependencies)
+// ═══════════════════════════════════════════════════════════════
+
+function isSep(b) { return (b & 0x07) === 0x07 && b >= 0x07; }
+
+function readBEDouble(buf, off) {
+  const dv = new DataView(buf.buffer || buf, buf.byteOffset || 0);
+  // Build 8 bytes manually to handle offset in Uint8Array
+  const tmp = new ArrayBuffer(8);
+  const tv = new DataView(tmp);
+  for (let i = 0; i < 8; i++) tv.setUint8(i, off + i < buf.length ? buf[off + i] : 0);
+  return tv.getFloat64(0, false);
+}
+
+function findBytes(data, needle, start = 0) {
+  outer: for (let i = start; i <= data.length - needle.length; i++) {
+    for (let j = 0; j < needle.length; j++) if (data[i+j] !== needle[j]) continue outer;
+    return i;
+  }
+  return -1;
+}
+
+function rfindBytes(data, needle, start, end) {
+  outer: for (let i = end - needle.length; i >= start; i--) {
+    for (let j = 0; j < needle.length; j++) if (data[i+j] !== needle[j]) continue outer;
+    return i;
+  }
+  return -1;
+}
+
+function parseOOT(arrayBuffer) {
+  const data = new Uint8Array(arrayBuffer);
+  const warnings = [];
+  const result = { vertices: [], faces: [], coordValues: [], faceVertexIndices: [],
+    nVertsHeader: 0, nFacesHeader: 0, warnings, success: false };
+
+  if (data.length < 64) { warnings.push('File too small'); return result; }
+  const magic = (data[0]<<24)|(data[1]<<16)|(data[2]<<8)|data[3];
+  if (magic !== 0xEAFBA78A) { warnings.push('Bad magic: 0x' + magic.toString(16)); return result; }
+
+  // Find Variant marker (with fallbacks)
+  let dataStart = -1;
+  const varNeedle = [0x56,0x61,0x72,0x69,0x61,0x6E,0x74,0x00]; // "Variant\0"
+  let vi = findBytes(data, varNeedle);
+  if (vi >= 0) {
+    dataStart = vi + 8;
+  } else {
+    // Fallback: find "Created External"
+    const ceNeedle = [0x43,0x72,0x65,0x61,0x74,0x65,0x64]; // "Created"
+    let ce = findBytes(data, ceNeedle);
+    if (ce >= 0) {
+      let v2 = findBytes(data, varNeedle.slice(0,7), ce + 16);
+      if (v2 >= 0) { dataStart = v2 + 8; warnings.push('Variant via CE fallback'); }
+    }
+    // Fallback 2: pre-coord header pattern
+    if (dataStart < 0) {
+      const altM = [0x20,0xE0,0x06,0x00,0x00,0x43];
+      let ai = findBytes(data, altM);
+      if (ai >= 0) { dataStart = ai; warnings.push('Using alt header fallback'); }
+    }
+    if (dataStart < 0) { warnings.push('No Variant marker found'); return result; }
+  }
+
+  if (dataStart + 23 >= data.length) { warnings.push('Data section too short'); return result; }
+
+  result.nVertsHeader = data[dataStart + 12];
+  result.nFacesHeader = data[dataStart + 19];
+
+  // Find attribute suffix
+  const attrSuffix = [0x00,0x05,0x40,0x04,0x00,0x0A,0x20,0x08,0x07];
+  let attrPos = findBytes(data, attrSuffix, dataStart);
+  if (attrPos < 0) attrPos = data.length;
+
+  const regionStart = dataStart + 23;
+  const regionEnd = attrPos;
+
+  // Find first coordinate
+  let coordOff = 0;
+  for (let i = regionStart; i < regionEnd - 2; i++) {
+    if (data[i] <= 0x06 && (data[i+1] === 0x40 || data[i+1] === 0x41)) { coordOff = i; break; }
+  }
+
+  // Find face section marker (last "20 00")
+  let faceMarker = rfindBytes(data, [0x20,0x00], regionStart, attrPos);
+  const coordEnd = (faceMarker > regionStart) ? faceMarker : regionEnd;
+  const faceStart = (faceMarker > regionStart) ? faceMarker + 2 : -1;
+
+  // Decode coordinates
+  const prev = new Uint8Array(8);
+  let pos = coordOff;
+  while (pos < coordEnd) {
+    const b = data[pos];
+    if (b <= 0x06) {
+      const cnt = b, nB = cnt + 1;
+      if (pos + 1 + nB > coordEnd) break;
+      const stored = data.slice(pos+1, pos+1+nB);
+      const res = new Uint8Array(8);
+      if (stored[0]===0x40||stored[0]===0x41||stored[0]===0xC0||stored[0]===0xC1) {
+        for (let i=0;i<nB;i++) res[i]=stored[i];
+      } else {
+        res[0] = prev[0];
+        for (let i=0;i<nB;i++) res[i+1]=stored[i];
+        for (let i=nB+1;i<8;i++) res[i]=prev[i];
+      }
+      const tmp = new ArrayBuffer(8); const tv = new DataView(tmp);
+      for (let i=0;i<8;i++) tv.setUint8(i,res[i]);
+      const val = tv.getFloat64(0,false);
+      result.coordValues.push(val);
+      for (let i=0;i<8;i++) prev[i]=res[i];
+      pos += 1+nB;
+    } else if (isSep(b)) { pos++; }
+    else if (pos+1 < coordEnd) { pos+=2; }
+    else break;
+  }
+
+  // Decode face vertex indices
+  if (faceStart > 0) {
+    let fp = faceStart;
+    while (fp < regionEnd) {
+      const b = data[fp];
+      if (b <= 0x06) {
+        const cnt = b, nB = cnt+1;
+        if (fp+1+nB > regionEnd) break;
+        for (let i=0;i<nB;i++) {
+          const v = data[fp+1+i];
+          if (v >= 1 && v <= result.nVertsHeader) result.faceVertexIndices.push(v);
+        }
+        fp += 1+nB;
+      } else if (isSep(b)) { fp++; }
+      else if (fp+1 < regionEnd) { fp+=2; }
+      else break;
+    }
+  }
+
+  // Build vertices (sequential axis-change heuristic)
+  if (result.coordValues.length >= 3) {
+    let cx = result.coordValues[0], cy = result.coordValues[1], cz = result.coordValues[2];
+    result.vertices.push([cx, cy, cz]);
+    for (let i = 3; i < result.coordValues.length; i++) {
+      const v = result.coordValues[i];
+      const dx = Math.abs(v-cx), dy = Math.abs(v-cy), dz = Math.abs(v-cz);
+      if (dx <= dy && dx <= dz) cx = v;
+      else if (dy <= dz) cy = v;
+      else cz = v;
+      result.vertices.push([cx, cy, cz]);
+    }
+  }
+
+  if (result.coordValues.length === 0) warnings.push('No coordinates decoded');
+  else result.success = true;
+  return result;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DXF WRITER
+// ═══════════════════════════════════════════════════════════════
+
+function makeDXF3DFace(vertices, faces) {
+  let s = '0\nSECTION\n2\nENTITIES\n';
+  for (const [i0,i1,i2] of faces) {
+    if (Math.max(i0,i1,i2) >= vertices.length) continue;
+    const [x0,y0,z0]=vertices[i0],[x1,y1,z1]=vertices[i1],[x2,y2,z2]=vertices[i2];
+    s += '0\n3DFACE\n8\n0\n';
+    s += `10\n${x0}\n20\n${y0}\n30\n${z0}\n`;
+    s += `11\n${x1}\n21\n${y1}\n31\n${z1}\n`;
+    s += `12\n${x2}\n22\n${y2}\n32\n${z2}\n`;
+    s += `13\n${x2}\n23\n${y2}\n33\n${z2}\n`; // 4th=3rd for triangle
+  }
+  s += '0\nENDSEC\n0\nEOF\n';
+  return s;
+}
+
+function makeDXFPoints(vertices) {
+  let s = '0\nSECTION\n2\nENTITIES\n';
+  for (const [x,y,z] of vertices) {
+    s += `0\nPOINT\n8\n0\n10\n${x}\n20\n${y}\n30\n${z}\n`;
+  }
+  s += '0\nENDSEC\n0\nEOF\n';
+  return s;
+}
+
+function makeOBJ(vertices, faces) {
+  let s = '# Vulcan .00t export — blastingapps.com\n';
+  for (const [x,y,z] of vertices) s += `v ${x} ${y} ${z}\n`;
+  for (const [i0,i1,i2] of faces) s += `f ${i0+1} ${i1+1} ${i2+1}\n`;
+  return s;
+}
+
+function makeCSV(vertices) {
+  let s = 'Index,X,Y,Z\n';
+  vertices.forEach(([x,y,z], i) => { s += `${i},${x},${y},${z}\n`; });
+  return s;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SIDECAR DXF READER (minimal parser for 3DFACE entities)
+// ═══════════════════════════════════════════════════════════════
+
+function parseSidecarDXF(text) {
+  const lines = text.split(/\r?\n/);
+  const faces = [];
+  const vertMap = new Map();
+  const vertList = [];
+
+  function vkey(x,y,z) { return `${(+x).toFixed(6)},${(+y).toFixed(6)},${(+z).toFixed(6)}`; }
+  function getOrAdd(x,y,z) {
+    const k = vkey(x,y,z);
+    if (vertMap.has(k)) return vertMap.get(k);
+    const idx = vertList.length;
+    vertMap.set(k, idx);
+    vertList.push([+x,+y,+z]);
+    return idx;
+  }
+
+  let i = 0;
+  while (i < lines.length - 1) {
+    if (lines[i].trim() === '0' && lines[i+1].trim() === '3DFACE') {
+      i += 2;
+      const codes = {};
+      while (i < lines.length - 1) {
+        const code = parseInt(lines[i].trim());
+        if (code === 0) break;
+        codes[code] = parseFloat(lines[i+1].trim());
+        i += 2;
+      }
+      if (codes[10] !== undefined && codes[20] !== undefined && codes[30] !== undefined) {
+        const v0 = getOrAdd(codes[10], codes[20], codes[30]);
+        const v1 = getOrAdd(codes[11]||0, codes[21]||0, codes[31]||0);
+        const v2 = getOrAdd(codes[12]||0, codes[22]||0, codes[32]||0);
+        faces.push([v0, v1, v2]);
+      }
+    } else { i++; }
+  }
+  return { vertices: vertList, faces };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// APP STATE
+// ═══════════════════════════════════════════════════════════════
+
+const fileEntries = []; // {file, name, size, status, detail, sidecarFile?, result?}
+
+function addFiles() { document.getElementById('fileInput').click(); }
+function addFolder() { document.getElementById('folderInput').click(); }
+
+document.getElementById('fileInput').addEventListener('change', e => {
+  handleNewFiles(Array.from(e.target.files));
+  e.target.value = '';
+});
+document.getElementById('folderInput').addEventListener('change', e => {
+  handleNewFiles(Array.from(e.target.files));
+  e.target.value = '';
+});
+
+// Drag & drop
+const dz = document.getElementById('dropzone');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('dragover'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('dragover'));
+dz.addEventListener('drop', e => {
+  e.preventDefault(); dz.classList.remove('dragover');
+  const files = [];
+  for (const item of e.dataTransfer.items) {
+    if (item.kind === 'file') files.push(item.getAsFile());
+  }
+  handleNewFiles(files);
+});
+
+function handleNewFiles(files) {
+  const existing = new Set(fileEntries.map(e => e.name));
+  const ootFiles = [];
+  const sidecarMap = new Map();
+
+  for (const f of files) {
+    const lname = f.name.toLowerCase();
+    if (lname.endsWith('.00t')) {
+      if (!existing.has(f.name)) ootFiles.push(f);
+    } else if (lname.endsWith('.dxf')) {
+      // Potential sidecar — map by base name
+      const base = f.name.replace(/\.dxf$/i, '');
+      sidecarMap.set(base.toLowerCase(), f);
+    }
+  }
+
+  for (const f of ootFiles) {
+    const base = f.name.replace(/\.00t$/i, '');
+    const sidecar = sidecarMap.get(base.toLowerCase()) || null;
+    fileEntries.push({ file: f, name: f.name, size: f.size, status: 'pending', detail: '', sidecarFile: sidecar, result: null });
+  }
+
+  refreshTable();
+  document.getElementById('btnConvert').disabled = fileEntries.length === 0;
+  setStatus(fileEntries.length + ' file(s) queued');
+}
+
+function clearAll() {
+  fileEntries.length = 0;
+  refreshTable();
+  document.getElementById('btnConvert').disabled = true;
+  setStatus('Ready — drag & drop .00t files to begin');
+}
+
+function removeFile(idx) {
+  fileEntries.splice(idx, 1);
+  refreshTable();
+  document.getElementById('btnConvert').disabled = fileEntries.length === 0;
+}
+
+function refreshTable() {
+  const dz = document.getElementById('dropzone');
+  dz.classList.toggle('has-files', fileEntries.length > 0);
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '';
+  fileEntries.forEach((entry, idx) => {
+    const tr = document.createElement('tr');
+    tr.style.animationDelay = (idx * 30) + 'ms';
+    const sizeKB = (entry.size / 1024).toFixed(1);
+    let statusClass = 'status-wait', statusText = 'Pending';
+    if (entry.status === 'ok') { statusClass = 'status-ok'; statusText = 'OK'; }
+    else if (entry.status === 'fail') { statusClass = 'status-fail'; statusText = 'FAIL'; }
+    else if (entry.status === 'running') { statusClass = 'status-run'; statusText = '...'; }
+
+    let detailHTML = entry.detail;
+    // Highlight vertex/face counts
+    detailHTML = detailHTML.replace(/(\d+)\s*verts?/g, '<span class="vcount">$1 verts</span>');
+    detailHTML = detailHTML.replace(/(\d+)\s*faces?/g, '<span class="fcount">$1 faces</span>');
+
+    const sidecarBadge = entry.sidecarFile ? ' <span style="color:var(--green);font-size:10px" title="Sidecar DXF found">●dxf</span>' : '';
+
+    tr.innerHTML = `
+      <td class="fname">${entry.name}${sidecarBadge}</td>
+      <td class="fsize">${sizeKB} KB</td>
+      <td class="${statusClass}">${statusText}</td>
+      <td class="detail">${detailHTML}</td>
+      <td class="remove" onclick="removeFile(${idx})" title="Remove">×</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function setStatus(msg, active) {
+  document.getElementById('statusText').textContent = msg;
+  document.getElementById('statusDot').className = 'dot' + (active ? '' : ' idle');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CONVERSION
+// ═══════════════════════════════════════════════════════════════
+
+async function convertAll() {
+  const format = document.getElementById('selFormat').value;
+  const useSidecar = document.getElementById('chkSidecar').checked;
+  const btn = document.getElementById('btnConvert');
+  btn.disabled = true;
+
+  const bar = document.getElementById('progressBar');
+  const fill = document.getElementById('progressFill');
+  bar.classList.add('active');
+
+  let successCount = 0;
+
+  for (let i = 0; i < fileEntries.length; i++) {
+    const entry = fileEntries[i];
+    entry.status = 'running';
+    entry.detail = 'Parsing...';
+    refreshTable();
+    fill.style.width = ((i / fileEntries.length) * 100) + '%';
+    setStatus(`Processing ${entry.name} (${i+1}/${fileEntries.length})...`, true);
+
+    await new Promise(r => setTimeout(r, 10)); // yield to UI
+
+    try {
+      const buf = await entry.file.arrayBuffer();
+      const parsed = parseOOT(buf);
+      entry.result = parsed;
+
+      if (!parsed.success) {
+        entry.status = 'fail';
+        entry.detail = parsed.warnings.join('; ') || 'Parse failed';
+        refreshTable();
+        continue;
+      }
+
+      let vertices = parsed.vertices;
+      let faces = [];
+      let usedSidecar = false;
+
+      // Try sidecar
+      if (useSidecar && entry.sidecarFile) {
+        try {
+          const dxfText = await entry.sidecarFile.text();
+          const sc = parseSidecarDXF(dxfText);
+          if (sc.faces.length > 0) {
+            faces = sc.faces;
+            vertices = sc.vertices.length > 0 ? sc.vertices : vertices;
+            usedSidecar = true;
+          }
+        } catch (e) { /* sidecar failed, continue without */ }
+      }
+
+      // Generate output
+      let content, ext, mime;
+      if (format === '3dface') {
+        if (faces.length > 0) {
+          content = makeDXF3DFace(vertices, faces);
+          ext = '.dxf';
+          entry.detail = `${vertices.length} verts, ${faces.length} faces → DXF` + (usedSidecar ? ' (sidecar)' : '');
+        } else {
+          content = makeDXFPoints(vertices);
+          ext = '_points.dxf';
+          entry.detail = `${vertices.length} verts (no faces, points only)`;
+        }
+        mime = 'application/dxf';
+      } else if (format === 'points') {
+        content = makeDXFPoints(vertices);
+        ext = '_points.dxf'; mime = 'application/dxf';
+        entry.detail = `${vertices.length} points → DXF`;
+      } else if (format === 'obj') {
+        content = makeOBJ(vertices, faces);
+        ext = '.obj'; mime = 'text/plain';
+        entry.detail = `${vertices.length} verts, ${faces.length} faces → OBJ`;
+      } else {
+        content = makeCSV(vertices);
+        ext = '_vertices.csv'; mime = 'text/csv';
+        entry.detail = `${vertices.length} verts → CSV`;
+      }
+
+      // Download
+      const baseName = entry.name.replace(/\.00t$/i, '');
+      downloadBlob(content, baseName + '_export' + ext, mime);
+
+      entry.status = 'ok';
+      successCount++;
+    } catch (e) {
+      entry.status = 'fail';
+      entry.detail = 'Error: ' + e.message;
+    }
+    refreshTable();
+  }
+
+  fill.style.width = '100%';
+  setTimeout(() => { bar.classList.remove('active'); fill.style.width = '0'; }, 1500);
+  btn.disabled = false;
+  setStatus(`Done: ${successCount}/${fileEntries.length} files converted`, false);
+}
+
+function downloadBlob(content, filename, mime) {
+  const blob = new Blob([content], { type: mime });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 100);
+}
+</script>
+</body>
+</html>

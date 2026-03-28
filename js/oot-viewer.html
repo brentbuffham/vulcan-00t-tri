@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Vulcan .00t Viewer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+#drop-zone {
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  display: flex; align-items: center; justify-content: center;
+  z-index: 10; pointer-events: none;
+}
+#drop-zone.active { background: rgba(99,102,241,0.15); pointer-events: all; }
+#drop-zone .msg { font-size: 24px; color: #6366f1; display: none; }
+#drop-zone.active .msg { display: block; }
+#canvas-container { width: 100vw; height: 100vh; }
+#info {
+  position: absolute; top: 12px; left: 12px; background: rgba(0,0,0,0.7);
+  padding: 12px 16px; border-radius: 8px; font-size: 13px; line-height: 1.6;
+  max-width: 360px; z-index: 5;
+}
+#info h2 { font-size: 15px; color: #6366f1; margin-bottom: 4px; }
+#info .stat { color: #a0a0a0; }
+#info .val { color: #e0e0e0; font-weight: 600; }
+#controls {
+  position: absolute; bottom: 12px; left: 12px; z-index: 5;
+  display: flex; gap: 8px;
+}
+#controls button {
+  background: #2a2a4a; color: #e0e0e0; border: 1px solid #444;
+  padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 13px;
+}
+#controls button:hover { background: #3a3a5a; border-color: #6366f1; }
+#warn {
+  position: absolute; bottom: 12px; right: 12px; z-index: 5;
+  background: rgba(200,50,50,0.8); padding: 8px 14px; border-radius: 6px;
+  font-size: 12px; display: none; max-width: 400px;
+}
+#no-file {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  text-align: center; z-index: 3; color: #666;
+}
+#no-file h1 { font-size: 28px; color: #6366f1; margin-bottom: 8px; }
+#no-file p { font-size: 15px; }
+</style>
+</head>
+<body>
+
+<div id="drop-zone"><div class="msg">Drop .00t file here</div></div>
+<div id="canvas-container"></div>
+
+<div id="no-file">
+  <h1>Vulcan .00t Viewer</h1>
+  <p>Drag &amp; drop a .00t file to view</p>
+  <p style="margin-top:8px;font-size:12px;color:#555">No Vulcan licence required</p>
+</div>
+
+<div id="info" style="display:none">
+  <h2 id="filename">—</h2>
+  <div><span class="stat">Vertices:</span> <span class="val" id="nv">0</span></div>
+  <div><span class="stat">Faces:</span> <span class="val" id="nf">0</span></div>
+  <div><span class="stat">Coord values:</span> <span class="val" id="nc">0</span></div>
+  <div><span class="stat">Warnings:</span> <span class="val" id="nw">0</span></div>
+</div>
+
+<div id="controls" style="display:none">
+  <button onclick="toggleWireframe()">Wireframe</button>
+  <button onclick="togglePoints()">Points</button>
+  <button onclick="exportOBJ()">Export OBJ</button>
+  <button onclick="resetCamera()">Reset View</button>
+</div>
+
+<div id="warn"></div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+// ═══════════════════════════════════════════════════════════
+// .00t PARSER (standalone, all findings baked in)
+// ═══════════════════════════════════════════════════════════
+
+function isSep(b) { return (b & 0x07) === 0x07 && b >= 0x07; }
+
+function readBE64(bytes) {
+  const buf = new ArrayBuffer(8);
+  const v = new DataView(buf);
+  for (let i = 0; i < 8; i++) v.setUint8(i, bytes[i] || 0);
+  return v.getFloat64(0, false);
+}
+
+function findBytes(data, needle, start = 0) {
+  outer: for (let i = start; i <= data.length - needle.length; i++) {
+    for (let j = 0; j < needle.length; j++) if (data[i+j] !== needle[j]) continue outer;
+    return i;
+  }
+  return -1;
+}
+
+function parseOOT(arrayBuffer) {
+  const data = new Uint8Array(arrayBuffer);
+  const warnings = [];
+
+  // Header
+  if (data.length < 64) return { vertices:[], faces:[], warnings:['File too small'] };
+  const magic = (data[0]<<24)|(data[1]<<16)|(data[2]<<8)|data[3];
+  const sig = String.fromCharCode(data[4],data[5],data[6],data[7]);
+  if ((magic >>> 0) !== 0xEAFBA78A || sig !== 'vulZ') warnings.push('Bad magic/signature');
+
+  // Find Variant marker
+  const vNeedle = [0x56,0x61,0x72,0x69,0x61,0x6E,0x74,0x00];
+  const vi = findBytes(data, vNeedle);
+  if (vi < 0) return { vertices:[], faces:[], warnings:['No Variant marker'] };
+  const ds = vi + 8;
+
+  const nVertsHeader = data[ds + 12];
+  const nFacesHeader = data[ds + 19];
+
+  // Find boundaries
+  const attrSuffix = [0x00,0x05,0x40,0x04,0x00,0x0A,0x20,0x08,0x07];
+  let attrPos = findBytes(data, attrSuffix, ds);
+  if (attrPos < 0) attrPos = data.length;
+
+  let faceMarker = -1;
+  for (let i = attrPos - 2; i > ds + 30; i--) {
+    if (data[i] === 0x20 && data[i+1] === 0x00) { faceMarker = i; break; }
+  }
+
+  const coordStart = ds + 23;
+  const coordEnd = faceMarker > 0 ? faceMarker : attrPos;
+
+  // ── Decode coordinate values with axis tracking ──
+  const coordRegion = data.slice(coordStart, coordEnd);
+  const prev = new Uint8Array(8);
+  let pos = 0;
+
+  // Parse coord groups: value + following tags
+  const groups = [];
+  while (pos < coordRegion.length) {
+    const b = coordRegion[pos];
+    if (b <= 0x06) {
+      const nb = b + 1;
+      if (pos + 1 + nb > coordRegion.length) break;
+      const stored = coordRegion.slice(pos+1, pos+1+nb);
+      const result = new Uint8Array(8);
+      const isFull = stored[0]===0x40||stored[0]===0x41||stored[0]===0xC0||stored[0]===0xC1;
+      if (isFull) {
+        for (let i = 0; i < nb; i++) result[i] = stored[i];
+      } else {
+        result[0] = prev[0];
+        for (let i = 0; i < nb; i++) result[i+1] = stored[i];
+        for (let i = nb+1; i < 8; i++) result[i] = prev[i];
+      }
+      const val = readBE64(result);
+      for (let i = 0; i < 8; i++) prev[i] = result[i];
+      groups.push({ value: val, kind: isFull?'FULL':'DELTA', tags: [], seps: [] });
+      pos += 1 + nb;
+    } else if (isSep(b)) {
+      if (groups.length) groups[groups.length-1].seps.push(b);
+      pos += 1;
+    } else if (pos + 1 < coordRegion.length) {
+      const b2 = coordRegion[pos+1];
+      const hiCls = b & 0xE0;
+      const cls = {0x20:'20',0x40:'40',0x60:'60',0x80:'80',0xA0:'A0',0xC0:'C0',0xE0:'E0'}[hiCls]||'??';
+      if (groups.length) {
+        groups[groups.length-1].tags.push({
+          cls, byte2: b2, lo: b2 & 0x0F, hi: (b2>>4) & 0x0F,
+        });
+      }
+      pos += 2;
+    } else break;
+  }
+
+  // ── Axis state machine ──
+  let axis = 0, direction = 1;
+  const axisMap = []; // axis per group
+  for (let i = 0; i < groups.length; i++) {
+    const g = groups[i];
+    let ft = null;
+    for (const t of g.tags) { if (t.cls !== 'C0') { ft = t; break; } }
+
+    let ax;
+    if (i < 3) {
+      ax = i;
+    } else if (!ft) {
+      ax = ((axis + direction) % 3 + 3) % 3;
+    } else if (ft.cls === 'E0') {
+      ax = axis;
+    } else if (ft.lo === 0xF && ft.hi === 0) {
+      direction = -1;
+      ax = ((axis + direction) % 3 + 3) % 3;
+    } else if (ft.lo === 0xF && ft.hi > 0) {
+      ax = axis;
+    } else {
+      ax = ((axis + direction) % 3 + 3) % 3;
+    }
+    axisMap.push(ax);
+    axis = ax;
+  }
+
+  // ── Build vertices ──
+  // Model (confirmed on cube):
+  // - Running state [X,Y,Z] tracks current axis values
+  // - V0 from first 3 coords
+  // - Each subsequent coord updates running state, creates primary vertex (snapshot)
+  // - C0 tags assign the CURRENT coord value to a specific vertex SLOT
+  //   - hi_nib = vertex slot index
+  //   - Unassigned axes for C0 verts get BASE values (first value seen per axis)
+  //   - lo_nib: 0x7 = base Z, 0xF = alternate Z
+  // - When C0 tags exist for a coord, NO primary vertex is created (C0 handles it)
+
+  const running = [0, 0, 0];
+  const vertices = [];
+  const baseValues = [null, null, null]; // first value seen per axis
+  const altValues = [null, null, null];  // second value seen per axis
+  const zValues = [];
+
+  // Detect coord section end (stop at face section / garbage data)
+  let coordGroupEnd = groups.length;
+  for (let i = 3; i < groups.length; i++) {
+    const g = groups[i];
+    // Face section data has 20:03 tags
+    if (g.tags.some(t => t.cls === '20' && t.byte2 === 0x03)) { coordGroupEnd = i; break; }
+    // Stop on clearly garbage small values (unless Z=0 is valid)
+    if (Math.abs(g.value) < 0.001 && i > 3) { coordGroupEnd = i; break; }
+  }
+
+  // First pass: collect base/alt values per axis
+  for (let i = 0; i < coordGroupEnd; i++) {
+    const ax = axisMap[i];
+    if (ax < 0 || ax > 2) continue;
+    const v = groups[i].value;
+    if (baseValues[ax] === null) {
+      baseValues[ax] = v;
+    } else if (altValues[ax] === null && Math.abs(v - baseValues[ax]) > 0.001) {
+      altValues[ax] = v;
+    }
+    if (ax === 2 && !zValues.includes(v)) zValues.push(v);
+  }
+
+  // Track which axes have been explicitly C0-assigned per vertex slot
+  const c0Assigned = {}; // slot -> Set of axes
+
+  // Second pass: build vertex table
+  for (let i = 0; i < coordGroupEnd; i++) {
+    const g = groups[i];
+    const ax = axisMap[i];
+    if (ax < 0 || ax > 2) continue;
+
+    running[ax] = g.value;
+
+    if (i === 2) {
+      // V0 complete from first 3 coords
+      vertices.push([running[0], running[1], running[2]]);
+    } else if (i > 2) {
+      const c0Tags = g.tags.filter(t => t.cls === 'C0');
+      if (c0Tags.length === 0) {
+        // No C0: create primary vertex from running state snapshot
+        vertices.push([running[0], running[1], running[2]]);
+      }
+      // With C0 tags: vertices are created/updated by C0 (no primary)
+    }
+
+    // Process C0 tags: assign current value to specific vertex slots
+    const c0Tags = g.tags.filter(t => t.cls === 'C0');
+    for (const t of c0Tags) {
+      const vi = t.hi;
+
+      // Ensure slot exists with base values as default
+      while (vi >= vertices.length) {
+        vertices.push([
+          baseValues[0] || 0,
+          baseValues[1] || 0,
+          baseValues[2] || 0,
+        ]);
+        c0Assigned[vertices.length - 1] = new Set();
+      }
+      if (!c0Assigned[vi]) c0Assigned[vi] = new Set();
+
+      // Assign current coord value to this slot's current axis
+      vertices[vi][ax] = g.value;
+      c0Assigned[vi].add(ax);
+
+      // Z-variant from lo_nib (overrides Z regardless of current axis)
+      if (zValues.length >= 2) {
+        if (t.lo === 0x07) { vertices[vi][2] = zValues[0]; }
+        else if (t.lo === 0x0F) { vertices[vi][2] = zValues[1]; }
+      } else if (zValues.length === 1) {
+        vertices[vi][2] = zValues[0];
+      }
+    }
+  }
+
+  // Final: C0 vertices with unassigned axes get base values
+  for (const [vi, assigned] of Object.entries(c0Assigned)) {
+    const v = vertices[parseInt(vi)];
+    if (!v) continue;
+    for (let ax = 0; ax < 3; ax++) {
+      if (!assigned.has(ax) && ax !== 2) { // Z handled by lo_nib
+        v[ax] = baseValues[ax] || 0;
+      }
+    }
+  }
+
+  // ── Decode faces (simple group-based EdgeBreaker) ──
+  const faces = [];
+  if (faceMarker > 0) {
+    const faceRegion = data.slice(faceMarker, attrPos);
+    // Parse face elements
+    let fpos = 0;
+    const faceOps = [];
+    while (fpos < faceRegion.length) {
+      const fb = faceRegion[fpos];
+      if (fb <= 0x06) {
+        const fnb = fb + 1;
+        if (fpos + 1 + fnb > faceRegion.length) break;
+        const fv = faceRegion[fpos+1];
+        faceOps.push({ type:'DATA', value: fv });
+        fpos += 1 + fnb;
+      } else if (isSep(fb)) {
+        fpos += 1;
+      } else if (fpos + 1 < faceRegion.length) {
+        const fb2 = faceRegion[fpos+1];
+        const fcls = {0x20:'20',0x40:'40',0xC0:'C0',0xE0:'E0'}[fb&0xE0]||'??';
+        faceOps.push({ type:'TAG', cls: fb===0xE1?'E1':fcls, byte2: fb2, lo: fb2&0xF, hi:(fb2>>4)&0xF });
+        fpos += 2;
+      } else break;
+    }
+
+    // Initial triangle: implicit (0,1,2) or from vertex refs before E0:03
+    let initTri = [0, 1, 2];
+    // Check if explicit vertices listed
+    let foundStart = false;
+    const initVerts = [];
+    for (const op of faceOps) {
+      if (op.type==='TAG' && op.cls==='20' && op.byte2===0x00) { foundStart=true; continue; }
+      if (foundStart) {
+        if (op.type==='TAG' && (op.cls==='40'||op.cls==='C0')) break; // topology before verts = implicit
+        if (op.type==='DATA' && op.value >= 1 && op.value <= 200) initVerts.push(op.value);
+        if (op.type==='TAG' && op.cls==='E0') break;
+      }
+    }
+    if (initVerts.length >= 3) {
+      initTri = [initVerts[0]-1, initVerts[1]-1, initVerts[2]-1];
+    }
+
+    faces.push(initTri);
+
+    // EdgeBreaker: simple C-based decoder
+    // Extract topology tags (40/C0 class)
+    const topoOps = faceOps.filter(o => o.type==='TAG' && (o.cls==='40'||o.cls==='C0'||o.cls==='E1'));
+
+    // Skip initial metadata tag (first 40-class before vertex data)
+    let topoStart = 0;
+    if (topoOps.length > 0 && initVerts.length <= 2) {
+      topoStart = 1; // skip initial metadata tag
+    }
+
+    // Simple decoder: each non-finalizer op = C (create vertex)
+    const boundary = [...initTri];
+    let gate = 1;
+    let nextV = Math.max(...initTri) + 1;
+
+    for (let ti = topoStart; ti < topoOps.length; ti++) {
+      const top = topoOps[ti];
+      if (boundary.length < 3) break;
+
+      // Finalizer: gate advance
+      if (top.byte2 === 0x1B) {
+        gate = ((gate - 1) % boundary.length + boundary.length) % boundary.length;
+        continue;
+      }
+
+      const n = boundary.length;
+      const li = gate % n;
+      const ri = (gate + 1) % n;
+      const L = boundary[li];
+      const R = boundary[ri];
+
+      // Default: C operation (create new vertex)
+      const v = nextV++;
+      faces.push([L, R, v]);
+      boundary.splice(li + 1, 0, v);
+      gate = li + 1;
+    }
+  }
+
+  // Ensure we have enough vertices for the faces
+  const maxFaceVert = Math.max(0, ...faces.flat());
+  while (vertices.length <= maxFaceVert) {
+    vertices.push([0, 0, 0]);
+  }
+
+  return {
+    vertices: vertices.map(v => [v[0]||0, v[1]||0, v[2]||0]),
+    faces,
+    nVertsHeader,
+    nFacesHeader,
+    coordValues: groups.slice(0, coordGroupEnd).map(g => g.value),
+    warnings,
+  };
+}
+
+
+// ═══════════════════════════════════════════════════════════
+// THREE.JS VIEWER
+// ═══════════════════════════════════════════════════════════
+
+let scene, camera, renderer, controls;
+let meshObj, wireObj, pointsObj;
+let showWire = false, showPoints = false;
+let currentResult = null;
+
+function init() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x1a1a2e);
+
+  camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 100000);
+  camera.position.set(500, 500, 500);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(window.devicePixelRatio);
+  document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+  // Lights
+  scene.add(new THREE.AmbientLight(0x404060, 2));
+  const dir = new THREE.DirectionalLight(0xffffff, 1.5);
+  dir.position.set(1, 2, 3);
+  scene.add(dir);
+  const dir2 = new THREE.DirectionalLight(0x6666ff, 0.5);
+  dir2.position.set(-1, -1, -2);
+  scene.add(dir2);
+
+  // Axes helper (X=red, Y(up in view)=green=Z in mining, Z(depth)=blue=-Y in mining)
+  const axes = new THREE.AxesHelper(50);
+  scene.add(axes);
+
+  // Simple orbit controls (manual)
+  let isDragging = false, prevX = 0, prevY = 0;
+  let theta = Math.PI/4, phi = Math.PI/4, radius = 500;
+  let target = new THREE.Vector3();
+
+  function updateCamera() {
+    camera.position.set(
+      target.x + radius * Math.sin(phi) * Math.cos(theta),
+      target.y + radius * Math.cos(phi),
+      target.z + radius * Math.sin(phi) * Math.sin(theta)
+    );
+    camera.lookAt(target);
+  }
+
+  renderer.domElement.addEventListener('mousedown', e => { isDragging=true; prevX=e.clientX; prevY=e.clientY; });
+  window.addEventListener('mouseup', () => isDragging=false);
+  window.addEventListener('mousemove', e => {
+    if (!isDragging) return;
+    theta += (e.clientX - prevX) * 0.005;
+    phi = Math.max(0.01, Math.min(Math.PI-0.01, phi - (e.clientY - prevY) * 0.005));
+    prevX = e.clientX; prevY = e.clientY;
+    updateCamera();
+  });
+  renderer.domElement.addEventListener('wheel', e => {
+    radius *= e.deltaY > 0 ? 1.1 : 0.9;
+    radius = Math.max(1, Math.min(50000, radius));
+    updateCamera();
+  });
+
+  window.resetCameraFn = (center, size) => {
+    target.copy(center);
+    radius = size * 2.5;
+    theta = Math.PI/4; phi = Math.PI/3;
+    updateCamera();
+  };
+
+  updateCamera();
+  animate();
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  renderer.render(scene, camera);
+}
+
+function loadMesh(result) {
+  // Clear old
+  if (meshObj) { scene.remove(meshObj); meshObj.geometry.dispose(); }
+  if (wireObj) { scene.remove(wireObj); wireObj.geometry.dispose(); }
+  if (pointsObj) { scene.remove(pointsObj); pointsObj.geometry.dispose(); }
+
+  const { vertices, faces } = result;
+  if (!vertices.length) return;
+
+  // Build geometry
+  const geo = new THREE.BufferGeometry();
+  const positions = [];
+  const indices = [];
+
+  for (const [x, y, z] of vertices) {
+    // Vulcan is Z-up, Three.js is Y-up: swap Y and Z
+    positions.push(x, z, -y);
+  }
+
+  for (const [a, b, c] of faces) {
+    if (a < vertices.length && b < vertices.length && c < vertices.length) {
+      indices.push(a, b, c);
+    }
+  }
+
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  if (indices.length) geo.setIndex(indices);
+  geo.computeVertexNormals();
+
+  // Mesh
+  const mat = new THREE.MeshPhongMaterial({
+    color: 0x6366f1, side: THREE.DoubleSide,
+    shininess: 30, transparent: true, opacity: 0.85,
+  });
+  meshObj = new THREE.Mesh(geo, mat);
+  scene.add(meshObj);
+
+  // Wireframe
+  const wireGeo = new THREE.WireframeGeometry(geo);
+  wireObj = new THREE.LineSegments(wireGeo, new THREE.LineBasicMaterial({ color: 0x9999ff, opacity: 0.4, transparent: true }));
+  wireObj.visible = showWire;
+  scene.add(wireObj);
+
+  // Points
+  const pointsMat = new THREE.PointsMaterial({ color: 0xff6666, size: 4, sizeAttenuation: false });
+  pointsObj = new THREE.Points(geo, pointsMat);
+  pointsObj.visible = showPoints;
+  scene.add(pointsObj);
+
+  // Center camera
+  geo.computeBoundingBox();
+  const box = geo.boundingBox;
+  const center = new THREE.Vector3();
+  box.getCenter(center);
+  const size = box.getSize(new THREE.Vector3()).length();
+  window.resetCameraFn(center, size);
+}
+
+window.toggleWireframe = () => { showWire = !showWire; if (wireObj) wireObj.visible = showWire; };
+window.togglePoints = () => { showPoints = !showPoints; if (pointsObj) pointsObj.visible = showPoints; };
+window.resetCamera = () => {
+  if (meshObj) {
+    meshObj.geometry.computeBoundingBox();
+    const box = meshObj.geometry.boundingBox;
+    const c = new THREE.Vector3(), s = new THREE.Vector3();
+    box.getCenter(c); box.getSize(s);
+    window.resetCameraFn(c, s.length());
+  }
+};
+
+window.exportOBJ = () => {
+  if (!currentResult) return;
+  const { vertices, faces } = currentResult;
+  let obj = '# Vulcan .00t export (Z-up)\n';
+  for (const [x,y,z] of vertices) obj += `v ${x} ${y} ${z}\n`; // keep original Z-up coords
+  obj += '\n';
+  for (const [a,b,c] of faces) obj += `f ${a+1} ${b+1} ${c+1}\n`;
+  const blob = new Blob([obj], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'export.obj';
+  a.click();
+};
+
+
+// ═══════════════════════════════════════════════════════════
+// FILE HANDLING
+// ═══════════════════════════════════════════════════════════
+
+function handleFile(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const result = parseOOT(e.target.result);
+    currentResult = result;
+
+    document.getElementById('no-file').style.display = 'none';
+    document.getElementById('info').style.display = 'block';
+    document.getElementById('controls').style.display = 'flex';
+
+    document.getElementById('filename').textContent = file.name;
+    document.getElementById('nv').textContent = result.vertices.length;
+    document.getElementById('nf').textContent = result.faces.length;
+    document.getElementById('nc').textContent = result.coordValues.length;
+    document.getElementById('nw').textContent = result.warnings.length;
+
+    if (result.warnings.length) {
+      document.getElementById('warn').style.display = 'block';
+      document.getElementById('warn').textContent = result.warnings.join('; ');
+    } else {
+      document.getElementById('warn').style.display = 'none';
+    }
+
+    loadMesh(result);
+    console.log('Parsed:', result);
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+// Drag & drop
+const dropZone = document.getElementById('drop-zone');
+document.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('active'); });
+document.addEventListener('dragleave', e => { if (e.target === document.documentElement) dropZone.classList.remove('active'); });
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('active');
+  for (const f of e.dataTransfer.files) {
+    if (f.name.toLowerCase().endsWith('.00t')) { handleFile(f); break; }
+  }
+});
+
+// Also support click to select
+document.getElementById('no-file').addEventListener('click', () => {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.00t,.00T';
+  input.onchange = () => { if (input.files[0]) handleFile(input.files[0]); };
+  input.click();
+});
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+init();
+</script>
+</body>
+</html>

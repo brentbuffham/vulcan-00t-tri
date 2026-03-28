@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Vulcan .00t vs DXF Compare</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+.panel { position: absolute; top: 0; bottom: 0; overflow: hidden; }
+#left { left: 0; width: 50%; border-right: 2px solid #333; }
+#right { right: 0; width: 50%; }
+.panel canvas { width: 100% !important; height: 100% !important; }
+.label {
+  position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+  background: rgba(0,0,0,0.7); padding: 6px 16px; border-radius: 6px;
+  font-size: 14px; font-weight: 600; z-index: 5; pointer-events: none;
+}
+#left .label { color: #4ade80; }
+#right .label { color: #f97316; }
+.info {
+  position: absolute; bottom: 8px; left: 8px;
+  background: rgba(0,0,0,0.7); padding: 8px 12px; border-radius: 6px;
+  font-size: 12px; z-index: 5; line-height: 1.5;
+}
+.drop-hint {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+  text-align: center; color: #555; z-index: 3; pointer-events: none;
+}
+.drop-hint h2 { font-size: 20px; margin-bottom: 4px; }
+.drop-hint p { font-size: 13px; }
+.drag-over { background: rgba(99,102,241,0.1); }
+#controls {
+  position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+  z-index: 10; display: flex; gap: 6px;
+}
+#controls button {
+  background: #2a2a4a; color: #e0e0e0; border: 1px solid #444;
+  padding: 6px 12px; border-radius: 5px; cursor: pointer; font-size: 12px;
+}
+#controls button:hover { background: #3a3a5a; border-color: #6366f1; }
+</style>
+</head>
+<body>
+
+<div id="controls">
+  <button onclick="toggleWire()">Wireframe</button>
+  <button onclick="togglePts()">Points</button>
+  <button onclick="resetView()">Reset</button>
+  <button onclick="exportOBJ()">Export OOT as OBJ</button>
+</div>
+
+<div id="left" class="panel">
+  <div class="label">DXF (Ground Truth)</div>
+  <div class="drop-hint" id="hint-left"><h2>Drop .dxf here</h2><p>3DFACE DXF file</p></div>
+  <div class="info" id="info-left" style="display:none">
+    <div>Verts: <b id="lv">0</b> | Faces: <b id="lf">0</b></div>
+  </div>
+</div>
+
+<div id="right" class="panel">
+  <div class="label">OOT (Parsed)</div>
+  <div class="drop-hint" id="hint-right"><h2>Drop .00t here</h2><p>Vulcan triangulation</p></div>
+  <div class="info" id="info-right" style="display:none">
+    <div>Verts: <b id="rv">0</b> | Faces: <b id="rf">0</b></div>
+    <div id="rwarn" style="color:#f66;display:none"></div>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+// ═════════════════════════════════════════════════
+// DXF PARSER (3DFACE only)
+// ═════════════════════════════════════════════════
+function parseDXF(text) {
+  const verts = [], faces = [];
+  const vm = new Map();
+  function vkey(x,y,z) { return `${x.toFixed(4)},${y.toFixed(4)},${z.toFixed(4)}`; }
+  function getVi(x,y,z) {
+    const k = vkey(x,y,z);
+    if (vm.has(k)) return vm.get(k);
+    const i = verts.length;
+    verts.push([x,y,z]);
+    vm.set(k, i);
+    return i;
+  }
+
+  const lines = text.split(/\r?\n/);
+  let i = 0;
+  while (i < lines.length) {
+    if (lines[i].trim() === '3DFACE') {
+      const pts = {};
+      i++;
+      while (i < lines.length - 1) {
+        const code = parseInt(lines[i].trim());
+        const val = lines[i+1].trim();
+        if (code === 0) break;
+        if (code >= 10 && code <= 37) pts[code] = parseFloat(val);
+        i += 2;
+      }
+      if (pts[10] !== undefined) {
+        const v0 = getVi(pts[10]||0, pts[20]||0, pts[30]||0);
+        const v1 = getVi(pts[11]||0, pts[21]||0, pts[31]||0);
+        const v2 = getVi(pts[12]||0, pts[22]||0, pts[32]||0);
+        faces.push([v0,v1,v2]);
+      }
+    } else { i++; }
+  }
+  return { vertices: verts, faces, warnings: [] };
+}
+
+// ═════════════════════════════════════════════════
+// OOT PARSER (same as oot-viewer.html)
+// ═════════════════════════════════════════════════
+function isSep(b) { return (b & 0x07) === 0x07 && b >= 0x07; }
+function readBE64(bytes) {
+  const buf = new ArrayBuffer(8);
+  const v = new DataView(buf);
+  for (let i = 0; i < 8; i++) v.setUint8(i, bytes[i] || 0);
+  return v.getFloat64(0, false);
+}
+function findBytes(data, needle, start = 0) {
+  outer: for (let i = start; i <= data.length - needle.length; i++) {
+    for (let j = 0; j < needle.length; j++) if (data[i+j] !== needle[j]) continue outer;
+    return i;
+  }
+  return -1;
+}
+
+function parseOOT(arrayBuffer) {
+  const data = new Uint8Array(arrayBuffer);
+  const warnings = [];
+  if (data.length < 64) return { vertices:[], faces:[], warnings:['File too small'] };
+  const magic = (data[0]<<24)|(data[1]<<16)|(data[2]<<8)|data[3];
+  if ((magic >>> 0) !== 0xEAFBA78A) warnings.push('Bad magic');
+
+  // Find Variant (with or without null terminator)
+  const vNeedle = [0x56,0x61,0x72,0x69,0x61,0x6E,0x74]; // "Variant" (no null)
+  let vi = findBytes(data, vNeedle);
+  if (vi < 0) return { vertices:[], faces:[], warnings:['No Variant marker'] };
+
+  // Find the null byte or skip the path after Variant
+  let ds = vi + 7;
+  // Skip until we find the pre-coord header pattern: look for 0x14 (constant at end of header)
+  // or scan for "43 E0 0E 2F" pattern
+  const headerPattern = [0x43, 0xE0, 0x0E, 0x2F];
+  let hdrIdx = findBytes(data, headerPattern, ds);
+  if (hdrIdx < 0) {
+    // Fallback: try null-terminated Variant
+    if (data[vi+7] === 0x00) ds = vi + 8;
+    else return { vertices:[], faces:[], warnings:['Cannot find data header'] };
+  } else {
+    // Pre-coord header starts 3 bytes before "43 E0 0E 2F"
+    // Pattern: XX XX XX 00 00 43 E0 0E 2F ...
+    // Actually the 23-byte header has 43 at offset +5
+    ds = hdrIdx - 5;
+  }
+
+  // Read header
+  const nVertsHeader = data[ds + 12] || 0;
+  const nFacesHeader = data[ds + 19] || 0;
+
+  // Find boundaries
+  const attrSuffix = [0x00,0x05,0x40,0x04,0x00,0x0A,0x20,0x08,0x07];
+  let attrPos = findBytes(data, attrSuffix, ds);
+  if (attrPos < 0) attrPos = data.length;
+
+  let faceMarker = -1;
+  for (let i = attrPos - 2; i > ds + 30; i--) {
+    if (data[i] === 0x20 && data[i+1] === 0x00) { faceMarker = i; break; }
+  }
+
+  const coordStart = ds + 23;
+  const coordEnd = faceMarker > 0 ? faceMarker : attrPos;
+  const coordRegion = data.slice(coordStart, coordEnd);
+
+  // Parse coord groups
+  const prev = new Uint8Array(8);
+  let pos = 0;
+  const groups = [];
+  while (pos < coordRegion.length) {
+    const b = coordRegion[pos];
+    if (b <= 0x06) {
+      const nb = b + 1;
+      if (pos + 1 + nb > coordRegion.length) break;
+      const stored = coordRegion.slice(pos+1, pos+1+nb);
+      const result = new Uint8Array(8);
+      const isFull = stored[0]===0x40||stored[0]===0x41||stored[0]===0xC0||stored[0]===0xC1;
+      if (isFull) {
+        for (let i = 0; i < nb; i++) result[i] = stored[i];
+      } else {
+        result[0] = prev[0];
+        for (let i = 0; i < nb; i++) result[i+1] = stored[i];
+        for (let i = nb+1; i < 8; i++) result[i] = prev[i];
+      }
+      const val = readBE64(result);
+      for (let i = 0; i < 8; i++) prev[i] = result[i];
+      groups.push({ value: val, tags: [], seps: [] });
+      pos += 1 + nb;
+    } else if (isSep(b)) {
+      if (groups.length) groups[groups.length-1].seps.push(b);
+      pos += 1;
+    } else if (pos + 1 < coordRegion.length) {
+      const b2 = coordRegion[pos+1];
+      const cls = {0x20:'20',0x40:'40',0x60:'60',0x80:'80',0xA0:'A0',0xC0:'C0',0xE0:'E0'}[b&0xE0]||'??';
+      if (groups.length) groups[groups.length-1].tags.push({ cls, byte2:b2, lo:b2&0xF, hi:(b2>>4)&0xF });
+      pos += 2;
+    } else break;
+  }
+
+  // Axis state machine
+  let axis = 0, direction = 1;
+  const axisMap = [];
+  for (let i = 0; i < groups.length; i++) {
+    let ft = null;
+    for (const t of groups[i].tags) { if (t.cls !== 'C0') { ft = t; break; } }
+    let ax;
+    if (i < 3) { ax = i; }
+    else if (!ft) { ax = ((axis + direction) % 3 + 3) % 3; }
+    else if (ft.cls === 'E0') { ax = axis; }
+    else if (ft.lo === 0xF && ft.hi === 0) { direction = -1; ax = ((axis-1)%3+3)%3; }
+    else if (ft.lo === 0xF && ft.hi > 0) { ax = axis; }
+    else { ax = ((axis + direction) % 3 + 3) % 3; }
+    axisMap.push(ax);
+    axis = ax;
+  }
+
+  // Detect coord section end: stop at first clearly-garbage value
+  // Real coords are in mining range (typically 10-100000). Face section "coords"
+  // are tiny (< 10) or negative because the parser misreads tag bytes as count bytes.
+  let coordGroupEnd = groups.length;
+  let firstRealValue = Math.abs(groups.length > 0 ? groups[0].value : 0);
+  for (let i = 3; i < groups.length; i++) {
+    const v = groups[i].value;
+    const av = Math.abs(v);
+    // Stop if value drops dramatically (> 100x smaller than first value)
+    if (firstRealValue > 10 && av < firstRealValue / 100 && av < 10) { coordGroupEnd = i; break; }
+    // Stop at 20:03 tags (face section delimiters)
+    if (groups[i].tags.some(t => t.cls === '20' && t.byte2 === 0x03)) { coordGroupEnd = i; break; }
+    // Stop on negative values when previous were positive
+    if (v < -0.5 && i > 3 && groups[i-1].value > 0) { coordGroupEnd = i; break; }
+  }
+
+  // Collect base values and Z variants
+  const baseValues = [null, null, null];
+  const zValues = [];
+  for (let i = 0; i < coordGroupEnd; i++) {
+    const ax = axisMap[i];
+    if (ax >= 0 && ax <= 2) {
+      if (baseValues[ax] === null) baseValues[ax] = groups[i].value;
+      if (ax === 2 && !zValues.includes(groups[i].value)) zValues.push(groups[i].value);
+    }
+  }
+
+  // Build vertices
+  const running = [0,0,0];
+  const vertices = [];
+  const c0Assigned = {};
+
+  for (let i = 0; i < coordGroupEnd; i++) {
+    const g = groups[i];
+    const ax = axisMap[i];
+    if (ax < 0 || ax > 2) continue;
+    running[ax] = g.value;
+
+    if (i === 2) { vertices.push([running[0],running[1],running[2]]); }
+    else if (i > 2) {
+      const c0 = g.tags.filter(t => t.cls === 'C0');
+      if (c0.length === 0) vertices.push([running[0],running[1],running[2]]);
+    }
+
+    for (const t of g.tags.filter(t => t.cls === 'C0')) {
+      const vi2 = t.hi;
+      while (vi2 >= vertices.length) {
+        vertices.push([baseValues[0]||0, baseValues[1]||0, baseValues[2]||0]);
+        c0Assigned[vertices.length-1] = new Set();
+      }
+      if (!c0Assigned[vi2]) c0Assigned[vi2] = new Set();
+      vertices[vi2][ax] = g.value;
+      c0Assigned[vi2].add(ax);
+      if (zValues.length >= 2) {
+        if (t.lo === 0x07) vertices[vi2][2] = zValues[0];
+        else if (t.lo === 0x0F) vertices[vi2][2] = zValues[1];
+      }
+    }
+  }
+  for (const [vi2, assigned] of Object.entries(c0Assigned)) {
+    const v = vertices[parseInt(vi2)];
+    if (v) { for (let ax = 0; ax < 2; ax++) { if (!assigned.has(ax)) v[ax] = baseValues[ax]||0; } }
+  }
+
+  // Face decoding (simple all-C for now)
+  const faces = [];
+  if (faceMarker > 0) {
+    const faceRegion = data.slice(faceMarker, attrPos);
+    let fpos = 0;
+    const fops = [];
+    while (fpos < faceRegion.length) {
+      const fb = faceRegion[fpos];
+      if (fb <= 0x06) {
+        const fnb = fb + 1;
+        if (fpos+1+fnb > faceRegion.length) break;
+        fops.push({ type:'DATA', value: faceRegion[fpos+1] });
+        fpos += 1 + fnb;
+      } else if (isSep(fb)) { fpos++; }
+      else if (fpos+1 < faceRegion.length) {
+        const fb2 = faceRegion[fpos+1];
+        const fc = {0x20:'20',0x40:'40',0xC0:'C0',0xE0:'E0'}[fb&0xE0]||'??';
+        fops.push({ type:'TAG', cls: fb===0xE1?'E1':fc, byte2:fb2, lo:fb2&0xF, hi:(fb2>>4)&0xF });
+        fpos += 2;
+      } else break;
+    }
+
+    let initTri = [0,1,2];
+    let fs2 = false;
+    const iv2 = [];
+    for (const op of fops) {
+      if (op.type==='TAG' && op.cls==='20' && op.byte2===0x00) { fs2=true; continue; }
+      if (fs2) {
+        if (op.type==='TAG' && (op.cls==='40'||op.cls==='C0')) break;
+        if (op.type==='DATA' && op.value >= 1 && op.value <= 200) iv2.push(op.value);
+        if (op.type==='TAG' && op.cls==='E0') break;
+      }
+    }
+    if (iv2.length >= 3) initTri = [iv2[0]-1, iv2[1]-1, iv2[2]-1];
+    faces.push(initTri);
+
+    const topos = fops.filter(o => o.type==='TAG' && (o.cls==='40'||o.cls==='C0'||o.cls==='E1'));
+    let ts = (iv2.length <= 2 && topos.length > 0) ? 1 : 0;
+    const bnd = [...initTri];
+    let gate = 1;
+    let nxtV = Math.max(...initTri) + 1;
+    for (let ti = ts; ti < topos.length; ti++) {
+      if (bnd.length < 3) break;
+      const top = topos[ti];
+      if (top.byte2 === 0x1B) { gate = ((gate-1)%bnd.length+bnd.length)%bnd.length; continue; }
+      const n = bnd.length, li = gate%n, ri = (gate+1)%n;
+      const v2 = nxtV++;
+      faces.push([bnd[li], bnd[ri], v2]);
+      bnd.splice(li+1, 0, v2);
+      gate = li + 1;
+    }
+  }
+
+  const maxV = Math.max(0, ...faces.flat());
+  while (vertices.length <= maxV) vertices.push([0,0,0]);
+
+  return { vertices: vertices.map(v => [v[0]||0,v[1]||0,v[2]||0]), faces, warnings, nVertsHeader, nFacesHeader };
+}
+
+// ═════════════════════════════════════════════════
+// THREE.JS DUAL VIEWER
+// ═════════════════════════════════════════════════
+let scenes = {}, cameras = {}, renderers = {};
+let meshes = { left: null, right: null };
+let wires = { left: null, right: null };
+let points = { left: null, right: null };
+let showWire = false, showPts = false;
+let theta = Math.PI/4, phi = Math.PI/3, radius = 500;
+let target = new THREE.Vector3();
+let isDragging = false, prevX = 0, prevY = 0;
+let currentOOT = null;
+
+function initPanel(id) {
+  const el = document.getElementById(id);
+  const s = new THREE.Scene();
+  s.background = new THREE.Color(0x1a1a2e);
+  s.add(new THREE.AmbientLight(0x404060, 2));
+  const d1 = new THREE.DirectionalLight(0xffffff, 1.5); d1.position.set(1,2,3); s.add(d1);
+  const d2 = new THREE.DirectionalLight(0x6666ff, 0.5); d2.position.set(-1,-1,-2); s.add(d2);
+  s.add(new THREE.AxesHelper(50));
+
+  const c = new THREE.PerspectiveCamera(60, el.clientWidth/el.clientHeight, 0.1, 100000);
+  const r = new THREE.WebGLRenderer({ antialias: true });
+  r.setSize(el.clientWidth, el.clientHeight);
+  r.setPixelRatio(window.devicePixelRatio);
+  el.appendChild(r.domElement);
+
+  scenes[id] = s; cameras[id] = c; renderers[id] = r;
+}
+
+function updateCameras() {
+  for (const id of ['left','right']) {
+    const c = cameras[id];
+    if (!c) continue;
+    c.position.set(
+      target.x + radius * Math.sin(phi) * Math.cos(theta),
+      target.y + radius * Math.cos(phi),
+      target.z + radius * Math.sin(phi) * Math.sin(theta)
+    );
+    c.lookAt(target);
+  }
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  for (const id of ['left','right']) {
+    if (renderers[id] && scenes[id] && cameras[id])
+      renderers[id].render(scenes[id], cameras[id]);
+  }
+}
+
+function loadMesh(panelId, result, color) {
+  const s = scenes[panelId];
+  if (meshes[panelId]) { s.remove(meshes[panelId]); meshes[panelId].geometry.dispose(); }
+  if (wires[panelId]) { s.remove(wires[panelId]); wires[panelId].geometry.dispose(); }
+  if (points[panelId]) { s.remove(points[panelId]); points[panelId].geometry.dispose(); }
+
+  const geo = new THREE.BufferGeometry();
+  const pos = [];
+  for (const [x,y,z] of result.vertices) pos.push(x, z, -y); // Z-up to Y-up
+  const idx = [];
+  for (const [a,b,c] of result.faces) {
+    if (a < result.vertices.length && b < result.vertices.length && c < result.vertices.length)
+      idx.push(a,b,c);
+  }
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  if (idx.length) geo.setIndex(idx);
+  geo.computeVertexNormals();
+
+  const mat = new THREE.MeshPhongMaterial({ color, side: THREE.DoubleSide, shininess: 30, transparent: true, opacity: 0.85 });
+  meshes[panelId] = new THREE.Mesh(geo, mat);
+  s.add(meshes[panelId]);
+
+  const wg = new THREE.WireframeGeometry(geo);
+  wires[panelId] = new THREE.LineSegments(wg, new THREE.LineBasicMaterial({ color: 0xaaaaaa, opacity: 0.4, transparent: true }));
+  wires[panelId].visible = showWire;
+  s.add(wires[panelId]);
+
+  const pm = new THREE.PointsMaterial({ color: 0xff6666, size: 4, sizeAttenuation: false });
+  points[panelId] = new THREE.Points(geo, pm);
+  points[panelId].visible = showPts;
+  s.add(points[panelId]);
+
+  // Auto-fit camera
+  geo.computeBoundingBox();
+  const box = geo.boundingBox;
+  const center = new THREE.Vector3(); box.getCenter(center);
+  const size = box.getSize(new THREE.Vector3()).length();
+  target.copy(center);
+  radius = size * 2.5;
+  updateCameras();
+}
+
+// Mouse controls (synced between panels)
+document.addEventListener('mousedown', e => { isDragging=true; prevX=e.clientX; prevY=e.clientY; });
+document.addEventListener('mouseup', () => isDragging=false);
+document.addEventListener('mousemove', e => {
+  if (!isDragging) return;
+  theta += (e.clientX-prevX)*0.005;
+  phi = Math.max(0.01, Math.min(Math.PI-0.01, phi-(e.clientY-prevY)*0.005));
+  prevX=e.clientX; prevY=e.clientY;
+  updateCameras();
+});
+document.addEventListener('wheel', e => {
+  radius *= e.deltaY > 0 ? 1.1 : 0.9;
+  radius = Math.max(1, Math.min(50000, radius));
+  updateCameras();
+});
+
+// Controls
+window.toggleWire = () => { showWire=!showWire; for (const id of ['left','right']) if(wires[id]) wires[id].visible=showWire; };
+window.togglePts = () => { showPts=!showPts; for (const id of ['left','right']) if(points[id]) points[id].visible=showPts; };
+window.resetView = () => { theta=Math.PI/4; phi=Math.PI/3; updateCameras(); };
+window.exportOBJ = () => {
+  if (!currentOOT) return;
+  let obj = '# Vulcan .00t export (Z-up)\n';
+  for (const [x,y,z] of currentOOT.vertices) obj += `v ${x} ${y} ${z}\n`;
+  for (const [a,b,c] of currentOOT.faces) obj += `f ${a+1} ${b+1} ${c+1}\n`;
+  const blob = new Blob([obj], {type:'text/plain'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download='export.obj'; a.click();
+};
+
+// Drag & drop
+function setupDrop(panelId, handler) {
+  const el = document.getElementById(panelId);
+  el.addEventListener('dragover', e => { e.preventDefault(); e.stopPropagation(); el.classList.add('drag-over'); });
+  el.addEventListener('dragleave', e => { el.classList.remove('drag-over'); });
+  el.addEventListener('drop', e => {
+    e.preventDefault(); e.stopPropagation(); el.classList.remove('drag-over');
+    for (const f of e.dataTransfer.files) { handler(f); break; }
+  });
+}
+
+setupDrop('left', file => {
+  const reader = new FileReader();
+  reader.onload = e => {
+    const result = parseDXF(e.target.result);
+    document.getElementById('hint-left').style.display = 'none';
+    document.getElementById('info-left').style.display = 'block';
+    document.getElementById('lv').textContent = result.vertices.length;
+    document.getElementById('lf').textContent = result.faces.length;
+    loadMesh('left', result, 0x4ade80);
+    console.log('DXF:', result);
+  };
+  reader.readAsText(file);
+});
+
+setupDrop('right', file => {
+  const reader = new FileReader();
+  reader.onload = e => {
+    const result = parseOOT(e.target.result);
+    currentOOT = result;
+    document.getElementById('hint-right').style.display = 'none';
+    document.getElementById('info-right').style.display = 'block';
+    document.getElementById('rv').textContent = result.vertices.length;
+    document.getElementById('rf').textContent = result.faces.length;
+    if (result.warnings.length) {
+      document.getElementById('rwarn').style.display = 'block';
+      document.getElementById('rwarn').textContent = result.warnings.join('; ');
+    }
+    loadMesh('right', result, 0xf97316);
+    console.log('OOT:', result);
+  };
+  reader.readAsArrayBuffer(file);
+});
+
+// Also allow clicking the hints to open file dialogs
+document.getElementById('hint-left').style.pointerEvents = 'all';
+document.getElementById('hint-left').style.cursor = 'pointer';
+document.getElementById('hint-left').addEventListener('click', () => {
+  const inp = document.createElement('input'); inp.type='file'; inp.accept='.dxf,.DXF';
+  inp.onchange = () => { if (inp.files[0]) { const e = new Event('drop'); document.getElementById('left').dispatchEvent(Object.assign(new DragEvent('drop', { dataTransfer: new DataTransfer() })));  /* fallback */ const r = new FileReader(); r.onload = ev => { const res = parseDXF(ev.target.result); document.getElementById('hint-left').style.display='none'; document.getElementById('info-left').style.display='block'; document.getElementById('lv').textContent=res.vertices.length; document.getElementById('lf').textContent=res.faces.length; loadMesh('left',res,0x4ade80); }; r.readAsText(inp.files[0]); } };
+  inp.click();
+});
+document.getElementById('hint-right').style.pointerEvents = 'all';
+document.getElementById('hint-right').style.cursor = 'pointer';
+document.getElementById('hint-right').addEventListener('click', () => {
+  const inp = document.createElement('input'); inp.type='file'; inp.accept='.00t,.00T';
+  inp.onchange = () => { if (inp.files[0]) { const r = new FileReader(); r.onload = ev => { const res = parseOOT(ev.target.result); currentOOT=res; document.getElementById('hint-right').style.display='none'; document.getElementById('info-right').style.display='block'; document.getElementById('rv').textContent=res.vertices.length; document.getElementById('rf').textContent=res.faces.length; if(res.warnings.length){document.getElementById('rwarn').style.display='block';document.getElementById('rwarn').textContent=res.warnings.join('; ');} loadMesh('right',res,0xf97316); }; r.readAsArrayBuffer(inp.files[0]); } };
+  inp.click();
+});
+
+// Init
+window.addEventListener('resize', () => {
+  for (const id of ['left','right']) {
+    const el = document.getElementById(id);
+    if (renderers[id]) { renderers[id].setSize(el.clientWidth, el.clientHeight); }
+    if (cameras[id]) { cameras[id].aspect = el.clientWidth/el.clientHeight; cameras[id].updateProjectionMatrix(); }
+  }
+});
+
+initPanel('left');
+initPanel('right');
+updateCameras();
+animate();
+</script>
+</body>
+</html>

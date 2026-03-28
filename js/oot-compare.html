@@ -394,10 +394,10 @@ function parseOOT(arrayBuffer) {
     }
   }
 
-  const maxV = Math.max(0, ...faces.flat());
-  while (vertices.length <= maxV) vertices.push([0,0,0]);
+  // Filter out faces that reference non-existent vertices (phantom vertices from face decoder)
+  const validFaces = faces.filter(f => f.every(vi => vi >= 0 && vi < vertices.length));
 
-  return { vertices: vertices.map(v => [v[0]||0,v[1]||0,v[2]||0]), faces, warnings, nVertsHeader, nFacesHeader };
+  return { vertices: vertices.map(v => [v[0]||0,v[1]||0,v[2]||0]), faces: validFaces, warnings, nVertsHeader, nFacesHeader };
 }
 
 // ═════════════════════════════════════════════════

@@ -375,15 +375,12 @@ function parseOOT(arrayBuffer) {
     }
   }
 
-  // Ensure we have enough vertices for the faces
-  const maxFaceVert = Math.max(0, ...faces.flat());
-  while (vertices.length <= maxFaceVert) {
-    vertices.push([0, 0, 0]);
-  }
+  // Filter out faces referencing non-existent vertices
+  const validFaces = faces.filter(f => f.every(vi => vi >= 0 && vi < vertices.length));
 
   return {
     vertices: vertices.map(v => [v[0]||0, v[1]||0, v[2]||0]),
-    faces,
+    faces: validFaces,
     nVertsHeader,
     nFacesHeader,
     coordValues: groups.slice(0, coordGroupEnd).map(g => g.value),

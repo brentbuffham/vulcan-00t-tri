@@ -341,7 +341,27 @@ function parseOOT(arrayBuffer) {
     if (!vertices[i]) vertices[i] = [0,0,0];
   }
 
-  // Face decoding (simple all-C for now)
+  // Deduplicate vertices: merge identical coordinates, remap indices
+  const dedupMap = new Map(); // "x,y,z" -> first index
+  const indexRemap = [];      // old index -> new index
+  const dedupVerts = [];
+  for (let i = 0; i < vertices.length; i++) {
+    const v = vertices[i];
+    const key = v[0].toFixed(4) + ',' + v[1].toFixed(4) + ',' + v[2].toFixed(4);
+    if (dedupMap.has(key)) {
+      indexRemap.push(dedupMap.get(key));
+    } else {
+      const ni = dedupVerts.length;
+      dedupMap.set(key, ni);
+      dedupVerts.push(v);
+      indexRemap.push(ni);
+    }
+  }
+  // Replace vertices with deduplicated set
+  vertices.length = 0;
+  for (const v of dedupVerts) vertices.push(v);
+
+  // Face decoding
   const faces = [];
   if (faceMarker > 0) {
     const faceRegion = data.slice(faceMarker, attrPos);
@@ -377,25 +397,188 @@ function parseOOT(arrayBuffer) {
     if (iv2.length >= 3) initTri = [iv2[0]-1, iv2[1]-1, iv2[2]-1];
     faces.push(initTri);
 
-    const topos = fops.filter(o => o.type==='TAG' && (o.cls==='40'||o.cls==='C0'||o.cls==='E1'));
-    let ts = (iv2.length <= 2 && topos.length > 0) ? 1 : 0;
+    // Build topology op list with associated vertex refs
+    // Each explicit vertex in the face section is consumed by the next C operation
+    const topoRaw = fops.filter(o => o.type==='TAG' && (o.cls==='40'||o.cls==='C0'));
+    let ts = (iv2.length <= 2 && topoRaw.length > 0) ? 1 : 0;
+    const topos = topoRaw.slice(ts); // skip initial metadata tag
+
+    // Map explicit vertex refs to topology op positions
+    // Walk the fops AFTER the initial section (past first E0 tag)
+    // Each DATA vertex ref before a topology TAG gets consumed by that TAG's C op
+    const opVertexMap = new Map(); // topo index -> explicit vertex (0-based)
+    let pastInitial = false;
+    let rawTopoCount = 0;
+    let pendingVertex = null;
+    for (const op of fops) {
+      // Skip everything in the initial section (before first E0)
+      if (!pastInitial) {
+        if (op.type === 'TAG' && op.cls === 'E0') pastInitial = true;
+        continue;
+      }
+      if (op.type === 'DATA') {
+        const dv = op.value;
+        // Valid vertex ref (1-based, not flags like 0x40/0x82/0xC0)
+        if (dv >= 1 && dv <= 200 && dv !== 0x40 && dv !== 0x82 && dv !== 0xC0) {
+          pendingVertex = dv - 1; // convert to 0-based
+        }
+      } else if (op.type === 'TAG' && (op.cls === '40' || op.cls === 'C0')) {
+        rawTopoCount++;
+        if (rawTopoCount > ts) { // past the skipped metadata tag
+          const topoIdx = rawTopoCount - ts - 1;
+          if (pendingVertex !== null) {
+            opVertexMap.set(topoIdx, pendingVertex);
+            pendingVertex = null;
+          }
+        }
+      }
+    }
+
+    // Build ordered C-vertex queue:
+    // - Explicit vertices go at their mapped op positions
+    // - Remaining (implicit) vertices fill the gaps in order
+    const usedVerts = new Set(initTri);
+    const explicitVerts = new Set(opVertexMap.values());
+    const implicitVerts = []; // vertices not explicitly referenced
+    for (let vi = 0; vi < vertices.length; vi++) {
+      if (!usedVerts.has(vi) && !explicitVerts.has(vi)) {
+        implicitVerts.push(vi);
+      }
+    }
+
+    // Build the C-vertex queue: for each C op in sequence, which vertex?
+    let implIdx = 0;
+    function getNextCVertex(opIdx) {
+      if (opVertexMap.has(opIdx)) return opVertexMap.get(opIdx);
+      if (implIdx < implicitVerts.length) return implicitVerts[implIdx++];
+      return -1; // no vertex available
+    }
+
     const bnd = [...initTri];
     let gate = 1;
-    let nxtV = Math.max(...initTri) + 1;
-    for (let ti = ts; ti < topos.length; ti++) {
+    const totalVerts = vertices.length;
+    const hasFinalizer = topos.some(o => o.byte2 === 0x1B);
+    let cOpsRemaining = vertices.length - initTri.length; // how many C ops we expect
+
+    console.log('Initial tri:', initTri, 'opVertexMap:', Object.fromEntries(opVertexMap), 'implicitVerts:', implicitVerts);
+
+    for (let ti = 0; ti < topos.length; ti++) {
       if (bnd.length < 3) break;
       const top = topos[ti];
-      if (top.byte2 === 0x1B) { gate = ((gate-1)%bnd.length+bnd.length)%bnd.length; continue; }
-      const n = bnd.length, li = gate%n, ri = (gate+1)%n;
-      const v2 = nxtV++;
-      faces.push([bnd[li], bnd[ri], v2]);
-      bnd.splice(li+1, 0, v2);
-      gate = li + 1;
+      const n = bnd.length;
+      const li = gate % n;
+      const ri = (gate + 1) % n;
+      const L = bnd[li], R = bnd[ri];
+
+      // Finalizer: gate advance -1 (group-based open meshes)
+      if (top.byte2 === 0x1B) {
+        gate = ((gate - 1) % n + n) % n;
+        continue;
+      }
+
+      // Determine operation based on context:
+      // 1. If boundary has exactly 3 vertices -> E (close last triangle)
+      // 2. If we've used all available new vertices -> must be L, R, or E
+      // 3. If hasFinalizer (group-based) -> use group pattern (C,C,fin)
+      // 4. Otherwise -> heuristic based on boundary size and remaining ops
+
+      // Determine operation from tag properties:
+      // - nib=7 with cls=40 -> C (create vertex)
+      // - cls=C0 -> C (create vertex, different encoding)
+      // - nib=3 -> R or L (closing operation)
+      // - nib=F -> C or R (context dependent)
+      // - nib=B -> C, R, or finalizer
+      // - boundary size 3 -> must be E
+      let op;
+      if (n === 3 && cOpsRemaining <= 0) {
+        op = 'E'; // boundary collapsed to 3 AND all vertices created -> close
+      } else if (n === 3) {
+        op = 'C'; // boundary has 3 but still growing -> create
+      } else if (top.lo === 0x3) {
+        // nib=3: closing operation (R or L)
+        // Use cls to distinguish: C0 class -> L, 40 class -> R (from cube match)
+        op = (top.cls === 'C0') ? 'L' : 'R';
+      } else if (top.lo === 0x7 && top.cls === '40') {
+        op = 'C'; // nib=7, cls=40 -> always C
+      } else if (top.cls === 'C0') {
+        op = 'C'; // C0 class -> C
+      } else if (top.lo === 0xF) {
+        // nib=F: C early in traversal, L/R after closing starts
+        if (cOpsRemaining <= 0) {
+          op = 'L'; // boundary is shrinking -> L
+        } else {
+          op = 'C';
+        }
+      } else if (top.lo === 0xB) {
+        // nib=B: C if new vertices remain, else R
+        if (top.hi === 1 && hasFinalizer) {
+          // 40:1B with finalizers = gate advance (open mesh)
+          gate = ((gate - 1) % n + n) % n;
+          continue;
+        }
+        op = (cOpsRemaining > 0) ? 'C' : 'R';
+      } else {
+        op = (cOpsRemaining > 0) ? 'C' : 'R';
+      }
+
+      // For C ops, peek at the next vertex without consuming
+      let pendingCVertex = -1;
+      if (op === 'C') {
+        // Peek: check what vertex would be used
+        if (opVertexMap.has(ti)) {
+          pendingCVertex = opVertexMap.get(ti);
+        } else if (implIdx < implicitVerts.length) {
+          pendingCVertex = implicitVerts[implIdx]; // peek, don't consume yet
+        }
+        if (pendingCVertex < 0) op = (n > 4) ? 'L' : 'R';
+      }
+
+      // Log operation for debugging
+      console.log(`Op${ti}: ${top.cls}:${top.byte2.toString(16).padStart(2,'0')} nib=${top.lo.toString(16)} -> ${op} bnd=[${bnd}] gate=${gate} cV=${pendingCVertex}`);
+      if (op === 'C') {
+        if (pendingCVertex >= 0) {
+          // Consume the vertex (advance implicit index if it wasn't explicit)
+          if (!opVertexMap.has(ti)) implIdx++;
+          cOpsRemaining--;
+          faces.push([L, R, pendingCVertex]);
+          bnd.splice(li + 1, 0, pendingCVertex);
+          gate = li + 1;
+        }
+      } else if (op === 'R') {
+        if (n >= 4) {
+          const fr = bnd[(gate + 2) % n];
+          faces.push([L, R, fr]);
+          bnd.splice(ri, 1);
+          if (gate >= bnd.length) gate = gate % bnd.length;
+        }
+      } else if (op === 'L') {
+        if (n >= 4) {
+          const fl = bnd[(gate - 1 + n) % n];
+          faces.push([fl, L, R]);
+          bnd.splice(li, 1);
+          gate = ((li - 1) % bnd.length + bnd.length) % bnd.length;
+        }
+      } else if (op === 'E') {
+        if (n === 3) {
+          faces.push([bnd[0], bnd[1], bnd[2]]);
+          bnd.length = 0;
+        } else if (n >= 4) {
+          const fl = bnd[(gate - 1 + n) % n];
+          faces.push([fl, L, R]);
+          bnd.splice(li, 1);
+          gate = ((li - 1) % bnd.length + bnd.length) % bnd.length;
+        }
+      }
     }
   }
 
   // Filter out faces that reference non-existent vertices (phantom vertices from face decoder)
-  const validFaces = faces.filter(f => f.every(vi => vi >= 0 && vi < vertices.length));
+  // Remap face indices through dedup map, then filter invalid
+  const remappedFaces = faces.map(f => f.map(vi => {
+    if (vi >= 0 && vi < indexRemap.length) return indexRemap[vi];
+    return vi;
+  }));
+  const validFaces = remappedFaces.filter(f => f.every(vi => vi >= 0 && vi < vertices.length));
 
   return { vertices: vertices.map(v => [v[0]||0,v[1]||0,v[2]||0]), faces: validFaces, warnings, nVertsHeader, nFacesHeader };
 }

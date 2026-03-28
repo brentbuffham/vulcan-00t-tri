@@ -529,20 +529,27 @@ function parseOOT(arrayBuffer) {
           op = 'C'; // all other separators (0x17, 0x2F, 0x27, 0x0F, 0xDF) → C
         }
       } else {
-        // No separator: use previous op + tag class to determine
-        // Pattern: after C→R, after R→L (unless E1 tag→C), after L→E
+        // No separator: depends on mesh type
+        const hasFin = topos.some(o => o.byte2 === 0x1B);
+
         if (top.cls === 'E1') {
           op = 'C'; // E1 tags are C when no separator
         } else if (n === 3 && cOpsRemaining <= 0) {
           op = 'E';
-        } else if (lastOp === 'C') {
-          op = 'R'; // after C with no sep → R
-        } else if (lastOp === 'R') {
-          op = (cOpsRemaining > 0) ? 'L' : 'L'; // after R with no sep → L
-        } else if (lastOp === 'L') {
-          op = (n === 3) ? 'E' : 'L'; // after L → E if boundary=3
-        } else {
+        } else if (hasFin) {
+          // GROUP-BASED (open mesh): no-sep in groups defaults to C
           op = (cOpsRemaining > 0) ? 'C' : 'E';
+        } else {
+          // CLOSED MANIFOLD (cube etc): use previous-op context
+          if (lastOp === 'C') {
+            op = 'R';
+          } else if (lastOp === 'R') {
+            op = 'L';
+          } else if (lastOp === 'L') {
+            op = (n === 3) ? 'E' : 'L';
+          } else {
+            op = (cOpsRemaining > 0) ? 'C' : 'E';
+          }
         }
       }
 

@@ -324,25 +324,8 @@ function parseOOT(arrayBuffer) {
     vertices.push(c0Slots[slot]);
   }
 
-  // Deduplicate vertices: merge identical coordinates, remap indices
-  const dedupMap = new Map(); // "x,y,z" -> first index
-  const indexRemap = [];      // old index -> new index
-  const dedupVerts = [];
-  for (let i = 0; i < vertices.length; i++) {
-    const v = vertices[i];
-    const key = v[0].toFixed(4) + ',' + v[1].toFixed(4) + ',' + v[2].toFixed(4);
-    if (dedupMap.has(key)) {
-      indexRemap.push(dedupMap.get(key));
-    } else {
-      const ni = dedupVerts.length;
-      dedupMap.set(key, ni);
-      dedupVerts.push(v);
-      indexRemap.push(ni);
-    }
-  }
-  // Replace vertices with deduplicated set
-  vertices.length = 0;
-  for (const v of dedupVerts) vertices.push(v);
+  // No dedup - keep all vertices, identity remap
+  const indexRemap = vertices.map((v, i) => i);
 
   // Face decoding
   const faces = [];
@@ -377,7 +360,9 @@ function parseOOT(arrayBuffer) {
         if (op.type==='TAG' && op.cls==='E0') break;
       }
     }
-    if (iv2.length >= 3) initTri = [iv2[0]-1, iv2[1]-1, iv2[2]-1];
+    if (iv2.length >= 3) {
+      initTri = [iv2[0]-1, iv2[1]-1, iv2[2]-1].map(i => i < indexRemap.length ? indexRemap[i] : i);
+    }
     faces.push(initTri);
 
     // Build topology op list with associated vertex refs
@@ -403,11 +388,20 @@ function parseOOT(arrayBuffer) {
       }
       if (op.type === 'DATA') {
         const dv = op.value;
-        if (dv >= 1 && (dv - 1) < vertices.length && dv !== 0x40 && dv !== 0x82 && dv !== 0xC0) {
-          if (!seenTopo) {
-            preTopoVerts.push(dv - 1);
-          } else {
-            postTopoVerts.push(dv - 1);
+        const rawIdx = dv - 1;
+        if (dv >= 1 && rawIdx < vertices.length && dv !== 0x40 && dv !== 0x82 && dv !== 0xC0) {
+          // Skip if this vertex is a coordinate-duplicate of one already referenced
+          const vCoord = vertices[rawIdx];
+          const isDup = [...initTri, ...preTopoVerts, ...postTopoVerts].some(oi => {
+            const ov = vertices[oi];
+            return ov && Math.abs(ov[0]-vCoord[0])<0.1 && Math.abs(ov[1]-vCoord[1])<0.1 && Math.abs(ov[2]-vCoord[2])<0.1;
+          });
+          if (!isDup) {
+            if (!seenTopo) {
+              preTopoVerts.push(rawIdx);
+            } else {
+              postTopoVerts.push(rawIdx);
+            }
           }
         }
       }
@@ -416,24 +410,50 @@ function parseOOT(arrayBuffer) {
     const vertexQueue = [...preTopoVerts, ...postTopoVerts];
 
     // Implicit vertices: not in initial tri AND not in vertexQueue
+    // Use header vertex count (unique verts) not array length (may have duplicates)
+    const uniqueVerts = nVertsHeader || vertices.length;
+
+    // Implicit: not in initial, not in queue, and not a coordinate-duplicate
     const usedVerts = new Set([...initTri, ...vertexQueue]);
+    const usedCoords = new Set();
+    for (const vi of usedVerts) {
+      if (vi < vertices.length) {
+        const v = vertices[vi];
+        usedCoords.add(v[0].toFixed(1)+','+v[1].toFixed(1)+','+v[2].toFixed(1));
+      }
+    }
     const implicitVerts = [];
     for (let vi = 0; vi < vertices.length; vi++) {
-      if (!usedVerts.has(vi)) implicitVerts.push(vi);
+      if (usedVerts.has(vi)) continue;
+      const v = vertices[vi];
+      const key = v[0].toFixed(1)+','+v[1].toFixed(1)+','+v[2].toFixed(1);
+      if (usedCoords.has(key)) continue; // skip coordinate duplicates
+      usedCoords.add(key);
+      implicitVerts.push(vi);
     }
+    implicitVerts.reverse();
 
-    // C vertex source: IMPLICIT vertices first, then explicit queue
-    // (implicit = vertices not in initial AND not in face section refs)
-    let implIdx = 0, vqIdx = 0;
+    // C vertex source: alternate implicit and explicit
+    // Pattern: implicit[0], then pre-topo explicits, then implicit[1], then post-topo explicits
+    const cVertexOrder = [];
+    let ii = 0, prei = 0, posti = 0;
+    // First implicit, then pre-topo, then remaining implicits interleaved with post-topo
+    if (implicitVerts.length > 0) cVertexOrder.push(implicitVerts[ii++]);
+    for (const v of preTopoVerts) cVertexOrder.push(v);
+    if (ii < implicitVerts.length) cVertexOrder.push(implicitVerts[ii++]);
+    for (const v of postTopoVerts) cVertexOrder.push(v); // already reversed
+    while (ii < implicitVerts.length) cVertexOrder.push(implicitVerts[ii++]);
+
+    let cvIdx = 0;
     function nextCVertex() {
-      if (implIdx < implicitVerts.length) return implicitVerts[implIdx++];
-      if (vqIdx < vertexQueue.length) return vertexQueue[vqIdx++];
+      if (cvIdx < cVertexOrder.length) return cVertexOrder[cvIdx++];
       return -1;
     }
+    console.log('C vertex order:', cVertexOrder, 'implicit:', implicitVerts, 'preTopo:', preTopoVerts, 'postTopo(rev):', postTopoVerts);
 
     const bnd = [...initTri];
     let gate = 1;
-    let cOpsRemaining = vertices.length - initTri.length;
+    let cOpsRemaining = uniqueVerts - initTri.length;
 
     // Extract separators directly from raw face region bytes
     // Track: separator value AND whether a FLAG (0x40/0xC0) preceded it

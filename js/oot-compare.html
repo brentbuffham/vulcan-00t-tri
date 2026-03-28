@@ -382,7 +382,7 @@ function parseOOT(arrayBuffer) {
 
     // Build topology op list with associated vertex refs
     // Each explicit vertex in the face section is consumed by the next C operation
-    const topoRaw = fops.filter(o => o.type==='TAG' && (o.cls==='40'||o.cls==='C0'));
+    const topoRaw = fops.filter(o => o.type==='TAG' && (o.cls==='40'||o.cls==='C0'||o.cls==='E1'));
     // Always skip the first topology tag (initial metadata tag)
     let ts = topoRaw.length > 0 ? 1 : 0;
     const topos = topoRaw.slice(ts); // skip initial metadata tag
@@ -424,32 +424,44 @@ function parseOOT(arrayBuffer) {
     let gate = 1;
     let cOpsRemaining = vertices.length - initTri.length;
 
-    // Build separator-to-op map from raw fops
-    // Track which separator precedes each topology tag
-    const topoSeps = []; // separator value before each topo op (null if none)
+    // Extract separators directly from raw face region bytes
+    // Track: separator value AND whether a FLAG (0x40/0xC0) preceded it
+    const topoSeps = [];    // separator value (or null)
+    const topoFlags = [];   // true if FLAG appeared before the separator
     {
-      let pastInit2 = false, rawTopo2 = 0, lastSep2 = null;
-      for (const op of fops) {
-        if (!pastInit2) {
-          if (op.type === 'TAG' && op.cls === 'E0') pastInit2 = true;
-          continue;
-        }
-        if (op.type === 'SEP') { lastSep2 = op.value || op.byte2; continue; }
-        // Handle separator stored as value in DATA-like entries
-        if (op.type === 'DATA') { continue; } // skip data, don't reset sep
-        if (op.type === 'TAG' && op.cls === 'E0') { continue; } // skip E0 structural
-        if (op.type === 'TAG' && op.cls === 'E1') { continue; }
-        if (op.type === 'TAG' && op.cls === '20') { continue; }
-        if (op.type === 'TAG' && (op.cls === '40' || op.cls === 'C0')) {
-          rawTopo2++;
-          if (rawTopo2 > ts) {
-            topoSeps.push(lastSep2);
-            lastSep2 = null; // consumed
+      const fr = data.slice(faceMarker, attrPos);
+      let p = 0, pastE0 = false, rawTopo = 0, lastSep = null, hadFlag = false;
+      while (p < fr.length) {
+        const b = fr[p];
+        if (b <= 0x06) {
+          const nb = b + 1;
+          if (p + 1 < fr.length) {
+            const dv = fr[p + 1];
+            if (pastE0 && (dv === 0x40 || dv === 0xC0)) hadFlag = true;
           }
-        }
+          p += 1 + nb;
+        } else if (isSep(b)) {
+          if (pastE0) lastSep = b;
+          p += 1;
+        } else if (p + 1 < fr.length) {
+          const b2 = fr[p + 1];
+          const cls = b & 0xE0;
+          if (cls === 0xE0 && !pastE0) { pastE0 = true; }
+          if (pastE0 && (cls === 0x40 || cls === 0xC0 || b === 0xE1)) {
+            rawTopo++;
+            if (rawTopo > ts) {
+              topoSeps.push(lastSep);
+              topoFlags.push(hadFlag);
+              lastSep = null;
+              hadFlag = false;
+            }
+          }
+          p += 2;
+        } else break;
       }
     }
 
+    let lastOp = null;
     console.log('Initial tri:', initTri, 'topoSeps:', topoSeps);
 
     for (let ti = 0; ti < topos.length; ti++) {
@@ -475,6 +487,7 @@ function parseOOT(arrayBuffer) {
       //   no sep → consecutive op (C in group, L after R, E at end)
 
       const sep = ti < topoSeps.length ? topoSeps[ti] : null;
+      const flag = ti < topoFlags.length ? topoFlags[ti] : false;
       let op;
 
       if (sep !== null) {
@@ -484,8 +497,8 @@ function parseOOT(arrayBuffer) {
         } else if (sep === 0x5F || sep === 0x87) {
           op = 'R'; // high-confidence R separators
         } else if (sep === 0x17) {
-          // Ambiguous: C if vertices remain, R otherwise
-          op = (cOpsRemaining > 0) ? 'C' : 'R';
+          // Ambiguous 0x17: FLAG before separator → C, no FLAG → R
+          op = flag ? 'C' : 'R';
         } else if (sep === 0x0F) {
           op = (cOpsRemaining > 0) ? 'C' : 'E';
         } else if (sepUpper >= 8) {
@@ -495,15 +508,15 @@ function parseOOT(arrayBuffer) {
         }
       } else {
         // No separator: consecutive op
-        // In groups: second op is C or R
-        // After R: often L
-        // At end (bnd=3, no verts): E
-        if (n === 3 && cOpsRemaining <= 0) {
+        // E1 class tags are always R
+        if (top.cls === 'E1') {
+          op = 'R';
+        } else if (n === 3 && cOpsRemaining <= 0) {
           op = 'E';
         } else if (cOpsRemaining > 0) {
           op = 'C';
         } else if (n > 3) {
-          // No sep, no verts left: L (follows R typically)
+          // No verts left, boundary > 3: L
           op = 'L';
         } else {
           op = 'E';
@@ -517,7 +530,9 @@ function parseOOT(arrayBuffer) {
 
       // Log
       const sepStr = sep !== null ? `0x${sep.toString(16).padStart(2,'0')}` : 'none';
-      console.log(`Op${ti}: sep=${sepStr} ${top.cls}:${top.byte2.toString(16).padStart(2,'0')} -> ${op} bnd=[${bnd}] gate=${gate}`);
+      const flagStr = flag ? ' FLAG' : '';
+      console.log(`Op${ti}: sep=${sepStr}${flagStr} ${top.cls}:${top.byte2.toString(16).padStart(2,'0')} -> ${op} bnd=[${bnd}] gate=${gate}`);
+      lastOp = op;
       if (op === 'C') {
         const v = nextCVertex();
         if (v >= 0) {

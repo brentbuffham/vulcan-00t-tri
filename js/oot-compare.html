@@ -388,22 +388,32 @@ function parseOOT(arrayBuffer) {
     const topos = topoRaw.slice(ts); // skip initial metadata tag
 
     // Build vertex queue for C operations
-    // Walk fops AFTER initial section, collect vertex refs in order
-    // At execution time: if op is C, consume next vertex ref. If R/L, it's a back-ref.
-    const vertexQueue = []; // ordered list of explicit vertex refs (0-based)
-    let pastInit = false;
+    // Split into pre-topology refs (before first 40/C0 tag) and post-topology refs
+    // Post-topology refs are REVERSED (consumed in reverse stream order)
+    const preTopoVerts = [];
+    const postTopoVerts = [];
+    let pastInit = false, seenTopo = false;
     for (const op of fops) {
       if (!pastInit) {
         if (op.type === 'TAG' && op.cls === 'E0') pastInit = true;
         continue;
       }
+      if (op.type === 'TAG' && (op.cls === '40' || op.cls === 'C0' || op.cls === 'E1')) {
+        seenTopo = true;
+      }
       if (op.type === 'DATA') {
         const dv = op.value;
         if (dv >= 1 && (dv - 1) < vertices.length && dv !== 0x40 && dv !== 0x82 && dv !== 0xC0) {
-          vertexQueue.push(dv - 1);
+          if (!seenTopo) {
+            preTopoVerts.push(dv - 1);
+          } else {
+            postTopoVerts.push(dv - 1);
+          }
         }
       }
     }
+    postTopoVerts.reverse(); // post-topology refs consumed in reverse order
+    const vertexQueue = [...preTopoVerts, ...postTopoVerts];
 
     // Implicit vertices: not in initial tri AND not in vertexQueue
     const usedVerts = new Set([...initTri, ...vertexQueue]);
@@ -412,11 +422,12 @@ function parseOOT(arrayBuffer) {
       if (!usedVerts.has(vi)) implicitVerts.push(vi);
     }
 
-    // C vertex source: explicit queue first, then implicit
-    let vqIdx = 0, implIdx = 0;
+    // C vertex source: IMPLICIT vertices first, then explicit queue
+    // (implicit = vertices not in initial AND not in face section refs)
+    let implIdx = 0, vqIdx = 0;
     function nextCVertex() {
-      if (vqIdx < vertexQueue.length) return vertexQueue[vqIdx++];
       if (implIdx < implicitVerts.length) return implicitVerts[implIdx++];
+      if (vqIdx < vertexQueue.length) return vertexQueue[vqIdx++];
       return -1;
     }
 

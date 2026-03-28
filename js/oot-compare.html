@@ -399,7 +399,7 @@ function parseOOT(arrayBuffer) {
       }
       if (op.type === 'DATA') {
         const dv = op.value;
-        if (dv >= 1 && dv <= 200 && dv !== 0x40 && dv !== 0x82 && dv !== 0xC0) {
+        if (dv >= 1 && (dv - 1) < vertices.length && dv !== 0x40 && dv !== 0x82 && dv !== 0xC0) {
           vertexQueue.push(dv - 1);
         }
       }
@@ -491,35 +491,27 @@ function parseOOT(arrayBuffer) {
       let op;
 
       if (sep !== null) {
-        const sepUpper = sep >> 3;
-        if (sep === 0x2F || sep === 0x27 || sep >= 0xC0) {
-          op = 'C'; // high-confidence C separators
-        } else if (sep === 0x5F || sep === 0x87) {
-          op = 'R'; // high-confidence R separators
-        } else if (sep === 0x17) {
-          // Ambiguous 0x17: FLAG before separator → C, no FLAG → R
-          op = flag ? 'C' : 'R';
-        } else if (sep === 0x0F) {
-          op = (cOpsRemaining > 0) ? 'C' : 'E';
-        } else if (sepUpper >= 8) {
-          op = 'R'; // larger separators tend to be R
+        // Separator present: determines operation
+        if (sep === 0x5F || sep === 0x87) {
+          op = 'R'; // large separators → R
         } else {
-          op = (cOpsRemaining > 0) ? 'C' : 'R';
+          op = 'C'; // all other separators (0x17, 0x2F, 0x27, 0x0F, 0xDF) → C
         }
       } else {
-        // No separator: consecutive op
-        // E1 class tags are always R
+        // No separator: use previous op + tag class to determine
+        // Pattern: after C→R, after R→L (unless E1 tag→C), after L→E
         if (top.cls === 'E1') {
-          op = 'R';
+          op = 'C'; // E1 tags are C when no separator
         } else if (n === 3 && cOpsRemaining <= 0) {
           op = 'E';
-        } else if (cOpsRemaining > 0) {
-          op = 'C';
-        } else if (n > 3) {
-          // No verts left, boundary > 3: L
-          op = 'L';
+        } else if (lastOp === 'C') {
+          op = 'R'; // after C with no sep → R
+        } else if (lastOp === 'R') {
+          op = (cOpsRemaining > 0) ? 'L' : 'L'; // after R with no sep → L
+        } else if (lastOp === 'L') {
+          op = (n === 3) ? 'E' : 'L'; // after L → E if boundary=3
         } else {
-          op = 'E';
+          op = (cOpsRemaining > 0) ? 'C' : 'E';
         }
       }
 

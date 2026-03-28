@@ -124,8 +124,9 @@ function parseOOT(arrayBuffer) {
   let attrPos = findBytes(data, attrSuffix, ds);
   if (attrPos < 0) attrPos = data.length;
 
+  // Find face section: FIRST "20 00" after coord data (not the last!)
   let faceMarker = -1;
-  for (let i = attrPos - 2; i > ds + 30; i--) {
+  for (let i = ds + 30; i < attrPos - 1; i++) {
     if (data[i] === 0x20 && data[i+1] === 0x00) { faceMarker = i; break; }
   }
 
@@ -201,108 +202,94 @@ function parseOOT(arrayBuffer) {
     axis = ax;
   }
 
-  // ── Build vertices ──
-  // Model (confirmed on cube):
-  // - Running state [X,Y,Z] tracks current axis values
-  // - V0 from first 3 coords
-  // - Each subsequent coord updates running state, creates primary vertex (snapshot)
-  // - C0 tags assign the CURRENT coord value to a specific vertex SLOT
-  //   - hi_nib = vertex slot index
-  //   - Unassigned axes for C0 verts get BASE values (first value seen per axis)
-  //   - lo_nib: 0x7 = base Z, 0xF = alternate Z
-  // - When C0 tags exist for a coord, NO primary vertex is created (C0 handles it)
+  // ── Build vertices using gap-filling model ──
+  // 1. C0 tags claim specific slot indices (hi_nib)
+  // 2. Primary vertices (from running state) fill gaps in C0 numbering
+  // 3. Remaining primaries extend past max C0 slot
+  // 4. lo=F on first non-C0 tag: create TWO primaries (one per Z variant)
 
   const running = [0, 0, 0];
-  const vertices = [];
-  const baseValues = [null, null, null]; // first value seen per axis
-  const altValues = [null, null, null];  // second value seen per axis
+  const baseValues = [null, null, null];
   const zValues = [];
 
-  // Detect coord section end (stop at face section / garbage data)
+  // Detect coord section end
   let coordGroupEnd = groups.length;
+  let firstRealValue = Math.abs(groups.length > 0 ? groups[0].value : 0);
   for (let i = 3; i < groups.length; i++) {
-    const g = groups[i];
-    // Face section data has 20:03 tags
-    if (g.tags.some(t => t.cls === '20' && t.byte2 === 0x03)) { coordGroupEnd = i; break; }
-    // Stop on clearly garbage small values (unless Z=0 is valid)
-    if (Math.abs(g.value) < 0.001 && i > 3) { coordGroupEnd = i; break; }
-  }
-
-  // First pass: collect base/alt values per axis
-  for (let i = 0; i < coordGroupEnd; i++) {
-    const ax = axisMap[i];
-    if (ax < 0 || ax > 2) continue;
     const v = groups[i].value;
-    if (baseValues[ax] === null) {
-      baseValues[ax] = v;
-    } else if (altValues[ax] === null && Math.abs(v - baseValues[ax]) > 0.001) {
-      altValues[ax] = v;
-    }
-    if (ax === 2 && !zValues.includes(v)) zValues.push(v);
+    const av = Math.abs(v);
+    if (firstRealValue > 10 && av < firstRealValue / 100 && av < 10) { coordGroupEnd = i; break; }
+    if (groups[i].tags.some(t => t.cls === '20' && t.byte2 === 0x03)) { coordGroupEnd = i; break; }
+    if (v < -0.5 && i > 3 && groups[i-1].value > 0) { coordGroupEnd = i; break; }
   }
 
-  // Track which axes have been explicitly C0-assigned per vertex slot
-  const c0Assigned = {}; // slot -> Set of axes
+  // Collect base values and Z variants
+  for (let i = 0; i < coordGroupEnd; i++) {
+    const ax = axisMap[i];
+    if (ax >= 0 && ax <= 2) {
+      if (baseValues[ax] === null) baseValues[ax] = groups[i].value;
+      if (ax === 2 && !zValues.includes(groups[i].value)) zValues.push(groups[i].value);
+    }
+  }
 
-  // Second pass: build vertex table
+  const c0Slots = {};
+  const c0SlotSet = new Set();
+  const primaries = [];
+
   for (let i = 0; i < coordGroupEnd; i++) {
     const g = groups[i];
     const ax = axisMap[i];
     if (ax < 0 || ax > 2) continue;
-
     running[ax] = g.value;
 
-    if (i === 2) {
-      // V0 complete from first 3 coords
-      vertices.push([running[0], running[1], running[2]]);
-    } else if (i > 2) {
-      const c0Tags = g.tags.filter(t => t.cls === 'C0');
-      if (c0Tags.length === 0) {
-        // No C0: create primary vertex from running state snapshot
-        vertices.push([running[0], running[1], running[2]]);
-      }
-      // With C0 tags: vertices are created/updated by C0 (no primary)
+    for (const t of g.tags) {
+      if (t.cls === 'C0') c0SlotSet.add(t.hi);
     }
 
-    // Process C0 tags: assign current value to specific vertex slots
-    const c0Tags = g.tags.filter(t => t.cls === 'C0');
-    for (const t of c0Tags) {
-      const vi = t.hi;
+    if (i === 2) {
+      primaries.push([running[0], running[1], running[2]]);
+    } else if (i > 2) {
+      let ft = null;
+      for (const t of g.tags) { if (t.cls !== 'C0') { ft = t; break; } }
 
-      // Ensure slot exists with base values as default
-      while (vi >= vertices.length) {
-        vertices.push([
-          baseValues[0] || 0,
-          baseValues[1] || 0,
-          baseValues[2] || 0,
-        ]);
-        c0Assigned[vertices.length - 1] = new Set();
+      if (zValues.length >= 2 && ft && ft.lo === 0xF) {
+        primaries.push([running[0], running[1], zValues[0]]);
+        primaries.push([running[0], running[1], zValues[1]]);
+      } else {
+        primaries.push([running[0], running[1], running[2]]);
       }
-      if (!c0Assigned[vi]) c0Assigned[vi] = new Set();
+    }
 
-      // Assign current coord value to this slot's current axis
-      vertices[vi][ax] = g.value;
-      c0Assigned[vi].add(ax);
-
-      // Z-variant from lo_nib (overrides Z regardless of current axis)
+    for (const t of g.tags) {
+      if (t.cls !== 'C0') continue;
+      const slot = t.hi;
+      if (!c0Slots[slot]) c0Slots[slot] = [baseValues[0]||0, baseValues[1]||0, baseValues[2]||0];
+      c0Slots[slot][ax] = g.value;
       if (zValues.length >= 2) {
-        if (t.lo === 0x07) { vertices[vi][2] = zValues[0]; }
-        else if (t.lo === 0x0F) { vertices[vi][2] = zValues[1]; }
-      } else if (zValues.length === 1) {
-        vertices[vi][2] = zValues[0];
+        if (t.lo === 0x07) c0Slots[slot][2] = zValues[0];
+        else if (t.lo === 0x0F) c0Slots[slot][2] = zValues[1];
       }
     }
   }
 
-  // Final: C0 vertices with unassigned axes get base values
-  for (const [vi, assigned] of Object.entries(c0Assigned)) {
-    const v = vertices[parseInt(vi)];
-    if (!v) continue;
-    for (let ax = 0; ax < 3; ax++) {
-      if (!assigned.has(ax) && ax !== 2) { // Z handled by lo_nib
-        v[ax] = baseValues[ax] || 0;
-      }
-    }
+  // Merge: C0 slots at their indices, primaries fill gaps then extend
+  const maxSlot = c0SlotSet.size > 0 ? Math.max(...c0SlotSet) : -1;
+  const gapSlots = [];
+  for (let s = 0; s <= maxSlot; s++) {
+    if (!c0SlotSet.has(s)) gapSlots.push(s);
+  }
+
+  const vertices = new Array(Math.max(maxSlot + 1, 0));
+  for (const [slot, val] of Object.entries(c0Slots)) {
+    vertices[parseInt(slot)] = val;
+  }
+  let pi = 0;
+  for (const slot of gapSlots) {
+    if (pi < primaries.length) vertices[slot] = primaries[pi++];
+  }
+  while (pi < primaries.length) vertices.push(primaries[pi++]);
+  for (let i = 0; i < vertices.length; i++) {
+    if (!vertices[i]) vertices[i] = [0,0,0];
   }
 
   // ── Decode faces (simple group-based EdgeBreaker) ──

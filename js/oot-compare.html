@@ -45,6 +45,7 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
 <div id="controls">
   <button onclick="toggleWire()">Wireframe</button>
   <button onclick="togglePts()">Points</button>
+  <button onclick="toggleLabels()">Labels</button>
   <button onclick="resetView()">Reset</button>
   <button onclick="exportOBJ()">Export OOT as OBJ</button>
 </div>
@@ -60,9 +61,10 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
 <div id="right" class="panel">
   <div class="label">OOT (Parsed)</div>
   <div class="drop-hint" id="hint-right"><h2>Drop .00t here</h2><p>Vulcan triangulation</p></div>
-  <div class="info" id="info-right" style="display:none">
+  <div class="info" id="info-right" style="display:none;max-height:40vh;overflow-y:auto">
     <div>Verts: <b id="rv">0</b> | Faces: <b id="rf">0</b></div>
     <div id="rwarn" style="color:#f66;display:none"></div>
+    <div id="rverts" style="font-size:10px;margin-top:4px;font-family:monospace;color:#aaa"></div>
   </div>
 </div>
 
@@ -168,8 +170,9 @@ function parseOOT(arrayBuffer) {
   let attrPos = findBytes(data, attrSuffix, ds);
   if (attrPos < 0) attrPos = data.length;
 
+  // Find face section: FIRST "20 00" after coord data (not the last!)
   let faceMarker = -1;
-  for (let i = attrPos - 2; i > ds + 30; i--) {
+  for (let i = ds + 30; i < attrPos - 1; i++) {
     if (data[i] === 0x20 && data[i+1] === 0x00) { faceMarker = i; break; }
   }
 
@@ -255,41 +258,87 @@ function parseOOT(arrayBuffer) {
     }
   }
 
-  // Build vertices
+  // ── Build vertices using gap-filling model ──
+  // 1. Collect C0 slot assignments (hi_nib = slot index)
+  // 2. Collect primary vertices from running state
+  // 3. C0 slots claim specific indices; primaries fill gaps then extend
   const running = [0,0,0];
-  const vertices = [];
-  const c0Assigned = {};
+  const c0Slots = {};      // slot -> {axes assigned, values per axis}
+  const c0SlotSet = new Set();
+  const primaries = [];    // primary vertices in creation order
 
+  // First pass: collect C0 slot numbers and primary vertices
   for (let i = 0; i < coordGroupEnd; i++) {
     const g = groups[i];
     const ax = axisMap[i];
     if (ax < 0 || ax > 2) continue;
     running[ax] = g.value;
 
-    if (i === 2) { vertices.push([running[0],running[1],running[2]]); }
-    else if (i > 2) {
-      const c0 = g.tags.filter(t => t.cls === 'C0');
-      if (c0.length === 0) vertices.push([running[0],running[1],running[2]]);
+    // Collect C0 slot numbers
+    for (const t of g.tags) {
+      if (t.cls === 'C0') c0SlotSet.add(t.hi);
     }
 
-    for (const t of g.tags.filter(t => t.cls === 'C0')) {
-      const vi2 = t.hi;
-      while (vi2 >= vertices.length) {
-        vertices.push([baseValues[0]||0, baseValues[1]||0, baseValues[2]||0]);
-        c0Assigned[vertices.length-1] = new Set();
+    if (i === 2) {
+      // V0 from initial 3 coords
+      primaries.push([running[0], running[1], running[2]]);
+    } else if (i > 2) {
+      // Check first non-C0 tag for lo_nib
+      let ft = null;
+      for (const t of g.tags) { if (t.cls !== 'C0') { ft = t; break; } }
+
+      if (zValues.length >= 2 && ft && ft.lo === 0xF) {
+        // lo=F: create TWO primary vertices (one per Z variant)
+        const v1 = [running[0], running[1], zValues[0]];
+        const v2 = [running[0], running[1], zValues[1]];
+        primaries.push(v1);
+        primaries.push(v2);
+      } else {
+        // One primary vertex from running state
+        primaries.push([running[0], running[1], running[2]]);
       }
-      if (!c0Assigned[vi2]) c0Assigned[vi2] = new Set();
-      vertices[vi2][ax] = g.value;
-      c0Assigned[vi2].add(ax);
+    }
+
+    // Process C0 assignments
+    for (const t of g.tags) {
+      if (t.cls !== 'C0') continue;
+      const slot = t.hi;
+      if (!c0Slots[slot]) c0Slots[slot] = [baseValues[0]||0, baseValues[1]||0, baseValues[2]||0];
+      c0Slots[slot][ax] = g.value;
+      // Z-variant from lo_nib
       if (zValues.length >= 2) {
-        if (t.lo === 0x07) vertices[vi2][2] = zValues[0];
-        else if (t.lo === 0x0F) vertices[vi2][2] = zValues[1];
+        if (t.lo === 0x07) c0Slots[slot][2] = zValues[0];
+        else if (t.lo === 0x0F) c0Slots[slot][2] = zValues[1];
       }
     }
   }
-  for (const [vi2, assigned] of Object.entries(c0Assigned)) {
-    const v = vertices[parseInt(vi2)];
-    if (v) { for (let ax = 0; ax < 2; ax++) { if (!assigned.has(ax)) v[ax] = baseValues[ax]||0; } }
+
+  // C0 slots: unassigned X/Y get base values (already initialized above)
+
+  // Merge: C0 slots claim their indices, primaries fill gaps then extend
+  const maxSlot = c0SlotSet.size > 0 ? Math.max(...c0SlotSet) : -1;
+  const gapSlots = [];
+  for (let s = 0; s <= maxSlot; s++) {
+    if (!c0SlotSet.has(s)) gapSlots.push(s);
+  }
+
+  const vertices = new Array(Math.max(maxSlot + 1, 0));
+  // Place C0 slots
+  for (const [slot, val] of Object.entries(c0Slots)) {
+    vertices[parseInt(slot)] = val;
+  }
+  // Fill gaps with primaries
+  let pi = 0;
+  for (const slot of gapSlots) {
+    if (pi < primaries.length) { vertices[slot] = primaries[pi++]; }
+  }
+  // Extend with remaining primaries
+  while (pi < primaries.length) {
+    vertices.push(primaries[pi++]);
+  }
+  // Fill any undefined slots
+  for (let i = 0; i < vertices.length; i++) {
+    if (!vertices[i]) vertices[i] = [0,0,0];
   }
 
   // Face decoding (simple all-C for now)
@@ -358,7 +407,8 @@ let scenes = {}, cameras = {}, renderers = {};
 let meshes = { left: null, right: null };
 let wires = { left: null, right: null };
 let points = { left: null, right: null };
-let showWire = false, showPts = false;
+let labels = { left: [], right: [] };
+let showWire = false, showPts = false, showLabels = true;
 let theta = Math.PI/4, phi = Math.PI/3, radius = 500;
 let target = new THREE.Vector3();
 let isDragging = false, prevX = 0, prevY = 0;
@@ -403,11 +453,28 @@ function animate() {
   }
 }
 
+function makeTextSprite(text, color) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64; canvas.height = 32;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = color || '#ffffff';
+  ctx.font = 'bold 22px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(text, 32, 24);
+  const tex = new THREE.CanvasTexture(canvas);
+  const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(20, 10, 1);
+  return sprite;
+}
+
 function loadMesh(panelId, result, color) {
   const s = scenes[panelId];
   if (meshes[panelId]) { s.remove(meshes[panelId]); meshes[panelId].geometry.dispose(); }
   if (wires[panelId]) { s.remove(wires[panelId]); wires[panelId].geometry.dispose(); }
   if (points[panelId]) { s.remove(points[panelId]); points[panelId].geometry.dispose(); }
+  for (const lb of labels[panelId]) s.remove(lb);
+  labels[panelId] = [];
 
   const geo = new THREE.BufferGeometry();
   const pos = [];
@@ -430,9 +497,9 @@ function loadMesh(panelId, result, color) {
   wires[panelId].visible = showWire;
   s.add(wires[panelId]);
 
-  const pm = new THREE.PointsMaterial({ color: 0xff6666, size: 4, sizeAttenuation: false });
+  const pm = new THREE.PointsMaterial({ color: 0xff6666, size: 6, sizeAttenuation: false });
   points[panelId] = new THREE.Points(geo, pm);
-  points[panelId].visible = showPts;
+  points[panelId].visible = true; // always show points
   s.add(points[panelId]);
 
   // Auto-fit camera
@@ -440,6 +507,19 @@ function loadMesh(panelId, result, color) {
   const box = geo.boundingBox;
   const center = new THREE.Vector3(); box.getCenter(center);
   const size = box.getSize(new THREE.Vector3()).length();
+
+  // Vertex labels (scaled relative to mesh size)
+  const labelColor = panelId === 'left' ? '#4ade80' : '#fb923c';
+  const labelScale = Math.max(size * 0.06, 1);
+  for (let i = 0; i < result.vertices.length; i++) {
+    const [x,y,z] = result.vertices[i];
+    const sprite = makeTextSprite(String(i), labelColor);
+    sprite.position.set(x, z + labelScale * 1.2, -y); // Z-up to Y-up, offset above point
+    sprite.scale.set(labelScale * 2, labelScale, 1);
+    sprite.visible = showLabels;
+    s.add(sprite);
+    labels[panelId].push(sprite);
+  }
   target.copy(center);
   radius = size * 2.5;
   updateCameras();
@@ -464,6 +544,7 @@ document.addEventListener('wheel', e => {
 // Controls
 window.toggleWire = () => { showWire=!showWire; for (const id of ['left','right']) if(wires[id]) wires[id].visible=showWire; };
 window.togglePts = () => { showPts=!showPts; for (const id of ['left','right']) if(points[id]) points[id].visible=showPts; };
+window.toggleLabels = () => { showLabels=!showLabels; for (const id of ['left','right']) for (const lb of labels[id]) lb.visible=showLabels; };
 window.resetView = () => { theta=Math.PI/4; phi=Math.PI/3; updateCameras(); };
 window.exportOBJ = () => {
   if (!currentOOT) return;
@@ -512,6 +593,11 @@ setupDrop('right', file => {
       document.getElementById('rwarn').style.display = 'block';
       document.getElementById('rwarn').textContent = result.warnings.join('; ');
     }
+    // Show vertex list
+    const vhtml = result.vertices.map((v,i) =>
+      `V${i}: (${v[0].toFixed(1)}, ${v[1].toFixed(1)}, ${v[2].toFixed(1)})`
+    ).join('<br>');
+    document.getElementById('rverts').innerHTML = vhtml;
     loadMesh('right', result, 0xf97316);
     console.log('OOT:', result);
   };

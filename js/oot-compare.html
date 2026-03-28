@@ -357,7 +357,7 @@ function parseOOT(arrayBuffer) {
         if (fpos+1+fnb > faceRegion.length) break;
         fops.push({ type:'DATA', value: faceRegion[fpos+1] });
         fpos += 1 + fnb;
-      } else if (isSep(fb)) { fpos++; }
+      } else if (isSep(fb)) { fops.push({ type:'SEP', value: fb }); fpos++; }
       else if (fpos+1 < faceRegion.length) {
         const fb2 = faceRegion[fpos+1];
         const fc = {0x20:'20',0x40:'40',0xC0:'C0',0xE0:'E0'}[fb&0xE0]||'??';
@@ -383,7 +383,8 @@ function parseOOT(arrayBuffer) {
     // Build topology op list with associated vertex refs
     // Each explicit vertex in the face section is consumed by the next C operation
     const topoRaw = fops.filter(o => o.type==='TAG' && (o.cls==='40'||o.cls==='C0'));
-    let ts = (iv2.length <= 2 && topoRaw.length > 0) ? 1 : 0;
+    // Always skip the first topology tag (initial metadata tag)
+    let ts = topoRaw.length > 0 ? 1 : 0;
     const topos = topoRaw.slice(ts); // skip initial metadata tag
 
     // Build vertex queue for C operations
@@ -421,10 +422,35 @@ function parseOOT(arrayBuffer) {
 
     const bnd = [...initTri];
     let gate = 1;
-    const hasFinalizer = topos.some(o => o.byte2 === 0x1B);
     let cOpsRemaining = vertices.length - initTri.length;
 
-    console.log('Initial tri:', initTri, 'vertexQueue:', vertexQueue, 'implicitVerts:', implicitVerts);
+    // Build separator-to-op map from raw fops
+    // Track which separator precedes each topology tag
+    const topoSeps = []; // separator value before each topo op (null if none)
+    {
+      let pastInit2 = false, rawTopo2 = 0, lastSep2 = null;
+      for (const op of fops) {
+        if (!pastInit2) {
+          if (op.type === 'TAG' && op.cls === 'E0') pastInit2 = true;
+          continue;
+        }
+        if (op.type === 'SEP') { lastSep2 = op.value || op.byte2; continue; }
+        // Handle separator stored as value in DATA-like entries
+        if (op.type === 'DATA') { continue; } // skip data, don't reset sep
+        if (op.type === 'TAG' && op.cls === 'E0') { continue; } // skip E0 structural
+        if (op.type === 'TAG' && op.cls === 'E1') { continue; }
+        if (op.type === 'TAG' && op.cls === '20') { continue; }
+        if (op.type === 'TAG' && (op.cls === '40' || op.cls === 'C0')) {
+          rawTopo2++;
+          if (rawTopo2 > ts) {
+            topoSeps.push(lastSep2);
+            lastSep2 = null; // consumed
+          }
+        }
+      }
+    }
+
+    console.log('Initial tri:', initTri, 'topoSeps:', topoSeps);
 
     for (let ti = 0; ti < topos.length; ti++) {
       if (bnd.length < 3) break;
@@ -434,64 +460,64 @@ function parseOOT(arrayBuffer) {
       const ri = (gate + 1) % n;
       const L = bnd[li], R = bnd[ri];
 
-      // Finalizer: gate advance -1 (group-based open meshes)
+      // Finalizer: gate advance -1
       if (top.byte2 === 0x1B) {
         gate = ((gate - 1) % n + n) % n;
         continue;
       }
 
-      // Determine operation based on context:
-      // 1. If boundary has exactly 3 vertices -> E (close last triangle)
-      // 2. If we've used all available new vertices -> must be L, R, or E
-      // 3. If hasFinalizer (group-based) -> use group pattern (C,C,fin)
-      // 4. Otherwise -> heuristic based on boundary size and remaining ops
+      // SEPARATOR-BASED OPERATION DETECTION
+      // Verified across triangle, plane, linear, fan, cube:
+      //   sep 0x27, 0x2F, 0xDF → C (always)
+      //   sep 0x5F, 0x87 → R (always)
+      //   sep 0x17 → C if followed by FLAG/vertex, R if after E0:07
+      //   sep 0x0F → C or E (context)
+      //   no sep → consecutive op (C in group, L after R, E at end)
 
-      // Determine operation from tag properties:
-      // - nib=7 with cls=40 -> C (create vertex)
-      // - cls=C0 -> C (create vertex, different encoding)
-      // - nib=3 -> R or L (closing operation)
-      // - nib=F -> C or R (context dependent)
-      // - nib=B -> C, R, or finalizer
-      // - boundary size 3 -> must be E
+      const sep = ti < topoSeps.length ? topoSeps[ti] : null;
       let op;
-      if (n === 3 && cOpsRemaining <= 0) {
-        op = 'E'; // boundary collapsed to 3 AND all vertices created -> close
-      } else if (n === 3) {
-        op = 'C'; // boundary has 3 but still growing -> create
-      } else if (top.lo === 0x3) {
-        // nib=3: closing operation (R or L)
-        // Use cls to distinguish: C0 class -> L, 40 class -> R (from cube match)
-        op = (top.cls === 'C0') ? 'L' : 'R';
-      } else if (top.lo === 0x7 && top.cls === '40') {
-        op = 'C'; // nib=7, cls=40 -> always C
-      } else if (top.cls === 'C0') {
-        op = 'C'; // C0 class -> C
-      } else if (top.lo === 0xF) {
-        // nib=F: C early in traversal, L/R after closing starts
-        if (cOpsRemaining <= 0) {
-          op = 'L'; // boundary is shrinking -> L
+
+      if (sep !== null) {
+        const sepUpper = sep >> 3;
+        if (sep === 0x2F || sep === 0x27 || sep >= 0xC0) {
+          op = 'C'; // high-confidence C separators
+        } else if (sep === 0x5F || sep === 0x87) {
+          op = 'R'; // high-confidence R separators
+        } else if (sep === 0x17) {
+          // Ambiguous: C if vertices remain, R otherwise
+          op = (cOpsRemaining > 0) ? 'C' : 'R';
+        } else if (sep === 0x0F) {
+          op = (cOpsRemaining > 0) ? 'C' : 'E';
+        } else if (sepUpper >= 8) {
+          op = 'R'; // larger separators tend to be R
         } else {
-          op = 'C';
+          op = (cOpsRemaining > 0) ? 'C' : 'R';
         }
-      } else if (top.lo === 0xB) {
-        // nib=B: C if new vertices remain, else R
-        if (top.hi === 1 && hasFinalizer) {
-          // 40:1B with finalizers = gate advance (open mesh)
-          gate = ((gate - 1) % n + n) % n;
-          continue;
-        }
-        op = (cOpsRemaining > 0) ? 'C' : 'R';
       } else {
-        op = (cOpsRemaining > 0) ? 'C' : 'R';
+        // No separator: consecutive op
+        // In groups: second op is C or R
+        // After R: often L
+        // At end (bnd=3, no verts): E
+        if (n === 3 && cOpsRemaining <= 0) {
+          op = 'E';
+        } else if (cOpsRemaining > 0) {
+          op = 'C';
+        } else if (n > 3) {
+          // No sep, no verts left: L (follows R typically)
+          op = 'L';
+        } else {
+          op = 'E';
+        }
       }
 
-      // Safety: if C but no vertices left, switch to L/R
+      // Safety
       if (op === 'C' && cOpsRemaining <= 0) {
-        op = (n > 4) ? 'L' : 'R';
+        op = (n > 4) ? 'L' : (n === 3 ? 'E' : 'R');
       }
 
       // Log
-      console.log(`Op${ti}: ${top.cls}:${top.byte2.toString(16).padStart(2,'0')} nib=${top.lo.toString(16)} -> ${op} bnd=[${bnd}] gate=${gate}`);
+      const sepStr = sep !== null ? `0x${sep.toString(16).padStart(2,'0')}` : 'none';
+      console.log(`Op${ti}: sep=${sepStr} ${top.cls}:${top.byte2.toString(16).padStart(2,'0')} -> ${op} bnd=[${bnd}] gate=${gate}`);
       if (op === 'C') {
         const v = nextCVertex();
         if (v >= 0) {

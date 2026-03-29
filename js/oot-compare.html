@@ -380,28 +380,9 @@ function parseOOT(arrayBuffer) {
     vertices.push(c0Slots[slot]);
   }
 
-  // Deduplicate vertices and build index remap
-  const uniqueVerts = [];
-  const indexRemap = [];
-  for (let i = 0; i < vertices.length; i++) {
-    const v = vertices[i];
-    let found = -1;
-    for (let j = 0; j < uniqueVerts.length; j++) {
-      const u = uniqueVerts[j];
-      if (Math.abs(u[0]-v[0])<0.1 && Math.abs(u[1]-v[1])<0.1 && Math.abs(u[2]-v[2])<0.1) {
-        found = j; break;
-      }
-    }
-    if (found >= 0) {
-      indexRemap.push(found);
-    } else {
-      indexRemap.push(uniqueVerts.length);
-      uniqueVerts.push(v);
-    }
-  }
-  // Replace vertices with deduplicated list
-  vertices.length = 0;
-  for (const v of uniqueVerts) vertices.push(v);
+  // No dedup - keep all vertices with identity remap.
+  // The EdgeBreaker face decoder relies on exact vertex indices including duplicates.
+  const indexRemap = vertices.map((v, i) => i);
 
   // Face decoding
   const faces = [];

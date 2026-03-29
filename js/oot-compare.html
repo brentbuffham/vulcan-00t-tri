@@ -440,18 +440,29 @@ function parseOOT(arrayBuffer) {
         if (op.type==='TAG' && op.cls==='E0') break;
       }
     }
-    // If we have >= 3 vertex refs, use them as the initial triangle
-    // If we have fewer (e.g., 2), use default [0,1,2] and save the refs for C ops
+    // Build initial triangle from vertex refs
+    // When metadata tag present (40:XX before vertex list) and only 2 refs:
+    //   vertex 0 is implied, triangle = [0, iv2[0]-1, iv2[1]-1], gate starts at 0
+    // When 3+ refs: triangle = [iv2[0]-1, iv2[1]-1, iv2[2]-1], gate starts at 1
     const initLeftover = [];
+    let initGate = 1;
     if (iv2.length >= 3) {
       initTri = [iv2[0]-1, iv2[1]-1, iv2[2]-1].map(i => i < indexRemap.length ? indexRemap[i] : i);
-      // Any extra iv2 entries beyond 3 go to the vertex queue (remapped)
       for (let i = 3; i < iv2.length; i++) {
         const ri = iv2[i] - 1;
         initLeftover.push(ri < indexRemap.length ? indexRemap[ri] : ri);
       }
+    } else if (iv2.length === 2 && skippedInitMeta) {
+      // Metadata tag present + 2 vertex refs: V0 implied
+      const a = iv2[0] - 1, b = iv2[1] - 1;
+      initTri = [
+        0 < indexRemap.length ? indexRemap[0] : 0,
+        a < indexRemap.length ? indexRemap[a] : a,
+        b < indexRemap.length ? indexRemap[b] : b
+      ];
+      initGate = 0;
     } else {
-      // Not enough for a triangle — save all as leftover for C vertex queue (remapped)
+      // Fallback: save refs as leftover for C vertex queue
       for (let i = 0; i < iv2.length; i++) {
         const ri = iv2[i] - 1;
         initLeftover.push(ri < indexRemap.length ? indexRemap[ri] : ri);
@@ -547,7 +558,7 @@ function parseOOT(arrayBuffer) {
     console.log('C vertex order:', cVertexOrder, 'implicit:', implicitVerts, 'preTopo:', preTopoVerts, 'postTopo(rev):', postTopoVerts);
 
     const bnd = [...initTri];
-    let gate = 1;
+    let gate = initGate;
     let cOpsRemaining = expectedVertCount - initTri.length;
 
     // Extract separators directly from raw face region bytes

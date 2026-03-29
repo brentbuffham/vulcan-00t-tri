@@ -6,7 +6,20 @@
       "Bash(pip install:*)",
       "Bash(git status:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(xxd -s 0x2060 -l 128 \"C:/Users/brent/desktop/GIT/vulcan-00t-tri/exampleFiles/tri-crack-Stepped-pyramid.00t\")",
+      "Bash(python3 -c \":*)",
+      "Bash(\"C:/Users/brent/desktop/GIT/vulcan-00t-tri/python/check_cube_faces.py\":*)",
+      "Bash(\"C:/Users/brent/desktop/GIT/vulcan-00t-tri/python/check_cube_init.py\":*)",
+      "Bash(xxd C:/Users/brent/desktop/GIT/vulcan-00t-tri/exampleFiles/tri-crack-triangle.00t)",
+      "Bash(xxd C:/Users/brent/desktop/GIT/vulcan-00t-tri/exampleFiles/tri-crack.00t)",
+      "Bash(xxd C:/Users/brent/desktop/GIT/vulcan-00t-tri/exampleFiles/tri-crack-solid.00t)",
+      "Bash(xxd C:/Users/brent/desktop/GIT/vulcan-00t-tri/exampleFiles/tri-crack-prism.00t)",
+      "Bash(python python/vertex_builder_analysis.py)",
+      "Bash(\"C:/Users/brent/desktop/GIT/vulcan-00t-tri/python/verify_fixes.py\":*)",
+      "Bash(xxd \"exampleFiles/tri-crack.00t\")",
+      "Bash(xxd \"exampleFiles/tri-crack.dxf\")"
     ]
   }
 }

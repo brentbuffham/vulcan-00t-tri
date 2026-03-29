@@ -168,7 +168,25 @@ function parseOOT(arrayBuffer) {
   // Find boundaries
   const attrSuffix = [0x00,0x05,0x40,0x04,0x00,0x0A,0x20,0x08,0x07];
   let attrPos = findBytes(data, attrSuffix, ds);
-  if (attrPos < 0) attrPos = data.length;
+  if (attrPos < 0) {
+    // Fallback: search for "SHADED" string as attribute section anchor
+    const shadedNeedle = [0x53,0x48,0x41,0x44,0x45,0x44]; // "SHADED"
+    let shadedPos = findBytes(data, shadedNeedle, ds);
+    if (shadedPos > 0) {
+      // Search backwards from SHADED for the start of attribute data
+      // Look for "separator_line" or other attribute strings
+      const sepLineNeedle = [0x73,0x65,0x70,0x61,0x72,0x61,0x74,0x6F,0x72]; // "separator"
+      let sepPos = findBytes(data, sepLineNeedle, ds);
+      if (sepPos > 0 && sepPos < shadedPos) {
+        // Attribute section starts a few bytes before separator_line
+        attrPos = sepPos - 10;
+      } else {
+        attrPos = shadedPos - 20;
+      }
+    } else {
+      attrPos = data.length;
+    }
+  }
 
   // Find face section: FIRST "20 00" after coord data (not the last!)
   let faceMarker = -1;
@@ -183,10 +201,20 @@ function parseOOT(arrayBuffer) {
   // Parse coord groups
   const prev = new Uint8Array(8);
   let pos = 0;
+  let hadFull = false; // track if we've seen a FULL coordinate value
   const groups = [];
   while (pos < coordRegion.length) {
     const b = coordRegion[pos];
     if (b <= 0x06) {
+      // Zero literal: byte 0x00 before any FULL value = coordinate 0.0
+      if (b === 0x00 && !hadFull) {
+        const result = new Uint8Array(8); // all zeros = 0.0
+        const val = 0.0;
+        // Don't update prev - wait for first FULL to establish the base
+        groups.push({ value: val, tags: [], seps: [] });
+        pos += 1;
+        continue;
+      }
       const nb = b + 1;
       if (pos + 1 + nb > coordRegion.length) break;
       const stored = coordRegion.slice(pos+1, pos+1+nb);
@@ -194,6 +222,7 @@ function parseOOT(arrayBuffer) {
       const isFull = stored[0]===0x40||stored[0]===0x41||stored[0]===0xC0||stored[0]===0xC1;
       if (isFull) {
         for (let i = 0; i < nb; i++) result[i] = stored[i];
+        hadFull = true;
       } else {
         result[0] = prev[0];
         for (let i = 0; i < nb; i++) result[i+1] = stored[i];
@@ -206,12 +235,17 @@ function parseOOT(arrayBuffer) {
     } else if (isSep(b)) {
       if (groups.length) groups[groups.length-1].seps.push(b);
       pos += 1;
-    } else if (pos + 1 < coordRegion.length) {
+    } else if (b >= 0x60 && pos + 1 < coordRegion.length) {
+      // Tag pair: only bytes >= 0x60 are valid tag first bytes in coord section
+      // (classes 60, 80, A0, C0, E0)
       const b2 = coordRegion[pos+1];
-      const cls = {0x20:'20',0x40:'40',0x60:'60',0x80:'80',0xA0:'A0',0xC0:'C0',0xE0:'E0'}[b&0xE0]||'??';
+      const cls = {0x60:'60',0x80:'80',0xA0:'A0',0xC0:'C0',0xE0:'E0'}[b&0xE0]||'??';
       if (groups.length) groups[groups.length-1].tags.push({ cls, byte2:b2, lo:b2&0xF, hi:(b2>>4)&0xF });
       pos += 2;
-    } else break;
+    } else {
+      // Bytes 0x08-0x5F that aren't count or separator: skip single byte
+      pos += 1;
+    }
   }
 
   // Axis state machine
@@ -235,16 +269,22 @@ function parseOOT(arrayBuffer) {
   // Real coords are in mining range (typically 10-100000). Face section "coords"
   // are tiny (< 10) or negative because the parser misreads tag bytes as count bytes.
   let coordGroupEnd = groups.length;
-  let firstRealValue = Math.abs(groups.length > 0 ? groups[0].value : 0);
+  // Track the max absolute value seen so far for range checking
+  let maxSeenValue = 0;
+  for (let i = 0; i < Math.min(3, groups.length); i++) {
+    maxSeenValue = Math.max(maxSeenValue, Math.abs(groups[i].value));
+  }
   for (let i = 3; i < groups.length; i++) {
     const v = groups[i].value;
     const av = Math.abs(v);
-    // Stop if value drops dramatically (> 100x smaller than first value)
-    if (firstRealValue > 10 && av < firstRealValue / 100 && av < 10) { coordGroupEnd = i; break; }
+    // Stop if value drops dramatically (> 100x smaller than max seen, and tiny)
+    if (maxSeenValue > 10 && av < maxSeenValue / 100 && av < 10) { coordGroupEnd = i; break; }
     // Stop at 20:03 tags (face section delimiters)
     if (groups[i].tags.some(t => t.cls === '20' && t.byte2 === 0x03)) { coordGroupEnd = i; break; }
     // Stop on negative values when previous were positive
     if (v < -0.5 && i > 3 && groups[i-1].value > 0) { coordGroupEnd = i; break; }
+    // Update max for future comparisons
+    if (av > 1) maxSeenValue = Math.max(maxSeenValue, av);
   }
 
   // Collect base values and Z variants
@@ -288,11 +328,27 @@ function parseOOT(arrayBuffer) {
       for (const t of g.tags) { if (t.cls !== 'C0') { ft = t; break; } }
 
       if (zValues.length >= 2 && ft && ft.lo === 0xF) {
-        // lo=F: create TWO primary vertices (one per Z variant)
+        // lo=F with 2+ Z variants: create TWO primary vertices (one per Z variant)
         const v1 = [running[0], running[1], zValues[0]];
         const v2 = [running[0], running[1], zValues[1]];
         primaries.push(v1);
         primaries.push(v2);
+      } else if (ft && ft.lo === 0xF && ft.hi === 0) {
+        // lo=F, hi=0 with < 2 Z variants: create TWO primaries —
+        // one from running state, one with a BASE value substituted
+        // The substituted axis is the PREVIOUS changed axis (not the current one)
+        primaries.push([running[0], running[1], running[2]]);
+        const baseV = [running[0], running[1], running[2]];
+        const prevAx = i > 0 ? axisMap[i-1] : ax;
+        if (prevAx !== ax && baseValues[prevAx] !== null) {
+          baseV[prevAx] = baseValues[prevAx];
+        } else {
+          baseV[ax] = baseValues[ax] !== null ? baseValues[ax] : running[ax];
+        }
+        // Only add if actually different from the running vertex
+        if (baseV[0] !== running[0] || baseV[1] !== running[1] || baseV[2] !== running[2]) {
+          primaries.push(baseV);
+        }
       } else {
         // One primary vertex from running state
         primaries.push([running[0], running[1], running[2]]);
@@ -324,8 +380,28 @@ function parseOOT(arrayBuffer) {
     vertices.push(c0Slots[slot]);
   }
 
-  // No dedup - keep all vertices, identity remap
-  const indexRemap = vertices.map((v, i) => i);
+  // Deduplicate vertices and build index remap
+  const uniqueVerts = [];
+  const indexRemap = [];
+  for (let i = 0; i < vertices.length; i++) {
+    const v = vertices[i];
+    let found = -1;
+    for (let j = 0; j < uniqueVerts.length; j++) {
+      const u = uniqueVerts[j];
+      if (Math.abs(u[0]-v[0])<0.1 && Math.abs(u[1]-v[1])<0.1 && Math.abs(u[2]-v[2])<0.1) {
+        found = j; break;
+      }
+    }
+    if (found >= 0) {
+      indexRemap.push(found);
+    } else {
+      indexRemap.push(uniqueVerts.length);
+      uniqueVerts.push(v);
+    }
+  }
+  // Replace vertices with deduplicated list
+  vertices.length = 0;
+  for (const v of uniqueVerts) vertices.push(v);
 
   // Face decoding
   const faces = [];
@@ -351,17 +427,35 @@ function parseOOT(arrayBuffer) {
 
     let initTri = [0,1,2];
     let fs2 = false;
+    let skippedInitMeta = false;
     const iv2 = [];
     for (const op of fops) {
       if (op.type==='TAG' && op.cls==='20' && op.byte2===0x00) { fs2=true; continue; }
       if (fs2) {
+        // Skip the first 40-class tag after 20:00 — it's metadata, not a topology op
+        if (!skippedInitMeta && op.type==='TAG' && op.cls==='40') { skippedInitMeta=true; continue; }
+        // Stop at subsequent 40/C0 tags (topology ops) or E0 (group end)
         if (op.type==='TAG' && (op.cls==='40'||op.cls==='C0')) break;
         if (op.type==='DATA' && op.value >= 1 && op.value <= 200) iv2.push(op.value);
         if (op.type==='TAG' && op.cls==='E0') break;
       }
     }
+    // If we have >= 3 vertex refs, use them as the initial triangle
+    // If we have fewer (e.g., 2), use default [0,1,2] and save the refs for C ops
+    const initLeftover = [];
     if (iv2.length >= 3) {
       initTri = [iv2[0]-1, iv2[1]-1, iv2[2]-1].map(i => i < indexRemap.length ? indexRemap[i] : i);
+      // Any extra iv2 entries beyond 3 go to the vertex queue (remapped)
+      for (let i = 3; i < iv2.length; i++) {
+        const ri = iv2[i] - 1;
+        initLeftover.push(ri < indexRemap.length ? indexRemap[ri] : ri);
+      }
+    } else {
+      // Not enough for a triangle — save all as leftover for C vertex queue (remapped)
+      for (let i = 0; i < iv2.length; i++) {
+        const ri = iv2[i] - 1;
+        initLeftover.push(ri < indexRemap.length ? indexRemap[ri] : ri);
+      }
     }
     faces.push(initTri);
 
@@ -389,18 +483,19 @@ function parseOOT(arrayBuffer) {
       if (op.type === 'DATA') {
         const dv = op.value;
         const rawIdx = dv - 1;
-        if (dv >= 1 && rawIdx < vertices.length && dv !== 0x40 && dv !== 0x82 && dv !== 0xC0) {
+        const mappedIdx = rawIdx < indexRemap.length ? indexRemap[rawIdx] : rawIdx;
+        if (dv >= 1 && mappedIdx < vertices.length && dv !== 0x40 && dv !== 0x82 && dv !== 0xC0) {
           // Skip if this vertex is a coordinate-duplicate of one already referenced
-          const vCoord = vertices[rawIdx];
+          const vCoord = vertices[mappedIdx];
           const isDup = [...initTri, ...preTopoVerts, ...postTopoVerts].some(oi => {
             const ov = vertices[oi];
             return ov && Math.abs(ov[0]-vCoord[0])<0.1 && Math.abs(ov[1]-vCoord[1])<0.1 && Math.abs(ov[2]-vCoord[2])<0.1;
           });
           if (!isDup) {
             if (!seenTopo) {
-              preTopoVerts.push(rawIdx);
+              preTopoVerts.push(mappedIdx);
             } else {
-              postTopoVerts.push(rawIdx);
+              postTopoVerts.push(mappedIdx);
             }
           }
         }
@@ -410,8 +505,7 @@ function parseOOT(arrayBuffer) {
     const vertexQueue = [...preTopoVerts, ...postTopoVerts];
 
     // Implicit vertices: not in initial tri AND not in vertexQueue
-    // Use header vertex count (unique verts) not array length (may have duplicates)
-    const uniqueVerts = nVertsHeader || vertices.length;
+    const expectedVertCount = nVertsHeader || vertices.length;
 
     // Implicit: not in initial, not in queue, and not a coordinate-duplicate
     const usedVerts = new Set([...initTri, ...vertexQueue]);
@@ -434,10 +528,11 @@ function parseOOT(arrayBuffer) {
     implicitVerts.reverse();
 
     // C vertex source: alternate implicit and explicit
-    // Pattern: implicit[0], then pre-topo explicits, then implicit[1], then post-topo explicits
+    // Pattern: initLeftover first, then implicit[0], pre-topo, implicit[1], post-topo
     const cVertexOrder = [];
-    let ii = 0, prei = 0, posti = 0;
-    // First implicit, then pre-topo, then remaining implicits interleaved with post-topo
+    // Init section leftovers (vertex refs that didn't form a full initTri) go first
+    for (const v of initLeftover) cVertexOrder.push(v);
+    let ii = 0;
     if (implicitVerts.length > 0) cVertexOrder.push(implicitVerts[ii++]);
     for (const v of preTopoVerts) cVertexOrder.push(v);
     if (ii < implicitVerts.length) cVertexOrder.push(implicitVerts[ii++]);
@@ -453,7 +548,7 @@ function parseOOT(arrayBuffer) {
 
     const bnd = [...initTri];
     let gate = 1;
-    let cOpsRemaining = uniqueVerts - initTri.length;
+    let cOpsRemaining = expectedVertCount - initTri.length;
 
     // Extract separators directly from raw face region bytes
     // Track: separator value AND whether a FLAG (0x40/0xC0) preceded it
@@ -688,24 +783,32 @@ function loadMesh(panelId, result, color) {
 
   const geo = new THREE.BufferGeometry();
   const pos = [];
-  for (const [x,y,z] of result.vertices) pos.push(x, z, -y); // Z-up to Y-up
+  for (const [x,y,z] of result.vertices) {
+    const px = isFinite(x) ? x : 0, py = isFinite(y) ? y : 0, pz = isFinite(z) ? z : 0;
+    pos.push(px, pz, -py); // Z-up to Y-up
+  }
   const idx = [];
   for (const [a,b,c] of result.faces) {
     if (a < result.vertices.length && b < result.vertices.length && c < result.vertices.length)
       idx.push(a,b,c);
   }
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  if (idx.length) geo.setIndex(idx);
-  geo.computeVertexNormals();
+  if (idx.length) {
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+  }
 
-  const mat = new THREE.MeshPhongMaterial({ color, side: THREE.DoubleSide, shininess: 30, transparent: true, opacity: 0.85 });
+  const mat = new THREE.MeshPhongMaterial({ color, side: THREE.DoubleSide, flatShading: true, shininess: 0, transparent: true, opacity: 0.6 });
   meshes[panelId] = new THREE.Mesh(geo, mat);
   s.add(meshes[panelId]);
+  
 
-  const wg = new THREE.WireframeGeometry(geo);
-  wires[panelId] = new THREE.LineSegments(wg, new THREE.LineBasicMaterial({ color: 0xaaaaaa, opacity: 0.4, transparent: true }));
-  wires[panelId].visible = showWire;
-  s.add(wires[panelId]);
+  if (idx.length) {
+    const wg = new THREE.WireframeGeometry(geo);
+    wires[panelId] = new THREE.LineSegments(wg, new THREE.LineBasicMaterial({ color: 0xffffff, opacity: 0.8, transparent: true }));
+    wires[panelId].visible = showWire;
+    s.add(wires[panelId]);
+  }
 
   const pm = new THREE.PointsMaterial({ color: 0xff6666, size: 6, sizeAttenuation: false });
   points[panelId] = new THREE.Points(geo, pm);
@@ -723,6 +826,7 @@ function loadMesh(panelId, result, color) {
   const labelScale = Math.max(size * 0.06, 1);
   for (let i = 0; i < result.vertices.length; i++) {
     const [x,y,z] = result.vertices[i];
+    if (!isFinite(x) || !isFinite(y) || !isFinite(z)) continue;
     const sprite = makeTextSprite(String(i), labelColor);
     sprite.position.set(x, z + labelScale * 1.2, -y); // Z-up to Y-up, offset above point
     sprite.scale.set(labelScale * 2, labelScale, 1);

@@ -66,9 +66,13 @@ The coordinate section stores delta-compressed IEEE 754 big-endian doubles. Thre
 
 | First byte | Type | Action |
 |-----------|------|--------|
+| `0x00` (before first FULL value) | **Zero literal** | Value is 0.0, consume 0 data bytes |
 | `0x00–0x06` | **Count byte** | Read `count + 1` data bytes → coordinate value |
 | `b & 0x07 == 0x07` and `b >= 7` | **Separator** | Skip 1 byte |
-| Everything else | **Tag pair** | Read 2 bytes (this byte + next) |
+| `0x60–0xFF` (except separators) | **Tag pair** | Read 2 bytes (this byte + next) |
+| `0x08–0x5F` (non-count, non-sep) | **Skip byte** | Skip 1 byte (metadata) |
+
+**Note:** `0x00` is only a zero literal before the first FULL coordinate value has been decoded. After the first FULL value, `0x00` is treated as a standard count byte (count=0, reads 1 data byte). Tag pairs in the coordinate section only have first bytes >= `0x60` (classes 60, 80, A0, C0, E0). Lower bytes that aren't count bytes or separators are single-byte metadata and should be skipped.
 
 ### Reconstructing a coordinate value
 

@@ -19,7 +19,11 @@
       "Bash(python python/vertex_builder_analysis.py)",
       "Bash(\"C:/Users/brent/desktop/GIT/vulcan-00t-tri/python/verify_fixes.py\":*)",
       "Bash(xxd \"exampleFiles/tri-crack.00t\")",
-      "Bash(xxd \"exampleFiles/tri-crack.dxf\")"
+      "Bash(xxd \"exampleFiles/tri-crack.dxf\")",
+      "Bash(wc -l /d/GIT_WORKSPACE/vulcan-00t-tri/python/*.py)",
+      "Bash(ls -la exampleFiles/*.00t)",
+      "Bash(ls -la exampleFiles/*.dxf)",
+      "Bash(xxd:*)"
     ]
   }
 }

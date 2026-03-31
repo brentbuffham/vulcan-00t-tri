@@ -45,8 +45,14 @@ class CoordElement:
     sep_byte: int = 0
 
 
-def parse_coord_elements(region: bytes) -> List[CoordElement]:
-    """Parse the coordinate region into typed elements."""
+def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordElement]:
+    """Parse the coordinate region into typed elements.
+
+    Args:
+        new_format: If True, use new-format encoding rules:
+            - 00-escape: stored bytes starting with 0x00 are FULL values (strip the 0x00)
+            - zero-trailing: DELTA values zero out trailing bytes instead of keeping previous
+    """
     elements = []
     prev = [0] * 8
     pos = 0
@@ -58,11 +64,21 @@ def parse_coord_elements(region: bytes) -> List[CoordElement]:
             if pos + 1 + nb > len(region):
                 break
             stored = list(region[pos + 1:pos + 1 + nb])
-            if stored[0] in (0x40, 0x41, 0xC0, 0xC1):
+            if new_format and stored[0] == 0x00 and len(stored) > 1:
+                # New-format "00-escape": strip leading 0x00, treat rest as FULL
+                actual = stored[1:]
+                r = actual + [0] * (8 - len(actual))
+                kind = 'FULL'
+            elif stored[0] in (0x40, 0x41, 0xC0, 0xC1):
                 r = stored + [0] * (8 - nb)
                 kind = 'FULL'
             else:
-                r = [prev[0]] + stored + list(prev[nb + 1:8])
+                if new_format:
+                    # New format: zero out trailing bytes
+                    r = [prev[0]] + stored + [0] * (8 - nb - 1)
+                else:
+                    # Old format: keep trailing bytes from previous value
+                    r = [prev[0]] + stored + list(prev[nb + 1:8])
                 kind = 'DELTA'
             r = (r + [0] * 8)[:8]
             val = read_be_double(bytes(r))
@@ -123,44 +139,31 @@ def group_coord_elements(elements: List[CoordElement]) -> List[CoordGroup]:
 
 
 def assign_axes(groups: List[CoordGroup]) -> None:
-    """Apply axis state machine to determine X/Y/Z for each coord group.
+    """Assign X/Y/Z axis to each coordinate using closest-delta heuristic.
 
-    Rules:
-    1. First 3 coords: always X(0), Y(1), Z(2)
-    2. Direction starts at +1 (forward)
-    3. After that, check first non-C0 tag:
-       E0 class           -> STAY on same axis
-       lo=F AND hi=0      -> SET direction=-1, move backward
-       lo=F AND hi>0      -> STAY on same axis
-       anything else      -> MOVE in current direction
+    Each coordinate value is assigned to the axis whose current running value
+    is closest. This works for files where axis value ranges don't overlap
+    (the common case for mining data: X/Y in thousands, Z in hundreds).
+
+    Falls back to tag-based state machine rules when values are ambiguous.
     """
-    axis = 0
-    direction = 1
-
-    for i, g in enumerate(groups):
-        # Get first non-C0 tag
-        ft = None
-        for t in g.tags:
-            if t.cls != 'C0':
-                ft = t
-                break
-
-        if i < 3:
+    if len(groups) < 3:
+        for i, g in enumerate(groups):
             g.axis = i
-        else:
-            if ft is None:
-                g.axis = (axis + direction) % 3
-            elif ft.cls == 'E0':
-                g.axis = axis  # stay
-            elif ft.lo_nib == 0xF and ft.hi_nib == 0:
-                direction = -1
-                g.axis = (axis + direction) % 3
-            elif ft.lo_nib == 0xF and ft.hi_nib > 0:
-                g.axis = axis  # stay
-            else:
-                g.axis = (axis + direction) % 3
+        return
 
-        axis = g.axis
+    # First 3 coords are always X(0), Y(1), Z(2)
+    for i in range(3):
+        groups[i].axis = i
+
+    current = [groups[0].value, groups[1].value, groups[2].value]
+
+    for g in groups[3:]:
+        # Closest-delta: assign to axis with nearest current value
+        deltas = [abs(g.value - current[ax]) for ax in range(3)]
+        best_ax = deltas.index(min(deltas))
+        g.axis = best_ax
+        current[best_ax] = g.value
 
 
 def extract_c0_assignments(groups: List[CoordGroup]) -> None:
@@ -527,34 +530,63 @@ def parse_oot_v2(filepath: str) -> OotResult:
         return result
 
     # Find data section
-    vi = raw.find(b'Variant\x00')
+    # Handle both "Variant\0" (old format) and "Variant/C:..." (new format)
+    vi = raw.find(b'Variant')
     if vi < 0:
         result.warnings.append("No Variant marker")
         return result
 
-    ds = vi + 8
-    result.n_verts_header = raw[ds + 12]
-    result.n_faces_header = raw[ds + 19]
+    # The length byte immediately before "Variant" tells how long the string is
+    variant_len = raw[vi - 1]
+    ds = vi + variant_len
 
-    # Find section boundaries
-    attr_suffix = bytes([0x00, 0x05, 0x40, 0x04, 0x00, 0x0A, 0x20, 0x08, 0x07])
-    attr_pos = raw.find(attr_suffix, ds)
-    if attr_pos < 0:
-        attr_pos = len(raw)
+    # Find the anchor pattern 43 E0 0E in the pre-coordinate header
+    anchor = raw.find(b'\x43\xE0\x0E', ds, ds + 20)
+    if anchor < 0:
+        result.warnings.append("No header anchor pattern")
+        return result
 
+    # Vertex count (coordinate count) at anchor+7, face count at anchor+14
+    result.n_verts_header = raw[anchor + 7]
+    result.n_faces_header = raw[anchor + 14]
+
+    # Find coord_start: search for 0x14 constant after E0 0A/0B
+    coord_start = -1
+    for off in range(15, 25):
+        pos = anchor + off
+        if pos + 2 < len(raw) and raw[pos] == 0xE0 and raw[pos + 2] == 0x14:
+            coord_start = pos + 3
+            break
+    if coord_start < 0:
+        # Fallback: search for first count byte (0-6) after anchor+14
+        for off in range(15, 25):
+            pos = anchor + off
+            if pos < len(raw) and raw[pos] <= 0x06:
+                coord_start = pos
+                break
+    if coord_start < 0:
+        coord_start = anchor + 18  # last resort fallback
+
+    # Find section boundaries using SHADED as universal attribute marker
+    shaded_pos = raw.find(b'SHADED', ds)
+    if shaded_pos < 0:
+        shaded_pos = len(raw)
+
+    # Face section starts at the last "20 00" before SHADED
     face_marker = -1
-    for i in range(attr_pos - 2, ds + 30, -1):
+    for i in range(shaded_pos - 2, coord_start, -1):
         if raw[i] == 0x20 and raw[i + 1] == 0x00:
             face_marker = i
             break
 
-    coord_start = ds + 23
-    coord_end = face_marker if face_marker > 0 else attr_pos
-    face_end = attr_pos
+    coord_end = face_marker if face_marker > 0 else shaded_pos
+    face_end = shaded_pos
 
     # ── Parse coordinate section ──
+    # Detect format: new format uses Variant/C:... (variant_len > 8)
+    is_new_format = variant_len > 8
     coord_region = raw[coord_start:coord_end]
-    elements = parse_coord_elements(coord_region)
+    elements = parse_coord_elements(coord_region, new_format=is_new_format)
     groups = group_coord_elements(elements)
     assign_axes(groups)
     extract_c0_assignments(groups)
@@ -635,11 +667,23 @@ if __name__ == '__main__':
         ("CUBE", "exampleFiles/tri-crack-solid"),
         ("FAN", "exampleFiles/tri-crack-fan"),
         ("PRISM", "exampleFiles/tri-crack-prism"),
+        ("4-SIDES PRISM", "exampleFiles/tri-crack-4sides-prism"),
+        ("STEPPED PYRAMID", "exampleFiles/tri-crack-Stepped-pyramid"),
+        ("L-SHAPE", "exampleFiles/tri-crack-L-SHAPE"),
+        ("HEXHOLE", "exampleFiles/tri-crack-Hexhole"),
+        ("NONROUND", "exampleFiles/tri-crack-NonRound"),
+        ("SPHERE", "exampleFiles/tri-crack-SPHERE"),
     ]
+
+    # Build case-insensitive DXF lookup
+    dxf_lookup = {}
+    for p in Path("exampleFiles").glob("*.dxf"):
+        dxf_lookup[p.stem.lower()] = str(p)
 
     for name, stem in files:
         oot_path = stem + ".00t"
-        dxf_path = stem + ".dxf"
+        stem_base = Path(stem).stem.lower()
+        dxf_path = dxf_lookup.get(stem_base, stem + ".dxf")
         if not Path(oot_path).exists():
             continue
 

@@ -174,109 +174,82 @@ def extract_c0_assignments(groups: List[CoordGroup]) -> None:
                 g.c0_assignments.append((t.hi_nib, t.lo_nib))
 
 
-def build_vertex_table(groups: List[CoordGroup]) -> List[List[Optional[float]]]:
+def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[Optional[float]]]:
     """Build vertex table from coord groups + axis assignments + C0 tags.
 
-    Strategy:
-    - V0 is built from the first 3 coord groups (X, Y, Z)
-    - Subsequent coords update the "running vertex" state
-    - C0 tags assign the current coord value to additional vertex slots
-    - Each vertex inherits unset axes from the running state
+    Model:
+    1. V0 = first 3 coord groups (X, Y, Z) — the "base" values.
+    2. Running state tracks current [X, Y, Z], updated by each coord.
+    3. Each C0 assignment creates a NEW vertex using:
+       - The current coord's axis value
+       - Previously C0-assigned values for that slot (accumulated)
+       - Base (V0) values for unassigned axes
+       - Z overridden by lo_nib: 0x7=base_Z, 0xF=alt_Z
+    4. Non-C0 coords (after V0) update running state. The last one before
+       the next C0 group (or end) creates a snapshot vertex.
     """
-    # Find max vertex index from C0 tags
-    max_v = 0
+    if len(groups) < 3:
+        return [[g.value if g.axis == ax else 0.0 for ax in range(3)]
+                for g in groups]
+
+    # Base values from V0
+    base = [groups[0].value, groups[1].value, groups[2].value]
+
+    # Collect Z values for base/alt
+    z_values = []
     for g in groups:
-        for vi, lo in g.c0_assignments:
-            if vi > max_v:
-                max_v = vi
+        if g.axis == 2 and abs(g.value) > 1:
+            if g.value not in z_values:
+                z_values.append(g.value)
+    base_z = z_values[0] if z_values else base[2]
+    alt_z = z_values[1] if len(z_values) > 1 else base_z
 
-    # Also need to know total vertex count
-    # For now, allocate based on max C0 reference + some padding
-    n_verts = max(max_v + 1, 3)
+    # Estimate expected vertex count from face count
+    max_verts = max(n_faces + 2, 3) if n_faces > 0 else 100
 
-    # Initialize vertex table: [X, Y, Z] per vertex
-    verts = [[None, None, None] for _ in range(n_verts + 10)]
+    # Per-slot accumulator: tracks which axes have been assigned by C0
+    slot_state = {}  # slot_idx -> {axis: value}
 
-    # Running state: current X, Y, Z values
-    current = [None, None, None]
+    # Build vertex list
+    vertices = [list(base)]  # V0
+    running = list(base)
 
-    # Track which groups are "real" coords (not garbage from face section)
-    # Garbage coords have cls='20' tags or produce values far outside normal range
-    # For now, stop when we hit suspicious values
-
-    coord_idx = 0
-    vertex_count = 0
-
-    for g in groups:
+    for g in groups[3:]:
         ax = g.axis
         if ax < 0 or ax > 2:
             continue
 
-        # Update running state
-        current[ax] = g.value
+        if len(vertices) >= max_verts:
+            break
 
-        # If this is one of the first 3 coords, it builds V0
-        if coord_idx < 3:
-            verts[0][ax] = g.value
-            if coord_idx == 2:
-                vertex_count = 1
+        running[ax] = g.value
+
+        if g.c0_assignments:
+            # Each C0 assignment creates a vertex
+            for slot_vi, lo in g.c0_assignments:
+                if len(vertices) >= max_verts:
+                    break
+
+                if slot_vi not in slot_state:
+                    slot_state[slot_vi] = {}
+
+                slot_state[slot_vi][ax] = g.value
+
+                vx = slot_state[slot_vi].get(0, base[0])
+                vy = slot_state[slot_vi].get(1, base[1])
+                vz = slot_state[slot_vi].get(2, base[2])
+
+                if lo == 0x7:
+                    vz = base_z
+                elif lo == 0xF:
+                    vz = alt_z
+
+                vertices.append([vx, vy, vz])
         else:
-            # This coord creates or updates vertex slots
-            # The "primary" vertex gets all 3 current axes
-            # C0 tags assign this specific axis value to other vertex slots
+            # Non-C0: create implicit vertex from running state
+            vertices.append(list(running))
 
-            # First, create a new "primary" vertex from running state
-            # (only if this is an X coord, completing a new XYZ cycle)
-            # Actually, each coord value goes to the running state,
-            # and vertices are created by the C0 assignments + face section
-
-            pass
-
-        # Process C0 assignments
-        for vi, lo in g.c0_assignments:
-            # Ensure vertex slot exists
-            while vi >= len(verts):
-                verts.append([None, None, None])
-
-            # Assign current coord value to vertex vi's axis
-            verts[vi][ax] = g.value
-
-            # The lo_nib encodes Z-variant:
-            # lo=7 -> use the "base Z" (first Z value seen)
-            # lo=F -> use the "alternate Z" (second Z value seen)
-            # For now, we track this but apply it after all coords are processed
-
-        coord_idx += 1
-
-    # V0 is fully defined from first 3 coords
-    # Other vertices need their missing axes filled from running state or defaults
-
-    # Collect all Z values seen
-    z_values = []
-    for g in groups:
-        if g.axis == 2 and g.value > 1:  # skip garbage
-            if g.value not in z_values:
-                z_values.append(g.value)
-
-    # Apply lo_nib Z-variant
-    for g in groups:
-        for vi, lo in g.c0_assignments:
-            if vi < len(verts):
-                if lo == 0x7 and len(z_values) >= 1:
-                    verts[vi][2] = z_values[0]  # base Z
-                elif lo == 0xF and len(z_values) >= 2:
-                    verts[vi][2] = z_values[1]  # alternate Z
-
-    # Fill missing axes with nearest reasonable value
-    # For V0, all axes should be set
-    # For other vertices, fill from V0 or running state
-    for vi in range(len(verts)):
-        for ax in range(3):
-            if verts[vi][ax] is None:
-                verts[vi][ax] = verts[0][ax] if verts[0][ax] is not None else 0.0
-
-    # Trim to actual vertex count (based on max C0 ref)
-    return verts[:max(n_verts, vertex_count)]
+    return vertices
 
 
 # ══════════════════════════════════════════════════════════════
@@ -596,7 +569,7 @@ def parse_oot_v2(filepath: str) -> OotResult:
         result.coord_values.append(g.value)
 
     # Build vertex table
-    vertices = build_vertex_table(groups)
+    vertices = build_vertex_table(groups, n_faces=result.n_faces_header)
     result.vertices = [(v[0], v[1], v[2]) for v in vertices if v[0] is not None]
 
     # ── Parse face section ──

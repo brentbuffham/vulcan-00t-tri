@@ -59,17 +59,28 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
 
     while pos < len(region):
         b = region[pos]
-        if b <= 0x06:
+        if b <= 0x06 or (new_format and b == 0x07):
             nb = b + 1
+            raw_nb = nb  # preserve original byte count for position advancement
             if pos + 1 + nb > len(region):
                 break
             stored = list(region[pos + 1:pos + 1 + nb])
-            if new_format and stored[0] == 0x00 and len(stored) > 1:
-                # New-format "00-escape": strip leading 0x00, treat rest as FULL
-                actual = stored[1:]
-                r = actual + [0] * (8 - len(actual))
-                kind = 'FULL'
-            elif stored[0] in (0x40, 0x41, 0xC0, 0xC1):
+            if new_format and len(stored) > 1:
+                # New-format escape stripping: bytes >= 0xFC or 0x00 are escape prefixes.
+                # Strip them until we reach a FULL indicator (0x40, 0x41, 0xC0, 0xC1).
+                stripped = list(stored)
+                while len(stripped) > 1 and (stripped[0] >= 0xFC or stripped[0] == 0x00):
+                    candidate = stripped[1:]
+                    if candidate[0] in (0x40, 0x41, 0xC0, 0xC1):
+                        stored = candidate
+                        nb = len(stored)
+                        break
+                    elif candidate[0] >= 0xFC or candidate[0] == 0x00:
+                        stripped = candidate
+                        continue
+                    else:
+                        break
+            if stored[0] in (0x40, 0x41, 0xC0, 0xC1):
                 r = stored + [0] * (8 - nb)
                 kind = 'FULL'
             else:
@@ -80,13 +91,29 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
                     # Old format: keep trailing bytes from previous value
                     r = [prev[0]] + stored + list(prev[nb + 1:8])
                 kind = 'DELTA'
+                if new_format and kind == 'DELTA':
+                    # Check if standard DELTA produced an unreasonable value.
+                    # When the result is clearly garbage (>50000), stored bytes may
+                    # represent a signed integer delta on the IEEE 754 representation.
+                    test_r = (r + [0] * 8)[:8]
+                    test_val = read_be_double(bytes(test_r))
+                    if abs(test_val) > 10000:
+                        # Signed integer delta: treat stored as signed big-endian
+                        # offset applied to prev's IEEE 754 integer representation
+                        prev_int = struct.unpack('>Q', bytes(prev))[0]
+                        delta_int = int.from_bytes(bytes(stored[:raw_nb]), 'big')
+                        if stored[0] >= 0x80:
+                            delta_int -= (1 << (raw_nb * 8))
+                        result_int = (prev_int + delta_int) & 0xFFFFFFFFFFFFFFFF
+                        r = list(struct.pack('>Q', result_int))
+                        kind = 'IDELTA'
             r = (r + [0] * 8)[:8]
             val = read_be_double(bytes(r))
             prev = r
             elements.append(CoordElement(
                 etype='COORD', offset=pos, value=val, kind=kind, n_bytes=nb
             ))
-            pos += 1 + nb
+            pos += 1 + raw_nb  # advance by original byte count, not stripped
         elif is_separator(b):
             elements.append(CoordElement(etype='SEP', offset=pos, sep_byte=b))
             pos += 1
@@ -167,30 +194,61 @@ def assign_axes(groups: List[CoordGroup]) -> None:
 
 
 def extract_c0_assignments(groups: List[CoordGroup]) -> None:
-    """Extract C0 vertex assignments from each group's tags."""
+    """Extract vertex slot assignments from tags.
+
+    C0 is the primary vertex assigner class, but 80, 60, A0 tags with
+    hi_nib > 0 also function as vertex assigners (same slot/Z_select model).
+    E0 tags (always hi_nib=0) are state markers, not vertex assigners.
+    """
+    # Tag classes that function as vertex slot assigners.
+    # All use hi_nib=slot_index, lo_nib=Z_select (7=base_Z, F=alt_Z).
+    # E0 tags (always hi_nib=0) are state markers, not assigners.
+    assigner_classes = {'C0', '80', '60', 'A0', '20'}
     for g in groups:
         for t in g.tags:
-            if t.cls == 'C0':
+            if t.cls in assigner_classes and t.hi_nib > 0:
                 g.c0_assignments.append((t.hi_nib, t.lo_nib))
 
 
+def trim_coord_groups(groups: List[CoordGroup]) -> List[CoordGroup]:
+    """Trim groups to exclude face section data that leaked into the coord region.
+
+    The coord section transitions to the face section when coordinate values
+    become negative (while base coords are positive) — a reliable marker since
+    mining coordinates are always positive.
+    """
+    if len(groups) < 3:
+        return groups
+
+    base_positive = all(groups[i].value >= 0 for i in range(min(3, len(groups))))
+    if not base_positive:
+        return groups  # can't use sign-based trimming
+
+    for i in range(3, len(groups)):
+        if groups[i].value < 0:
+            return groups[:i]
+
+    return groups
+
+
 def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[Optional[float]]]:
-    """Build vertex table from coord groups + axis assignments + C0 tags.
+    """Build vertex table from coord groups + axis assignments + tag assignments.
 
     Model:
     1. V0 = first 3 coord groups (X, Y, Z) — the "base" values.
     2. Running state tracks current [X, Y, Z], updated by each coord.
-    3. Each C0 assignment creates a NEW vertex using:
-       - The current coord's axis value
-       - Previously C0-assigned values for that slot (accumulated)
-       - Base (V0) values for unassigned axes
-       - Z overridden by lo_nib: 0x7=base_Z, 0xF=alt_Z
-    4. Non-C0 coords (after V0) update running state. The last one before
-       the next C0 group (or end) creates a snapshot vertex.
+    3. Each vertex assignment tag (C0, 80, 60, A0 with hi_nib>0) creates
+       a vertex using accumulated slot state + base values for unassigned axes.
+       lo_nib: 0x7=base_Z, 0xF=alt_Z.
+    4. Non-assigned coords update running state. They create an implicit
+       vertex only if they're the ONLY coord before the next assigned group.
     """
     if len(groups) < 3:
         return [[g.value if g.axis == ax else 0.0 for ax in range(3)]
                 for g in groups]
+
+    # Trim face section data
+    groups = trim_coord_groups(groups)
 
     # Base values from V0
     base = [groups[0].value, groups[1].value, groups[2].value]
@@ -207,7 +265,7 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
     # Estimate expected vertex count from face count
     max_verts = max(n_faces + 2, 3) if n_faces > 0 else 100
 
-    # Per-slot accumulator: tracks which axes have been assigned by C0
+    # Per-slot accumulator: tracks which axes have been assigned
     slot_state = {}  # slot_idx -> {axis: value}
 
     # Build vertex list
@@ -225,7 +283,7 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
         running[ax] = g.value
 
         if g.c0_assignments:
-            # Each C0 assignment creates a vertex
+            # Each assignment creates a vertex via slot accumulation
             for slot_vi, lo in g.c0_assignments:
                 if len(vertices) >= max_verts:
                     break
@@ -246,7 +304,7 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
 
                 vertices.append([vx, vy, vz])
         else:
-            # Non-C0: create implicit vertex from running state
+            # Non-assigned: create implicit vertex from running state
             vertices.append(list(running))
 
     return vertices

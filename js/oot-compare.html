@@ -135,566 +135,549 @@ function findBytes(data, needle, start = 0) {
 function parseOOT(arrayBuffer) {
   const data = new Uint8Array(arrayBuffer);
   const warnings = [];
-  if (data.length < 64) return { vertices:[], faces:[], warnings:['File too small'] };
+  if (data.length < 64) return { vertices:[], faces:[], warnings:['File too small'], nVertsHeader:0, nFacesHeader:0 };
   const magic = (data[0]<<24)|(data[1]<<16)|(data[2]<<8)|data[3];
   if ((magic >>> 0) !== 0xEAFBA78A) warnings.push('Bad magic');
 
-  // Find Variant (with or without null terminator)
-  const vNeedle = [0x56,0x61,0x72,0x69,0x61,0x6E,0x74]; // "Variant" (no null)
-  let vi = findBytes(data, vNeedle);
-  if (vi < 0) return { vertices:[], faces:[], warnings:['No Variant marker'] };
+  // ── 1. Find data section ──
+  const vNeedle = [0x56,0x61,0x72,0x69,0x61,0x6E,0x74]; // "Variant"
+  const vi = findBytes(data, vNeedle);
+  console.log('[parseOOT v2] data.length=', data.length, 'Variant at', vi, 'magic=0x'+(magic>>>0).toString(16));
+  if (vi < 0) return { vertices:[], faces:[], warnings:['No Variant marker'], nVertsHeader:0, nFacesHeader:0 };
 
-  // Find the null byte or skip the path after Variant
-  let ds = vi + 7;
-  // Skip until we find the pre-coord header pattern: look for 0x14 (constant at end of header)
-  // or scan for "43 E0 0E 2F" pattern
-  const headerPattern = [0x43, 0xE0, 0x0E, 0x2F];
-  let hdrIdx = findBytes(data, headerPattern, ds);
-  if (hdrIdx < 0) {
-    // Fallback: try null-terminated Variant
-    if (data[vi+7] === 0x00) ds = vi + 8;
-    else return { vertices:[], faces:[], warnings:['Cannot find data header'] };
-  } else {
-    // Pre-coord header starts 3 bytes before "43 E0 0E 2F"
-    // Pattern: XX XX XX 00 00 43 E0 0E 2F ...
-    // Actually the 23-byte header has 43 at offset +5
-    ds = hdrIdx - 5;
+  const variantLen = data[vi - 1];
+  const ds = vi + variantLen;
+  const isNewFormat = variantLen > 8;
+  console.log('[parseOOT v2] variantLen=', variantLen, 'ds=', ds, 'isNewFormat=', isNewFormat);
+
+  // ── 2. Find anchor and counts ──
+  const anchorNeedle = [0x43, 0xE0, 0x0E];
+  let anchor = -1;
+  for (let i = ds; i < ds + 20 && i + 2 < data.length; i++) {
+    if (data[i] === 0x43 && data[i+1] === 0xE0 && data[i+2] === 0x0E) { anchor = i; break; }
   }
+  if (anchor < 0) return { vertices:[], faces:[], warnings:['No header anchor pattern'], nVertsHeader:0, nFacesHeader:0 };
 
-  // Read header
-  const nVertsHeader = data[ds + 12] || 0;
-  const nFacesHeader = data[ds + 19] || 0;
+  const nVertsHeader = data[anchor + 7];
+  const nFacesHeader = data[anchor + 14];
 
-  // Find boundaries
-  const attrSuffix = [0x00,0x05,0x40,0x04,0x00,0x0A,0x20,0x08,0x07];
-  let attrPos = findBytes(data, attrSuffix, ds);
-  if (attrPos < 0) {
-    // Fallback: search for "SHADED" string as attribute section anchor
-    const shadedNeedle = [0x53,0x48,0x41,0x44,0x45,0x44]; // "SHADED"
-    let shadedPos = findBytes(data, shadedNeedle, ds);
-    if (shadedPos > 0) {
-      // Search backwards from SHADED for the start of attribute data
-      // Look for "separator_line" or other attribute strings
-      const sepLineNeedle = [0x73,0x65,0x70,0x61,0x72,0x61,0x74,0x6F,0x72]; // "separator"
-      let sepPos = findBytes(data, sepLineNeedle, ds);
-      if (sepPos > 0 && sepPos < shadedPos) {
-        // Attribute section starts a few bytes before separator_line
-        attrPos = sepPos - 10;
-      } else {
-        attrPos = shadedPos - 20;
+  // ── 3. Find coord_start ──
+  let coordStart = -1;
+  for (let off = 15; off < 25; off++) {
+    const pos = anchor + off;
+    if (pos + 2 < data.length && data[pos] === 0xE0 && data[pos + 2] === 0x14) {
+      coordStart = pos + 3;
+      break;
+    }
+  }
+  if (coordStart < 0) {
+    for (let off = 15; off < 25; off++) {
+      const pos = anchor + off;
+      if (pos < data.length && data[pos] <= 0x06) {
+        coordStart = pos;
+        break;
       }
-    } else {
-      attrPos = data.length;
+    }
+  }
+  if (coordStart < 0) coordStart = anchor + 18;
+
+  // ── 4. Find boundaries ──
+  const shadedNeedle = [0x53,0x48,0x41,0x44,0x45,0x44]; // "SHADED"
+  let shadedPos = findBytes(data, shadedNeedle, ds);
+  if (shadedPos < 0) shadedPos = data.length;
+
+  // Search backwards from SHADED for [0x20, 0x00]
+  let faceMarker = -1;
+  for (let i = shadedPos - 2; i > coordStart; i--) {
+    if (data[i] === 0x20 && data[i + 1] === 0x00) {
+      faceMarker = i;
+      break;
     }
   }
 
-  // Find face section: FIRST "20 00" after coord data (not the last!)
-  let faceMarker = -1;
-  for (let i = ds + 30; i < attrPos - 1; i++) {
-    if (data[i] === 0x20 && data[i+1] === 0x00) { faceMarker = i; break; }
-  }
+  const coordEnd = faceMarker > 0 ? faceMarker : shadedPos;
+  const faceEnd = shadedPos;
 
-  const coordStart = ds + 23;
-  const coordEnd = faceMarker > 0 ? faceMarker : attrPos;
+  // ── 5. Parse coord elements ──
   const coordRegion = data.slice(coordStart, coordEnd);
-
-  // Parse coord groups
   const prev = new Uint8Array(8);
   let pos = 0;
-  let hadFull = false; // track if we've seen a FULL coordinate value
-  const groups = [];
+  const elements = [];
+
+  // Helper: read uint64 big-endian from 8-byte array
+  function readUint64BE(bytes) {
+    // Returns as two 32-bit parts for full 64-bit precision
+    let hi = 0, lo = 0;
+    for (let i = 0; i < 4; i++) hi = (hi * 256) + (bytes[i] || 0);
+    for (let i = 4; i < 8; i++) lo = (lo * 256) + (bytes[i] || 0);
+    return [hi, lo]; // [high32, low32]
+  }
+
+  // Helper: add signed delta to uint64
+  function addDeltaToUint64(prevHiLo, deltaBytes, nBytes) {
+    // Read delta as unsigned big-endian
+    let dVal = 0;
+    for (let i = 0; i < nBytes; i++) dVal = dVal * 256 + deltaBytes[i];
+    // Check sign bit
+    let negative = false;
+    if (deltaBytes[0] >= 0x80) {
+      // Signed: subtract 1 << (nBytes*8)
+      negative = true;
+    }
+
+    // Use BigInt for full 64-bit precision (available in all modern browsers)
+    let prevBig = BigInt(prevHiLo[0]) * BigInt(0x100000000) + BigInt(prevHiLo[1]);
+    let deltaBig = BigInt(dVal);
+    if (negative) {
+      deltaBig -= (BigInt(1) << BigInt(nBytes * 8));
+    }
+    let resultBig = (prevBig + deltaBig) & BigInt("0xFFFFFFFFFFFFFFFF");
+
+    // Convert back to 8 bytes
+    const result = new Uint8Array(8);
+    for (let i = 7; i >= 0; i--) {
+      result[i] = Number(resultBig & BigInt(0xFF));
+      resultBig >>= BigInt(8);
+    }
+    return result;
+  }
+
   while (pos < coordRegion.length) {
     const b = coordRegion[pos];
-    if (b <= 0x06) {
-      // Zero literal: byte 0x00 before any FULL value = coordinate 0.0
-      if (b === 0x00 && !hadFull) {
-        const result = new Uint8Array(8); // all zeros = 0.0
-        const val = 0.0;
-        // Don't update prev - wait for first FULL to establish the base
-        groups.push({ value: val, tags: [], seps: [] });
-        pos += 1;
-        continue;
-      }
-      const nb = b + 1;
+    if (b <= 0x06 || (isNewFormat && b === 0x07)) {
+      let nb = b + 1;
+      const rawNb = nb;
       if (pos + 1 + nb > coordRegion.length) break;
-      const stored = coordRegion.slice(pos+1, pos+1+nb);
-      const result = new Uint8Array(8);
-      const isFull = stored[0]===0x40||stored[0]===0x41||stored[0]===0xC0||stored[0]===0xC1;
-      if (isFull) {
-        for (let i = 0; i < nb; i++) result[i] = stored[i];
-        hadFull = true;
-      } else {
-        result[0] = prev[0];
-        for (let i = 0; i < nb; i++) result[i+1] = stored[i];
-        for (let i = nb+1; i < 8; i++) result[i] = prev[i];
+
+      let stored = Array.from(coordRegion.slice(pos + 1, pos + 1 + nb));
+
+      // Escape stripping (new format only)
+      if (isNewFormat && stored.length > 1) {
+        let stripped = stored.slice();
+        while (stripped.length > 1 && (stripped[0] >= 0xFC || stripped[0] === 0x00)) {
+          const candidate = stripped.slice(1);
+          if (candidate[0] === 0x40 || candidate[0] === 0x41 || candidate[0] === 0xC0 || candidate[0] === 0xC1) {
+            stored = candidate;
+            nb = stored.length;
+            break;
+          } else if (candidate[0] >= 0xFC || candidate[0] === 0x00) {
+            stripped = candidate;
+            continue;
+          } else {
+            break;
+          }
+        }
       }
-      const val = readBE64(result);
-      for (let i = 0; i < 8; i++) prev[i] = result[i];
-      groups.push({ value: val, tags: [], seps: [] });
-      pos += 1 + nb;
+
+      let r, kind;
+      const isFull = (stored[0] === 0x40 || stored[0] === 0x41 || stored[0] === 0xC0 || stored[0] === 0xC1);
+
+      if (isFull) {
+        r = new Uint8Array(8);
+        for (let i = 0; i < nb && i < 8; i++) r[i] = stored[i];
+        kind = 'FULL';
+      } else {
+        r = new Uint8Array(8);
+        r[0] = prev[0];
+        for (let i = 0; i < nb && i + 1 < 8; i++) r[i + 1] = stored[i];
+        if (isNewFormat) {
+          // New format: zero out trailing bytes (already zero from Uint8Array init)
+        } else {
+          // Old format: keep trailing bytes from previous
+          for (let i = nb + 1; i < 8; i++) r[i] = prev[i];
+        }
+        kind = 'DELTA';
+
+        // Signed integer delta fallback (new format only)
+        if (isNewFormat) {
+          const testVal = readBE64(r);
+          if (Math.abs(testVal) > 10000) {
+            const prevHiLo = readUint64BE(prev);
+            const result = addDeltaToUint64(prevHiLo, stored.slice(0, rawNb), rawNb);
+            r = result;
+            kind = 'IDELTA';
+          }
+        }
+      }
+
+      // Ensure 8 bytes
+      const r8 = new Uint8Array(8);
+      for (let i = 0; i < 8; i++) r8[i] = r[i] || 0;
+
+      const val = readBE64(r8);
+      for (let i = 0; i < 8; i++) prev[i] = r8[i];
+      elements.push({ etype: 'COORD', value: val, kind: kind, nBytes: nb });
+      pos += 1 + rawNb;
     } else if (isSep(b)) {
-      if (groups.length) groups[groups.length-1].seps.push(b);
+      elements.push({ etype: 'SEP', sepByte: b });
       pos += 1;
-    } else if (b >= 0x60 && pos + 1 < coordRegion.length) {
-      // Tag pair: only bytes >= 0x60 are valid tag first bytes in coord section
-      // (classes 60, 80, A0, C0, E0)
-      const b2 = coordRegion[pos+1];
-      const cls = {0x60:'60',0x80:'80',0xA0:'A0',0xC0:'C0',0xE0:'E0'}[b&0xE0]||'??';
-      if (groups.length) groups[groups.length-1].tags.push({ cls, byte2:b2, lo:b2&0xF, hi:(b2>>4)&0xF });
+    } else if (pos + 1 < coordRegion.length) {
+      const b2 = coordRegion[pos + 1];
+      const hiCls = b & 0xE0;
+      const cls = {0x20:'20', 0x40:'40', 0x60:'60', 0x80:'80', 0xA0:'A0', 0xC0:'C0', 0xE0:'E0'}[hiCls] || (b.toString(16).padStart(2,'0').toUpperCase());
+      elements.push({ etype: 'TAG', cls: cls, byte2: b2, loNib: b2 & 0x0F, hiNib: (b2 >> 4) & 0x0F });
       pos += 2;
     } else {
-      // Bytes 0x08-0x5F that aren't count or separator: skip single byte
-      pos += 1;
+      break;
     }
   }
 
-  // Axis state machine
-  let axis = 0, direction = 1;
-  const axisMap = [];
-  for (let i = 0; i < groups.length; i++) {
-    let ft = null;
-    for (const t of groups[i].tags) { if (t.cls !== 'C0') { ft = t; break; } }
-    let ax;
-    if (i < 3) { ax = i; }
-    else if (!ft) { ax = ((axis + direction) % 3 + 3) % 3; }
-    else if (ft.cls === 'E0') { ax = axis; }
-    else if (ft.lo === 0xF && ft.hi === 0) { direction = -1; ax = ((axis-1)%3+3)%3; }
-    else if (ft.lo === 0xF && ft.hi > 0) { ax = axis; }
-    else { ax = ((axis + direction) % 3 + 3) % 3; }
-    axisMap.push(ax);
-    axis = ax;
-  }
-
-  // Detect coord section end: stop at first clearly-garbage value
-  // Real coords are in mining range (typically 10-100000). Face section "coords"
-  // are tiny (< 10) or negative because the parser misreads tag bytes as count bytes.
-  let coordGroupEnd = groups.length;
-  // Track the max absolute value seen so far for range checking
-  let maxSeenValue = 0;
-  for (let i = 0; i < Math.min(3, groups.length); i++) {
-    maxSeenValue = Math.max(maxSeenValue, Math.abs(groups[i].value));
-  }
-  for (let i = 3; i < groups.length; i++) {
-    const v = groups[i].value;
-    const av = Math.abs(v);
-    // Stop if value drops dramatically (> 100x smaller than max seen, and tiny)
-    if (maxSeenValue > 10 && av < maxSeenValue / 100 && av < 10) { coordGroupEnd = i; break; }
-    // Stop at 20:03 tags (face section delimiters)
-    if (groups[i].tags.some(t => t.cls === '20' && t.byte2 === 0x03)) { coordGroupEnd = i; break; }
-    // Stop on negative values when previous were positive
-    if (v < -0.5 && i > 3 && groups[i-1].value > 0) { coordGroupEnd = i; break; }
-    // Update max for future comparisons
-    if (av > 1) maxSeenValue = Math.max(maxSeenValue, av);
-  }
-
-  // Collect base values and Z variants
-  const baseValues = [null, null, null];
-  const zValues = [];
-  for (let i = 0; i < coordGroupEnd; i++) {
-    const ax = axisMap[i];
-    if (ax >= 0 && ax <= 2) {
-      if (baseValues[ax] === null) baseValues[ax] = groups[i].value;
-      if (ax === 2 && !zValues.includes(groups[i].value)) zValues.push(groups[i].value);
+  // ── 6. Group elements ──
+  const groups = [];
+  let currentGroup = null;
+  for (const el of elements) {
+    if (el.etype === 'COORD') {
+      if (currentGroup !== null) groups.push(currentGroup);
+      currentGroup = { value: el.value, kind: el.kind, nBytes: el.nBytes, tags: [], seps: [], axis: -1, c0Assignments: [] };
+    } else if (currentGroup !== null) {
+      if (el.etype === 'TAG') {
+        currentGroup.tags.push(el);
+      } else if (el.etype === 'SEP') {
+        currentGroup.seps.push(el.sepByte);
+      }
     }
   }
+  if (currentGroup !== null) groups.push(currentGroup);
 
-  // ── Build vertices using gap-filling model ──
-  // 1. Collect C0 slot assignments (hi_nib = slot index)
-  // 2. Collect primary vertices from running state
-  // 3. C0 slots claim specific indices; primaries fill gaps then extend
-  const running = [0,0,0];
-  const c0Slots = {};      // slot -> {axes assigned, values per axis}
-  const c0SlotSet = new Set();
-  const primaries = [];    // primary vertices in creation order
+  // ── 7. Assign axes (closest-delta heuristic) ──
+  if (groups.length >= 3) {
+    groups[0].axis = 0;
+    groups[1].axis = 1;
+    groups[2].axis = 2;
+    const current = [groups[0].value, groups[1].value, groups[2].value];
+    for (let i = 3; i < groups.length; i++) {
+      const g = groups[i];
+      let bestAx = 0, bestDelta = Math.abs(g.value - current[0]);
+      for (let ax = 1; ax < 3; ax++) {
+        const d = Math.abs(g.value - current[ax]);
+        if (d < bestDelta) { bestDelta = d; bestAx = ax; }
+      }
+      g.axis = bestAx;
+      current[bestAx] = g.value;
+    }
+  } else {
+    for (let i = 0; i < groups.length; i++) groups[i].axis = i;
+  }
 
-  // First pass: collect C0 slot numbers and primary vertices
-  for (let i = 0; i < coordGroupEnd; i++) {
-    const g = groups[i];
-    const ax = axisMap[i];
-    if (ax < 0 || ax > 2) continue;
-    running[ax] = g.value;
-
-    // Collect C0 slot numbers
+  // ── 8. Extract vertex assignments ──
+  const assignerClasses = new Set(['C0', '80', '60', 'A0', '20']);
+  for (const g of groups) {
     for (const t of g.tags) {
-      if (t.cls === 'C0') c0SlotSet.add(t.hi);
+      if (assignerClasses.has(t.cls) && t.hiNib > 0) {
+        g.c0Assignments.push([t.hiNib, t.loNib]);
+      }
     }
+  }
 
-    if (i === 2) {
-      // V0 from initial 3 coords
-      primaries.push([running[0], running[1], running[2]]);
-    } else if (i > 2) {
-      // Check first non-C0 tag for lo_nib
-      let ft = null;
-      for (const t of g.tags) { if (t.cls !== 'C0') { ft = t; break; } }
-
-      if (zValues.length >= 2 && ft && ft.lo === 0xF) {
-        // lo=F with 2+ Z variants: create TWO primary vertices (one per Z variant)
-        const v1 = [running[0], running[1], zValues[0]];
-        const v2 = [running[0], running[1], zValues[1]];
-        primaries.push(v1);
-        primaries.push(v2);
-      } else if (ft && ft.lo === 0xF && ft.hi === 0) {
-        // lo=F, hi=0 with < 2 Z variants: create TWO primaries —
-        // one from running state, one with a BASE value substituted
-        // The substituted axis is the PREVIOUS changed axis (not the current one)
-        primaries.push([running[0], running[1], running[2]]);
-        const baseV = [running[0], running[1], running[2]];
-        const prevAx = i > 0 ? axisMap[i-1] : ax;
-        if (prevAx !== ax && baseValues[prevAx] !== null) {
-          baseV[prevAx] = baseValues[prevAx];
-        } else {
-          baseV[ax] = baseValues[ax] !== null ? baseValues[ax] : running[ax];
+  // ── 9. Trim coord groups ──
+  let trimmedGroups = groups;
+  if (groups.length >= 3) {
+    const basePositive = groups[0].value >= 0 && groups[1].value >= 0 && groups[2].value >= 0;
+    if (basePositive) {
+      for (let i = 3; i < groups.length; i++) {
+        if (groups[i].value < 0) {
+          trimmedGroups = groups.slice(0, i);
+          break;
         }
-        // Only add if actually different from the running vertex
-        if (baseV[0] !== running[0] || baseV[1] !== running[1] || baseV[2] !== running[2]) {
-          primaries.push(baseV);
+      }
+    }
+  }
+
+  // ── 10. Build vertex table ──
+  const vertices = [];
+
+  if (trimmedGroups.length < 3) {
+    // Not enough data for a proper vertex table
+    for (const g of trimmedGroups) {
+      const v = [0, 0, 0];
+      if (g.axis >= 0 && g.axis <= 2) v[g.axis] = g.value;
+      vertices.push(v);
+    }
+  } else {
+    const base = [trimmedGroups[0].value, trimmedGroups[1].value, trimmedGroups[2].value];
+
+    // Collect Z values for base/alt
+    const zValues = [];
+    for (const g of trimmedGroups) {
+      if (g.axis === 2 && Math.abs(g.value) > 1) {
+        if (!zValues.includes(g.value)) zValues.push(g.value);
+      }
+    }
+    const baseZ = zValues.length > 0 ? zValues[0] : base[2];
+    const altZ = zValues.length > 1 ? zValues[1] : baseZ;
+
+    const maxVerts = nFacesHeader > 0 ? Math.max(nFacesHeader + 2, 3) : 100;
+
+    // Per-slot accumulator
+    const slotState = {}; // slot -> { 0: x, 1: y, 2: z }
+
+    // V0 = base
+    vertices.push([base[0], base[1], base[2]]);
+    const running = [base[0], base[1], base[2]];
+
+    for (let i = 3; i < trimmedGroups.length; i++) {
+      const g = trimmedGroups[i];
+      const ax = g.axis;
+      if (ax < 0 || ax > 2) continue;
+      if (vertices.length >= maxVerts) break;
+
+      running[ax] = g.value;
+
+      if (g.c0Assignments.length > 0) {
+        for (const [slotVi, lo] of g.c0Assignments) {
+          if (vertices.length >= maxVerts) break;
+
+          if (!slotState[slotVi]) slotState[slotVi] = {};
+          slotState[slotVi][ax] = g.value;
+
+          const vx = slotState[slotVi][0] !== undefined ? slotState[slotVi][0] : base[0];
+          const vy = slotState[slotVi][1] !== undefined ? slotState[slotVi][1] : base[1];
+          let vz = slotState[slotVi][2] !== undefined ? slotState[slotVi][2] : base[2];
+
+          if (lo === 0x7) vz = baseZ;
+          else if (lo === 0xF) vz = altZ;
+
+          vertices.push([vx, vy, vz]);
         }
       } else {
-        // One primary vertex from running state
-        primaries.push([running[0], running[1], running[2]]);
-      }
-    }
-
-    // Process C0 assignments
-    for (const t of g.tags) {
-      if (t.cls !== 'C0') continue;
-      const slot = t.hi;
-      if (!c0Slots[slot]) c0Slots[slot] = [baseValues[0]||0, baseValues[1]||0, baseValues[2]||0];
-      c0Slots[slot][ax] = g.value;
-      // Z-variant from lo_nib
-      if (zValues.length >= 2) {
-        if (t.lo === 0x07) c0Slots[slot][2] = zValues[0];
-        else if (t.lo === 0x0F) c0Slots[slot][2] = zValues[1];
+        // Implicit vertex from running state
+        vertices.push([running[0], running[1], running[2]]);
       }
     }
   }
 
-  // Vertex ordering: PRIMARIES FIRST (in creation order), then C0 slots appended
-  // This matches the face section's vertex index expectations
-  const vertices = [];
-  for (const p of primaries) vertices.push(p);
-
-  // Append C0 slots in order of slot number
-  const c0SlotNums = Object.keys(c0Slots).map(Number).sort((a,b) => a-b);
-  for (const slot of c0SlotNums) {
-    vertices.push(c0Slots[slot]);
-  }
-
-  // No dedup - keep all vertices with identity remap.
-  // The EdgeBreaker face decoder relies on exact vertex indices including duplicates.
-  const indexRemap = vertices.map((v, i) => i);
-
-  // Face decoding
+  // ── 11. Face decoder (EdgeBreaker) ──
   const faces = [];
+
   if (faceMarker > 0) {
-    const faceRegion = data.slice(faceMarker, attrPos);
+    const faceRegion = data.slice(faceMarker, faceEnd);
+
+    // Parse face section elements
+    const faceElements = [];
     let fpos = 0;
-    const fops = [];
     while (fpos < faceRegion.length) {
       const fb = faceRegion[fpos];
       if (fb <= 0x06) {
         const fnb = fb + 1;
-        if (fpos+1+fnb > faceRegion.length) break;
-        fops.push({ type:'DATA', value: faceRegion[fpos+1] });
+        if (fpos + 1 + fnb > faceRegion.length) break;
+        // Read DATA value as big-endian integer
+        let dv = 0;
+        for (let j = 0; j < fnb; j++) {
+          dv = dv * 256 + faceRegion[fpos + 1 + j];
+        }
+        faceElements.push({ type: 'DATA', value: dv, offset: fpos });
         fpos += 1 + fnb;
-      } else if (isSep(fb)) { fops.push({ type:'SEP', value: fb }); fpos++; }
-      else if (fpos+1 < faceRegion.length) {
-        const fb2 = faceRegion[fpos+1];
-        const fc = {0x20:'20',0x40:'40',0xC0:'C0',0xE0:'E0'}[fb&0xE0]||'??';
-        fops.push({ type:'TAG', cls: fb===0xE1?'E1':fc, byte2:fb2, lo:fb2&0xF, hi:(fb2>>4)&0xF });
+      } else if (isSep(fb)) {
+        faceElements.push({ type: 'SEP', value: fb, offset: fpos });
+        fpos += 1;
+      } else if (fpos + 1 < faceRegion.length) {
+        const fb2 = faceRegion[fpos + 1];
+        const hiCls = fb & 0xE0;
+        let cls = {0x20:'20', 0x40:'40', 0xC0:'C0', 0xE0:'E0'}[hiCls] || (fb.toString(16).padStart(2,'0').toUpperCase());
+        if (fb === 0xE1) cls = 'E1';
+        const lo = fb2 & 0x0F;
+        const hi = (fb2 >> 4) & 0x0F;
+        faceElements.push({ type: 'TAG', cls: cls, byte2: fb2, lo: lo, hi: hi, offset: fpos });
         fpos += 2;
-      } else break;
-    }
-
-    let initTri = [0,1,2];
-    let fs2 = false;
-    let skippedInitMeta = false;
-    const iv2 = [];
-    for (const op of fops) {
-      if (op.type==='TAG' && op.cls==='20' && op.byte2===0x00) { fs2=true; continue; }
-      if (fs2) {
-        // Skip the first 40-class tag after 20:00 — it's metadata, not a topology op
-        if (!skippedInitMeta && op.type==='TAG' && op.cls==='40') { skippedInitMeta=true; continue; }
-        // Stop at subsequent 40/C0 tags (topology ops) or E0 (group end)
-        if (op.type==='TAG' && (op.cls==='40'||op.cls==='C0')) break;
-        if (op.type==='DATA' && op.value >= 1 && op.value <= 200) iv2.push(op.value);
-        if (op.type==='TAG' && op.cls==='E0') break;
+      } else {
+        break;
       }
     }
-    // Build initial triangle from vertex refs
-    // When metadata tag present (40:XX before vertex list) and only 2 refs:
-    //   vertex 0 is implied, triangle = [0, iv2[0]-1, iv2[1]-1], gate starts at 0
-    // When 3+ refs: triangle = [iv2[0]-1, iv2[1]-1, iv2[2]-1], gate starts at 1
-    const initLeftover = [];
-    let initGate = 1;
-    if (iv2.length >= 3) {
-      initTri = [iv2[0]-1, iv2[1]-1, iv2[2]-1].map(i => i < indexRemap.length ? indexRemap[i] : i);
-      for (let i = 3; i < iv2.length; i++) {
-        const ri = iv2[i] - 1;
-        initLeftover.push(ri < indexRemap.length ? indexRemap[ri] : ri);
-      }
-    } else if (iv2.length === 2 && skippedInitMeta) {
-      // Metadata tag present + 2 vertex refs: V0 implied
-      const a = iv2[0] - 1, b = iv2[1] - 1;
-      initTri = [
-        0 < indexRemap.length ? indexRemap[0] : 0,
-        a < indexRemap.length ? indexRemap[a] : a,
-        b < indexRemap.length ? indexRemap[b] : b
-      ];
-      initGate = 0;
-    } else {
-      // Fallback: save refs as leftover for C vertex queue
-      for (let i = 0; i < iv2.length; i++) {
-        const ri = iv2[i] - 1;
-        initLeftover.push(ri < indexRemap.length ? indexRemap[ri] : ri);
+
+    // Extract topology ops (40/C0/E1 class tags)
+    const topologyOps = [];
+    for (const el of faceElements) {
+      if (el.type === 'TAG' && (el.cls === '40' || el.cls === 'C0' || el.cls === 'E1')) {
+        topologyOps.push({ cls: el.cls, byte2: el.byte2, lo: el.lo, hi: el.hi, offset: el.offset });
       }
     }
-    faces.push(initTri);
 
-    // Build topology op list with associated vertex refs
-    // Each explicit vertex in the face section is consumed by the next C operation
-    const topoRaw = fops.filter(o => o.type==='TAG' && (o.cls==='40'||o.cls==='C0'||o.cls==='E1'));
-    // Always skip the first topology tag (initial metadata tag)
-    let ts = topoRaw.length > 0 ? 1 : 0;
-    const topos = topoRaw.slice(ts); // skip initial metadata tag
-
-    // Build vertex queue for C operations
-    // Split into pre-topology refs (before first 40/C0 tag) and post-topology refs
-    // Post-topology refs are REVERSED (consumed in reverse stream order)
-    const preTopoVerts = [];
-    const postTopoVerts = [];
-    let pastInit = false, seenTopo = false;
-    for (const op of fops) {
-      if (!pastInit) {
-        if (op.type === 'TAG' && op.cls === 'E0') pastInit = true;
-        continue;
-      }
-      if (op.type === 'TAG' && (op.cls === '40' || op.cls === 'C0' || op.cls === 'E1')) {
-        seenTopo = true;
-      }
-      if (op.type === 'DATA') {
-        const dv = op.value;
-        const rawIdx = dv - 1;
-        const mappedIdx = rawIdx < indexRemap.length ? indexRemap[rawIdx] : rawIdx;
-        if (dv >= 1 && mappedIdx < vertices.length && dv !== 0x40 && dv !== 0x82 && dv !== 0xC0) {
-          // Skip if this vertex is a coordinate-duplicate of one already referenced
-          const vCoord = vertices[mappedIdx];
-          const isDup = [...initTri, ...preTopoVerts, ...postTopoVerts].some(oi => {
-            const ov = vertices[oi];
-            return ov && Math.abs(ov[0]-vCoord[0])<0.1 && Math.abs(ov[1]-vCoord[1])<0.1 && Math.abs(ov[2]-vCoord[2])<0.1;
-          });
-          if (!isDup) {
-            if (!seenTopo) {
-              preTopoVerts.push(mappedIdx);
-            } else {
-              postTopoVerts.push(mappedIdx);
-            }
-          }
+    // Extract vertex references (DATA values that are valid vertex indices)
+    const maxRef = Math.max(nVertsHeader, 20);
+    const vertexRefs = [];
+    for (const el of faceElements) {
+      if (el.type === 'DATA') {
+        const dv = el.value;
+        if (dv >= 1 && dv <= maxRef && dv !== 0x40 && dv !== 0x82 && dv !== 0xC0) {
+          vertexRefs.push(dv);
         }
       }
     }
-    postTopoVerts.reverse(); // post-topology refs consumed in reverse order
-    const vertexQueue = [...preTopoVerts, ...postTopoVerts];
 
-    // Implicit vertices: not in initial tri AND not in vertexQueue
-    const expectedVertCount = nVertsHeader || vertices.length;
-
-    // Implicit: not in initial, not in queue, and not a coordinate-duplicate
-    const usedVerts = new Set([...initTri, ...vertexQueue]);
-    const usedCoords = new Set();
-    for (const vi of usedVerts) {
-      if (vi < vertices.length) {
-        const v = vertices[vi];
-        usedCoords.add(v[0].toFixed(1)+','+v[1].toFixed(1)+','+v[2].toFixed(1));
+    // Identify initial triangle vertices
+    // Pattern: after 20:00 start, look for DATA values before first E0 or topology tag
+    const initialVerts = [];
+    let foundStart = false;
+    for (const el of faceElements) {
+      if (el.type === 'TAG' && el.cls === '20' && el.byte2 === 0x00) {
+        foundStart = true;
+        continue;
       }
-    }
-    const implicitVerts = [];
-    for (let vi = 0; vi < vertices.length; vi++) {
-      if (usedVerts.has(vi)) continue;
-      const v = vertices[vi];
-      const key = v[0].toFixed(1)+','+v[1].toFixed(1)+','+v[2].toFixed(1);
-      if (usedCoords.has(key)) continue; // skip coordinate duplicates
-      usedCoords.add(key);
-      implicitVerts.push(vi);
-    }
-    implicitVerts.reverse();
-
-    // C vertex source: alternate implicit and explicit
-    // Pattern: initLeftover first, then implicit[0], pre-topo, implicit[1], post-topo
-    const cVertexOrder = [];
-    // Init section leftovers (vertex refs that didn't form a full initTri) go first
-    for (const v of initLeftover) cVertexOrder.push(v);
-    let ii = 0;
-    if (implicitVerts.length > 0) cVertexOrder.push(implicitVerts[ii++]);
-    for (const v of preTopoVerts) cVertexOrder.push(v);
-    if (ii < implicitVerts.length) cVertexOrder.push(implicitVerts[ii++]);
-    for (const v of postTopoVerts) cVertexOrder.push(v); // already reversed
-    while (ii < implicitVerts.length) cVertexOrder.push(implicitVerts[ii++]);
-
-    let cvIdx = 0;
-    function nextCVertex() {
-      if (cvIdx < cVertexOrder.length) return cVertexOrder[cvIdx++];
-      return -1;
-    }
-    console.log('C vertex order:', cVertexOrder, 'implicit:', implicitVerts, 'preTopo:', preTopoVerts, 'postTopo(rev):', postTopoVerts);
-
-    const bnd = [...initTri];
-    let gate = initGate;
-    let cOpsRemaining = expectedVertCount - initTri.length;
-
-    // Extract separators directly from raw face region bytes
-    // Track: separator value AND whether a FLAG (0x40/0xC0) preceded it
-    const topoSeps = [];    // separator value (or null)
-    const topoFlags = [];   // true if FLAG appeared before the separator
-    {
-      const fr = data.slice(faceMarker, attrPos);
-      let p = 0, pastE0 = false, rawTopo = 0, lastSep = null, hadFlag = false;
-      while (p < fr.length) {
-        const b = fr[p];
-        if (b <= 0x06) {
-          const nb = b + 1;
-          if (p + 1 < fr.length) {
-            const dv = fr[p + 1];
-            if (pastE0 && (dv === 0x40 || dv === 0xC0)) hadFlag = true;
-          }
-          p += 1 + nb;
-        } else if (isSep(b)) {
-          if (pastE0) lastSep = b;
-          p += 1;
-        } else if (p + 1 < fr.length) {
-          const b2 = fr[p + 1];
-          const cls = b & 0xE0;
-          if (cls === 0xE0 && !pastE0) { pastE0 = true; }
-          if (pastE0 && (cls === 0x40 || cls === 0xC0 || b === 0xE1)) {
-            rawTopo++;
-            if (rawTopo > ts) {
-              topoSeps.push(lastSep);
-              topoFlags.push(hadFlag);
-              lastSep = null;
-              hadFlag = false;
-            }
-          }
-          p += 2;
-        } else break;
+      if (foundStart) {
+        if (el.type === 'TAG' && (el.cls === '40' || el.cls === 'C0')) break;
+        if (el.type === 'DATA' && el.value >= 1 && el.value <= maxRef) {
+          initialVerts.push(el.value);
+        }
+        if (el.type === 'TAG' && el.cls === 'E0') break;
       }
     }
 
-    let lastOp = null;
-    console.log('Initial tri:', initTri, 'topoSeps:', topoSeps);
+    // Determine initial triangle (1-based to 0-based)
+    let initTri;
+    if (initialVerts.length >= 3) {
+      initTri = [initialVerts[0] - 1, initialVerts[1] - 1, initialVerts[2] - 1];
+    } else {
+      initTri = [0, 1, 2];
+    }
 
-    for (let ti = 0; ti < topos.length; ti++) {
-      if (bnd.length < 3) break;
-      const top = topos[ti];
+    // ── EdgeBreaker decoder ──
+    const ebFaces = [initTri.slice()];
+    let bnd = initTri.slice();
+    let gate = 1;
+    let nv = Math.max(...initTri) + 1;
+    const stack = [];
+
+    // Filter to just 40/C0 class ops (skip E0, E1, 20 class)
+    const ops = topologyOps.filter(o => o.cls === '40' || o.cls === 'C0');
+
+    function ebC() {
       const n = bnd.length;
+      if (n < 3) return false;
+      const li = gate % n;
+      const L = bnd[li], R = bnd[(gate + 1) % n];
+      const v = nv++;
+      ebFaces.push([L, R, v]);
+      bnd.splice(li + 1, 0, v);
+      gate = li + 1;
+      return true;
+    }
+
+    function ebR() {
+      const n = bnd.length;
+      if (n < 4) return false;
       const li = gate % n;
       const ri = (gate + 1) % n;
       const L = bnd[li], R = bnd[ri];
+      const fr = bnd[(gate + 2) % n];
+      ebFaces.push([L, R, fr]);
+      bnd.splice(ri, 1);
+      if (gate >= bnd.length) gate = gate % bnd.length;
+      return true;
+    }
+
+    function ebL() {
+      const n = bnd.length;
+      if (n < 4) return false;
+      const li = gate % n;
+      const L = bnd[li], R = bnd[(gate + 1) % n];
+      const fl = bnd[((gate - 1) % n + n) % n];
+      ebFaces.push([fl, L, R]);
+      bnd.splice(li, 1);
+      gate = ((li - 1) % bnd.length + bnd.length) % bnd.length;
+      return true;
+    }
+
+    function ebE() {
+      const n = bnd.length;
+      if (n === 3) {
+        ebFaces.push([bnd[0], bnd[1], bnd[2]]);
+        bnd = [];
+        if (stack.length > 0) {
+          const restored = stack.pop();
+          bnd = restored.bnd;
+          gate = restored.gate;
+        }
+        return true;
+      }
+      if (n >= 4) {
+        const li = gate % n;
+        const L = bnd[li], R = bnd[(gate + 1) % n];
+        const fl = bnd[((gate - 1) % n + n) % n];
+        ebFaces.push([fl, L, R]);
+        bnd.splice(li, 1);
+        gate = ((li - 1) % bnd.length + bnd.length) % bnd.length;
+        return true;
+      }
+      return false;
+    }
+
+    function gateAdvance(offset) {
+      if (bnd.length > 0) {
+        gate = ((gate + offset) % bnd.length + bnd.length) % bnd.length;
+      }
+    }
+
+    // Decode using group-based C/C/finalizer pattern
+    let oi = 0;
+    while (oi < ops.length) {
+      const op = ops[oi];
 
       // Finalizer: gate advance -1
-      if (top.byte2 === 0x1B) {
-        gate = ((gate - 1) % n + n) % n;
+      if (op.byte2 === 0x1B) {
+        gateAdvance(-1);
+        oi++;
         continue;
       }
 
-      // SEPARATOR-BASED OPERATION DETECTION
-      // Verified across triangle, plane, linear, fan, cube:
-      //   sep 0x27, 0x2F, 0xDF → C (always)
-      //   sep 0x5F, 0x87 → R (always)
-      //   sep 0x17 → C if followed by FLAG/vertex, R if after E0:07
-      //   sep 0x0F → C or E (context)
-      //   no sep → consecutive op (C in group, L after R, E at end)
+      // Single remaining op at end = closing (E)
+      if (oi === ops.length - 1) {
+        ebE();
+        oi++;
+        continue;
+      }
 
-      const sep = ti < topoSeps.length ? topoSeps[ti] : null;
-      const flag = ti < topoFlags.length ? topoFlags[ti] : false;
-      let op;
+      // Check if next op is a finalizer
+      const nextOp = ops[oi + 1];
+      const nextIsFin = nextOp && nextOp.byte2 === 0x1B;
 
-      if (sep !== null) {
-        // Separator present: determines operation
-        if (sep === 0x5F || sep === 0x87) {
-          op = 'R'; // large separators → R
+      if (nextIsFin) {
+        // Single op before finalizer = C
+        ebC();
+        oi++;
+        continue;
+      }
+
+      // Two ops before finalizer (or end) = C + C or C + R
+      const nextNext = oi + 2 < ops.length ? ops[oi + 2] : null;
+      const nextNextIsFin = nextNext && nextNext.byte2 === 0x1B;
+
+      if (nextNextIsFin) {
+        // Pair of ops: first is C, second is C or R
+        ebC();
+        oi++;
+        // Second op: C if boundary is small, R otherwise
+        if (bnd.length < 8) {
+          ebC();
         } else {
-          op = 'C'; // all other separators (0x17, 0x2F, 0x27, 0x0F, 0xDF) → C
+          ebR();
         }
-      } else {
-        // No separator: depends on mesh type
-        const hasFin = topos.some(o => o.byte2 === 0x1B);
-
-        if (top.cls === 'E1') {
-          op = 'C'; // E1 tags are C when no separator
-        } else if (n === 3 && cOpsRemaining <= 0) {
-          op = 'E';
-        } else if (hasFin) {
-          // GROUP-BASED (open mesh): no-sep in groups defaults to C
-          op = (cOpsRemaining > 0) ? 'C' : 'E';
-        } else {
-          // CLOSED MANIFOLD (cube etc): use previous-op context
-          if (lastOp === 'C') {
-            op = 'R';
-          } else if (lastOp === 'R') {
-            op = 'L';
-          } else if (lastOp === 'L') {
-            op = (n === 3) ? 'E' : 'L';
-          } else {
-            op = (cOpsRemaining > 0) ? 'C' : 'E';
-          }
-        }
+        oi++;
+        continue;
       }
 
-      // Safety
-      if (op === 'C' && cOpsRemaining <= 0) {
-        op = (n > 4) ? 'L' : (n === 3 ? 'E' : 'R');
-      }
-
-      // Log
-      const sepStr = sep !== null ? `0x${sep.toString(16).padStart(2,'0')}` : 'none';
-      const flagStr = flag ? ' FLAG' : '';
-      console.log(`Op${ti}: sep=${sepStr}${flagStr} ${top.cls}:${top.byte2.toString(16).padStart(2,'0')} -> ${op} bnd=[${bnd}] gate=${gate}`);
-      lastOp = op;
-      if (op === 'C') {
-        const v = nextCVertex();
-        if (v >= 0) {
-          cOpsRemaining--;
-          faces.push([L, R, v]);
-          bnd.splice(li + 1, 0, v);
-          gate = li + 1;
-        }
-      } else if (op === 'R') {
-        if (n >= 4) {
-          const fr = bnd[(gate + 2) % n];
-          faces.push([L, R, fr]);
-          bnd.splice(ri, 1);
-          if (gate >= bnd.length) gate = gate % bnd.length;
-        }
-      } else if (op === 'L') {
-        if (n >= 4) {
-          const fl = bnd[(gate - 1 + n) % n];
-          faces.push([fl, L, R]);
-          bnd.splice(li, 1);
-          gate = ((li - 1) % bnd.length + bnd.length) % bnd.length;
-        }
-      } else if (op === 'E') {
-        if (n === 3) {
-          faces.push([bnd[0], bnd[1], bnd[2]]);
-          bnd.length = 0;
-        } else if (n >= 4) {
-          const fl = bnd[(gate - 1 + n) % n];
-          faces.push([fl, L, R]);
-          bnd.splice(li, 1);
-          gate = ((li - 1) % bnd.length + bnd.length) % bnd.length;
-        }
-      }
+      // Default: treat as C
+      ebC();
+      oi++;
     }
+
+    // Copy decoded faces
+    for (const f of ebFaces) faces.push(f);
   }
 
-  // Filter out faces that reference non-existent vertices (phantom vertices from face decoder)
-  // Remap face indices through dedup map, then filter invalid
-  const remappedFaces = faces.map(f => f.map(vi => {
-    if (vi >= 0 && vi < indexRemap.length) return indexRemap[vi];
-    return vi;
-  }));
-  const validFaces = remappedFaces.filter(f => f.every(vi => vi >= 0 && vi < vertices.length));
+  // Filter out faces referencing non-existent vertices
+  const validFaces = faces.filter(f => f.every(vi => vi >= 0 && vi < vertices.length));
 
-  return { vertices: vertices.map(v => [v[0]||0,v[1]||0,v[2]||0]), faces: validFaces, warnings, nVertsHeader, nFacesHeader };
+  console.log('[parseOOT v2] Result:', vertices.length, 'verts,', validFaces.length, 'faces');
+  console.log('[parseOOT v2] First 5 verts:', vertices.slice(0,5).map(v => `(${v[0]?.toFixed(1)},${v[1]?.toFixed(1)},${v[2]?.toFixed(1)})`).join(' '));
+  if (warnings.length) console.log('[parseOOT v2] Warnings:', warnings);
+
+  return {
+    vertices: vertices.map(v => [v[0] || 0, v[1] || 0, v[2] || 0]),
+    faces: validFaces,
+    warnings,
+    nVertsHeader,
+    nFacesHeader
+  };
 }
 
 // ═════════════════════════════════════════════════

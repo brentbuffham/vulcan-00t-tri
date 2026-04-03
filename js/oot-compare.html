@@ -186,23 +186,48 @@ function parseOOT(arrayBuffer) {
   let shadedPos = findBytes(data, shadedNeedle, ds);
   if (shadedPos < 0) shadedPos = data.length;
 
-  // Search backwards from SHADED for [0x20, 0x00]
+  // Face section end: "separator_line" marks attribute data start
+  const sepLineNeedle = [0x73,0x65,0x70,0x61,0x72,0x61,0x74,0x6F,0x72,0x5F,0x6C,0x69,0x6E,0x65];
+  let sepLinePos = findBytes(data, sepLineNeedle, ds);
+  let faceEnd = sepLinePos > 0 ? sepLinePos - 2 : shadedPos;
+
   let faceMarker = -1;
-  for (let i = shadedPos - 2; i > coordStart; i--) {
-    if (data[i] === 0x20 && data[i + 1] === 0x00) {
-      faceMarker = i;
-      break;
+  if (isNewFormat) {
+    // New format: find first E0:03 terminator, then first "20 00 40:xx" after it
+    let firstE003 = -1;
+    for (let i = coordStart + 10; i < faceEnd - 1; i++) {
+      if (data[i] === 0xE0 && data[i+1] === 0x03) { firstE003 = i; break; }
+    }
+    if (firstE003 > 0) {
+      for (let i = firstE003; i < faceEnd - 1; i++) {
+        if (data[i] === 0x20 && data[i+1] === 0x00 && i+2 < faceEnd && (data[i+2] & 0xE0) === 0x40) {
+          faceMarker = i; break;
+        }
+      }
+    }
+    // Fallback: last "20 00" before faceEnd
+    if (faceMarker < 0) {
+      for (let i = faceEnd - 2; i > coordStart; i--) {
+        if (data[i] === 0x20 && data[i+1] === 0x00) { faceMarker = i; break; }
+      }
+    }
+  } else {
+    // Old format: last "20 00" before faceEnd
+    for (let i = faceEnd - 2; i > coordStart; i--) {
+      if (data[i] === 0x20 && data[i+1] === 0x00) { faceMarker = i; break; }
     }
   }
 
-  const coordEnd = faceMarker > 0 ? faceMarker : shadedPos;
-  const faceEnd = shadedPos;
+  const coordEnd = faceMarker > 0 ? faceMarker : faceEnd;
 
   // ── 5. Parse coord elements ──
   const coordRegion = data.slice(coordStart, coordEnd);
   const prev = new Uint8Array(8);
   let pos = 0;
   const elements = [];
+  // Dynamic IDELTA threshold: after first 3 FULL values, set to 3× max
+  const fullValues = [];
+  let ideltaThreshold = 10000;
 
   // Helper: read uint64 big-endian from 8-byte array
   function readUint64BE(bytes) {
@@ -276,6 +301,14 @@ function parseOOT(arrayBuffer) {
         r = new Uint8Array(8);
         for (let i = 0; i < nb && i < 8; i++) r[i] = stored[i];
         kind = 'FULL';
+        // Track FULL values for dynamic IDELTA threshold
+        const fv = readBE64(r);
+        if (Math.abs(fv) > 1) {
+          fullValues.push(Math.abs(fv));
+          if (fullValues.length === 3) {
+            ideltaThreshold = Math.max(...fullValues) * 3;
+          }
+        }
       } else {
         r = new Uint8Array(8);
         r[0] = prev[0];
@@ -291,7 +324,7 @@ function parseOOT(arrayBuffer) {
         // Signed integer delta fallback (new format only)
         if (isNewFormat) {
           const testVal = readBE64(r);
-          if (Math.abs(testVal) > 10000) {
+          if (Math.abs(testVal) > ideltaThreshold) {
             const prevHiLo = readUint64BE(prev);
             const result = addDeltaToUint64(prevHiLo, stored.slice(0, rawNb), rawNb);
             r = result;
@@ -607,57 +640,56 @@ function parseOOT(arrayBuffer) {
       }
     }
 
-    // Decode using group-based C/C/finalizer pattern
-    let oi = 0;
-    while (oi < ops.length) {
-      const op = ops[oi];
+    // Separator-based operation detection
+    // Build separator context: which sep precedes each topo op
+    let lastSep = null;
+    const opsWithSep = [];
+    for (const el of faceElements) {
+      if (el.type === 'SEP') { lastSep = el.value; }
+      else if (el.type === 'TAG' && (el.cls === '40' || el.cls === 'C0' || el.cls === 'E1')) {
+        opsWithSep.push({ cls: el.cls, byte2: el.byte2, lo: el.lo, hi: el.hi, sep: lastSep });
+        lastSep = null;
+      }
+    }
+
+    let cOpsRemaining = Math.max(nVertsHeader - 3, 0);
+    let lastOp = null;
+
+    for (const op of opsWithSep) {
+      if (!bnd.length) break;
 
       // Finalizer: gate advance -1
-      if (op.byte2 === 0x1B) {
-        gateAdvance(-1);
-        oi++;
-        continue;
-      }
+      if (op.byte2 === 0x1B) { gateAdvance(-1); continue; }
 
-      // Single remaining op at end = closing (E)
-      if (oi === ops.length - 1) {
-        ebE();
-        oi++;
-        continue;
-      }
+      const n = bnd.length;
+      const sep = op.sep;
 
-      // Check if next op is a finalizer
-      const nextOp = ops[oi + 1];
-      const nextIsFin = nextOp && nextOp.byte2 === 0x1B;
-
-      if (nextIsFin) {
-        // Single op before finalizer = C
-        ebC();
-        oi++;
-        continue;
-      }
-
-      // Two ops before finalizer (or end) = C + C or C + R
-      const nextNext = oi + 2 < ops.length ? ops[oi + 2] : null;
-      const nextNextIsFin = nextNext && nextNext.byte2 === 0x1B;
-
-      if (nextNextIsFin) {
-        // Pair of ops: first is C, second is C or R
-        ebC();
-        oi++;
-        // Second op: C if boundary is small, R otherwise
-        if (bnd.length < 8) {
-          ebC();
+      if (sep !== null) {
+        // Separator determines operation
+        if (sep === 0x5F || sep === 0x87) {
+          if (n >= 4) { ebR(); lastOp = 'R'; }
         } else {
-          ebR();
+          // All other separators -> C
+          if (cOpsRemaining > 0) { ebC(); cOpsRemaining--; lastOp = 'C'; }
+          else if (n >= 4) { ebR(); lastOp = 'R'; }
+          else { ebE(); lastOp = 'E'; }
         }
-        oi++;
-        continue;
+      } else {
+        // No separator: context-dependent
+        if (lastOp === null || lastOp === 'E') {
+          if (cOpsRemaining > 0) { ebC(); cOpsRemaining--; lastOp = 'C'; }
+          else { ebE(); lastOp = 'E'; }
+        } else if (lastOp === 'C') {
+          if (n >= 4) { ebR(); lastOp = 'R'; }
+          else { ebE(); lastOp = 'E'; }
+        } else if (lastOp === 'R') {
+          if (n >= 4) { ebL(); lastOp = 'L'; }
+          else if (n === 3) { ebE(); lastOp = 'E'; }
+        } else if (lastOp === 'L') {
+          if (n === 3) { ebE(); lastOp = 'E'; }
+          else if (n >= 4) { ebL(); lastOp = 'L'; }
+        }
       }
-
-      // Default: treat as C
-      ebC();
-      oi++;
     }
 
     // Copy decoded faces

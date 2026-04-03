@@ -685,7 +685,30 @@ def decode_faces_and_vertices(face_elements, initial_tri, n_verts, coord_values,
                             best_score = score
                             v_coords = v
             else:
-                v_coords = list(running)
+                # No coord value: build vertex from boundary vertex + Z-select
+                # The tag lo_nib bit3 encodes Z: 0→base_Z, 1→alt_Z
+                # Try Prev (gate-1), R, and L as reference
+                prev_idx = bnd[(gate - 1 + n) % n]
+                # Collect Z values for base/alt
+                z_vals = sorted(set(v[2] for v in vertices if len(v) > 2))
+                base_z = z_vals[0] if z_vals else base_coords[2]
+                alt_z = z_vals[1] if len(z_vals) > 1 else base_z
+                use_alt_z = bool(op.get('lo', 0) & 0x8)  # bit3 of lo_nib
+                target_z = alt_z if use_alt_z else base_z
+
+                # Try each reference: pick one that produces a UNIQUE vertex
+                best_ref = L
+                for ref_idx in (prev_idx, R, L):
+                    ref = vertices[ref_idx] if ref_idx < len(vertices) else running
+                    candidate = [ref[0], ref[1], target_z]
+                    # Prefer reference that produces a vertex NOT already in the list
+                    is_dup = any(abs(v[0]-candidate[0])<0.1 and abs(v[1]-candidate[1])<0.1 and abs(v[2]-candidate[2])<0.1 for v in vertices)
+                    if not is_dup:
+                        best_ref = ref_idx
+                        break
+
+                ref = vertices[best_ref] if best_ref < len(vertices) else running
+                v_coords = [ref[0], ref[1], target_z]
 
             v_idx = nv
             nv += 1

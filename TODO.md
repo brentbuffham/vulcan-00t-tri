@@ -1,69 +1,74 @@
 # TODO — Vulcan .00t Parser
 
-**Read this FIRST before making any changes. Then check recent git commits.**
+**Read this FIRST before making any changes. Then check HistoryOfTests.md and recent git commits.**
 
 ## What's Working (DON'T TOUCH)
-- Triangle, Plane, Cube, Fan, Prism, Linear — coordinate extraction and face decode for old-format files
+
+- **Cube**: 8/8 vertices, 12/12 faces — FULLY SOLVED
+- **Triangle**: 3/3 vertices — coordinates fully decoded
+- **Plane**: 3/4+ vertices — mostly working
 - File header / magic / page chain navigation
 - Coordinate decompression (FULL/DELTA, IEEE 754 BE doubles)
-- Separator detection, tag pair parsing
-- Axis state machine (old format)
-- C0 vertex slot assignments + Z-variant (lo=7/F)
-- EdgeBreaker face decode (group-based C/R/L/E for open meshes)
-- Cube: 6/8 vertices, 12 faces decoded
+- New-format: 0x07 as 8-byte coord, escape prefix stripping, signed integer delta (IDELTA)
+- Separator-based EdgeBreaker face decoder (C/R/L/E from separators)
+- EdgeBreaker-coupled vertex builder (vertices built during C operations)
+- E0:03 terminator for new-format coord/face boundary
+- separator_line as face section end marker
 
-## What's New (2026-03-31)
-- 5 new test files added: BigGrid, Hexhole, L-SHAPE, NonRound, SPHERE
-- New-format file support: `Variant/C:...` path handling, `43 E0 0E` anchor header, SHADED-based section boundaries
-- New-format coordinate rules: 00-escape (stored[0]==0x00 → strip and treat as FULL), zero-trailing (DELTA zeros trailing bytes)
-- Closest-delta axis heuristic (works better than state machine for new-format files)
-- 4-sides prism: all 8 coordinate values decode correctly
+## Current Scores (2026-04-03)
 
-## Priority TODO
+| File | Verts | Faces | Status |
+|------|-------|-------|--------|
+| Triangle | 3/3 | 3 | ✅ Working |
+| Plane | 5/4 | 4 | ✅ Mostly working |
+| Cube | **8/8** | **12/12** | ✅ **PERFECT** |
+| 4-Sides Prism | 3/5 | 5/6 | Partial |
+| Stepped Pyramid | 13/20 | 13/18 | Partial |
+| Hexhole | 6/12 | 10/12 | Partial — axis overlap |
+| SPHERE | 4/50 (50 verts) | **96/96** | Face count PERFECT, vertex coords wrong |
+| Linear Strip | 0/7 | 6 | Broken |
+| Fan | 0/6 | 7 | Broken |
+| Prism | 2/4 | 4 | Broken |
+| L-Shape | 0/12 | 6 | Broken |
+| NonRound | 0/16 | 12 | Broken (high-precision collision) |
+| BigGrid | untested | untested | Multi-byte headers needed |
 
-### 1. HEXHOLE / SPHERE — garbage 2nd coordinate value
-- First coord decodes ~1000 correctly
-- Second coord decodes as 115721 (wrong, should be ~1000-1300)
-- Likely a FULL/DELTA detection issue for 4-byte stored values in new format
-- Start by hex-dumping the first 5 coords of Hexhole, compare with DXF expected values
+## THE BOTTLENECK: Vertex Coordinate Accuracy
 
-### 2. NonRound — high-precision byte collision
+The EdgeBreaker-coupled vertex builder produces **correct vertex COUNTS** (cube 8/8, sphere 50/50) but wrong **coordinates** for files with overlapping X/Y ranges.
+
+### What's proven NOT to work (see HistoryOfTests.md):
+- Tag class → axis mapping (1024 combos tested, TEST-003)
+- Tag class → axis offset (243 combos, TEST-004)
+- 20-class X↔Y swap (TEST-005)
+- lo_nib bit patterns for axis/state (TEST-006)
+- E0 tags as axis encoders (172 tags analyzed, TEST-007)
+- Per-axis DELTA prev tracking (TEST-010)
+- L-only vs L+R reference, min vs max delta (TEST-014)
+
+### What's still worth investigating:
+1. **Tag byte2 on face ops** — the 40:xx byte2 value might encode axis for the C operation. Untested.
+2. **Face section DATA values** — vertex refs [7,10,9,11] in Hexhole may hint at vertex reuse patterns
+3. **00-skip face parse** — reveals hidden 40:3F and 40:47 ops (TEST-013). Needs face decoder upgrade first.
+4. **Parallelogram prediction** — L+R-O model for new vertex coordinates
+5. **Multi-value C operations** — some C ops may consume 2+ coord values (cube face 3 needs 3-axis change)
+
+### The pattern from cube analysis:
+- Some C ops: new vertex = L + single axis change (value from coord stream)
+- Some C ops: new vertex = R + single axis change
+- Some C ops: need MULTIPLE axis changes from any reference
+- The choice of L vs R vs multi-axis varies per operation
+
+## Other TODO (lower priority)
+
+### NonRound — high-precision byte collision
 - Coordinates like 32307.853 have 7-8 significant IEEE 754 bytes
 - Data bytes collide with tag byte values causing misparsing
-- Known limitation, may need a different disambiguation rule
-- Compare hex of NonRound coord section with DXF expected values
 
-### 3. BigGrid — multi-byte header counts
+### BigGrid — multi-byte header counts
 - 10201 vertices / 20000 faces overflows single-byte header fields
 - Vertex count at anchor+7 as uint16_BE = 0x27D9 = 10201
-- Face count at anchor+15 as uint16_BE = 0x4E20 = 20000
-- Need multi-byte count detection (check if count > 255 or header structure differs)
 
-### 4. Vertex table building (all files)
-- Current builder only creates V0 + C0-tagged slots
-- Missing vertices that should come from EdgeBreaker C operations
-- The C0 accumulation model works (tested on cube: 8/8) but needs integration
-- Don't rewrite the existing builder — extend it
-
-### 5. JS parser port
-- `js/oot-parser.js` is far behind Python
-- Needs: Variant/C: handling, anchor header, SHADED boundaries, new-format rules
-- Port AFTER Python parser is stable for new files
-
-## Test Files
-
-| File | Format | Verts | Faces | Status |
-|------|--------|-------|-------|--------|
-| tri-crack-triangle | OLD | 3 | 1 | Working |
-| tri-crack (plane) | OLD | 4 | 2 | Partial (3/4 verts) |
-| tri-crack-linear | OLD | 7 | 5 | Broken (overlapping axis values) |
-| tri-crack-solid (cube) | OLD | 8 | 12 | Working (6/8 verts) |
-| tri-crack-fan | OLD | 6 | 6 | Broken (zero-value coords) |
-| tri-crack-prism | OLD | 4 | 2 | Partial (2/4 verts) |
-| tri-crack-4sides-prism | NEW | 5 | 6 | Coords OK, vertex building WIP |
-| tri-crack-Stepped-pyramid | NEW | 20 | 18 | Partial coords |
-| tri-crack-L-SHAPE | OLD | 12 | 20 | Broken |
-| tri-crack-Hexhole | NEW | 12 | 12 | Garbage 2nd coord (115721) |
-| tri-crack-NonRound | NEW | 16 | 14 | High-precision collision |
-| tri-crack-SPHERE | NEW | 50 | 96 | Same as Hexhole |
-| tri-crack-BigGrid | NEW | 10201 | 20000 | Multi-byte header needed |
+### JS parser port
+- `js/oot-compare.html` has separator face decoder but NOT the coupled vertex builder
+- Port AFTER vertex accuracy is solved in Python

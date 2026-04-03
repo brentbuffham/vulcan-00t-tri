@@ -569,6 +569,149 @@ def decode_faces_separator(face_elements, topology_ops, initial_tri, n_verts):
     return dec.faces
 
 
+def decode_faces_and_vertices(face_elements, initial_tri, n_verts, coord_values, base_coords):
+    """Decode faces AND build vertices simultaneously using EdgeBreaker coupling.
+
+    Each C operation creates a new vertex. The vertex coordinates come from:
+    - A boundary vertex (L from the gate) as reference
+    - The next coordinate value from the stream replaces ONE axis of L
+    - The axis is chosen by: which axis of L is closest to the coord value
+
+    This solves the axis-overlap problem because vertex coordinates are
+    derived from boundary topology, not from independent axis assignment.
+    """
+    vertices = []
+    if len(base_coords) < 3:
+        return [], []
+
+    # V0 = base
+    vertices.append(list(base_coords[0:3]))
+
+    # V1, V2 from next coord values using closest-delta on running state
+    running = list(base_coords[0:3])
+    coord_idx = 3
+
+    for vi in range(1, min(3, n_verts)):
+        if coord_idx < len(coord_values):
+            val = coord_values[coord_idx]
+            coord_idx += 1
+            deltas = [abs(val - running[ax]) for ax in range(3)]
+            best_ax = deltas.index(min(deltas))
+            running[best_ax] = val
+            vertices.append(list(running))
+
+    # Build separator context for face ops
+    last_sep = None
+    ops_with_sep = []
+    for el in face_elements:
+        if el[0] == 'SEP':
+            last_sep = el[1]
+        elif el[0] == 'TAG' and el[1] in ('40', 'C0', 'E1'):
+            ops_with_sep.append({
+                'byte2': el[2], 'lo': el[3], 'hi': el[4], 'sep': last_sep,
+            })
+            last_sep = None
+
+    if not ops_with_sep:
+        return vertices, [tuple(initial_tri)]
+
+    # EdgeBreaker state
+    faces = [tuple(initial_tri)]
+    bnd = list(initial_tri)
+    gate = 1
+    nv = len(vertices)
+    c_ops_remaining = max(n_verts - len(vertices), 0)
+    last_op = None
+
+    for op in ops_with_sep:
+        if not bnd:
+            break
+        if op['byte2'] == 0x1B:
+            if bnd:
+                gate = (gate - 1) % len(bnd)
+            continue
+
+        n = len(bnd)
+        if n < 3:
+            break
+
+        li = gate % n
+        ri = (gate + 1) % n
+        L, R = bnd[li], bnd[ri]
+        sep = op['sep']
+
+        # Determine operation
+        if sep is not None:
+            if sep in (0x5F, 0x87):
+                op_type = 'R'
+            else:
+                op_type = 'C' if c_ops_remaining > 0 else ('R' if n >= 4 else 'E')
+        else:
+            if last_op is None or last_op == 'E':
+                op_type = 'C' if c_ops_remaining > 0 else 'E'
+            elif last_op == 'C':
+                op_type = 'R' if n >= 4 else 'E'
+            elif last_op == 'R':
+                op_type = 'L' if n >= 4 else 'E'
+            elif last_op == 'L':
+                op_type = 'E' if n == 3 else 'L'
+            else:
+                op_type = 'E'
+
+        if op_type == 'C' and c_ops_remaining > 0:
+            # BUILD VERTEX: take L's coords, replace one axis with next coord value
+            if coord_idx < len(coord_values):
+                val = coord_values[coord_idx]
+                coord_idx += 1
+                ref = vertices[L] if L < len(vertices) else running
+                # Replace the axis where val is closest to ref
+                deltas = [abs(val - ref[ax]) for ax in range(3)]
+                best_ax = deltas.index(min(deltas))
+                v_coords = list(ref)
+                v_coords[best_ax] = val
+            else:
+                v_coords = list(running)
+
+            v_idx = nv
+            nv += 1
+            c_ops_remaining -= 1
+            vertices.append(v_coords)
+            running = list(v_coords)
+
+            faces.append((L, R, v_idx))
+            bnd.insert(li + 1, v_idx)
+            gate = li + 1
+            last_op = 'C'
+
+        elif op_type == 'R' and n >= 4:
+            fr = bnd[(gate + 2) % n]
+            faces.append((L, R, fr))
+            bnd.pop(ri)
+            if gate >= len(bnd):
+                gate = gate % len(bnd)
+            last_op = 'R'
+
+        elif op_type == 'L' and n >= 4:
+            fl = bnd[(gate - 1 + n) % n]
+            faces.append((fl, L, R))
+            bnd.pop(li)
+            gate = (li - 1) % len(bnd)
+            last_op = 'L'
+
+        elif op_type == 'E':
+            if n == 3:
+                faces.append(tuple(bnd))
+                bnd = []
+            elif n >= 4:
+                fl = bnd[(gate - 1 + n) % n]
+                faces.append((fl, L, R))
+                bnd.pop(li)
+                gate = (li - 1) % len(bnd)
+            last_op = 'E'
+
+    return vertices, faces
+
+
 # ══════════════════════════════════════════════════════════════
 # MAIN PARSER
 # ══════════════════════════════════════════════════════════════
@@ -696,18 +839,14 @@ def parse_oot_v2(filepath: str) -> OotResult:
     for g in groups:
         result.coord_values.append(g.value)
 
-    # Build vertex table
-    vertices = build_vertex_table(groups, n_faces=result.n_faces_header)
-    result.vertices = [(v[0], v[1], v[2]) for v in vertices if v[0] is not None]
-
-    # ── Parse face section ──
+    # ── Parse face section and build vertices simultaneously ──
     if face_marker > 0:
         face_region = raw[face_marker:face_end]
         topology_ops, vertex_refs, initial_verts = parse_face_section(
             face_region, result.n_verts_header
         )
 
-        # Re-parse face elements for separator context (needed by new decoder)
+        # Parse face elements for separator context
         face_elements = []
         fpos = 0
         while fpos < len(face_region):
@@ -739,15 +878,37 @@ def parse_oot_v2(filepath: str) -> OotResult:
 
         # Determine initial triangle
         if len(initial_verts) >= 3:
-            init_tri = tuple(v - 1 for v in initial_verts[:3])  # 1-based to 0-based
+            init_tri = tuple(v - 1 for v in initial_verts[:3])
         else:
-            init_tri = (0, 1, 2)  # implicit
+            init_tri = (0, 1, 2)
 
-        # Decode faces using separator-based operation detection
-        faces = decode_faces_separator(
-            face_elements, topology_ops, init_tri, result.n_verts_header
+        # Trim coord values: exclude face section data that leaked in
+        # Stop at first negative value (when base positive) or first very small value
+        base_vals = [groups[i].value for i in range(min(3, len(groups)))]
+        base_min = min(abs(v) for v in base_vals) if base_vals else 1
+        base_positive = all(v >= 0 for v in base_vals)
+        trimmed_coords = list(result.coord_values)
+        for ci in range(3, len(trimmed_coords)):
+            v = trimmed_coords[ci]
+            if base_positive and v < 0:
+                trimmed_coords = trimmed_coords[:ci]
+                break
+            if base_min > 10 and abs(v) < base_min / 20:
+                trimmed_coords = trimmed_coords[:ci]
+                break
+
+        # Use EdgeBreaker-coupled vertex builder: faces + vertices built together
+        # Each C operation creates a vertex from boundary vertex L + coord value
+        vertices, faces = decode_faces_and_vertices(
+            face_elements, init_tri, result.n_verts_header,
+            trimmed_coords, base_vals if len(base_vals) >= 3 else [0, 0, 0]
         )
+        result.vertices = [(v[0], v[1], v[2]) for v in vertices]
         result.faces = faces
+    else:
+        # No face section — fall back to old vertex builder
+        vertices = build_vertex_table(groups, n_faces=result.n_faces_header)
+        result.vertices = [(v[0], v[1], v[2]) for v in vertices if v[0] is not None]
 
     result.success = len(result.vertices) > 0
     return result

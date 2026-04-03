@@ -48,6 +48,14 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
   <button onclick="toggleLabels()">Labels</button>
   <button onclick="resetView()">Reset</button>
   <button onclick="exportOBJ()">Export OOT as OBJ</button>
+  <button onclick="toggleDebug()" style="background:#4a2a2a;border-color:#f66">Debug</button>
+</div>
+<div id="debug-panel" style="display:none;position:fixed;top:40px;right:0;width:50%;height:calc(100%-40px);background:rgba(10,10,30,0.95);z-index:20;overflow-y:auto;font-family:monospace;font-size:11px;padding:12px;color:#ccc">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+    <b style="color:#f97316;font-size:14px">EdgeBreaker Debug</b>
+    <button onclick="toggleDebug()" style="background:#333;color:#fff;border:1px solid #555;padding:2px 8px;cursor:pointer">Close</button>
+  </div>
+  <div id="debug-content">Drop an .00t file first</div>
 </div>
 
 <div id="left" class="panel">
@@ -402,6 +410,9 @@ function parseOOT(arrayBuffer) {
     }
   }
 
+  // Collect coord values for debug
+  const coordValues = groups.map(g => g.value);
+
   // ── 9. Trim coord groups ──
   let trimmedGroups = groups;
   if (groups.length >= 3) {
@@ -654,46 +665,61 @@ function parseOOT(arrayBuffer) {
 
     let cOpsRemaining = Math.max(nVertsHeader - 3, 0);
     let lastOp = null;
+    const debugTrace = []; // Debug: trace each operation
 
     for (const op of opsWithSep) {
       if (!bnd.length) break;
-
-      // Finalizer: gate advance -1
-      if (op.byte2 === 0x1B) { gateAdvance(-1); continue; }
+      if (op.byte2 === 0x1B) { gateAdvance(-1); debugTrace.push({op:'FIN',byte2:op.byte2,sep:op.sep}); continue; }
 
       const n = bnd.length;
+      const li = gate % n;
+      const ri = (gate + 1) % n;
+      const L = bnd[li], R = bnd[ri];
+      const prevOnBnd = bnd[((gate - 1) % n + n) % n];
       const sep = op.sep;
+      let opType = '?';
 
       if (sep !== null) {
-        // Separator determines operation
         if (sep === 0x5F || sep === 0x87) {
-          if (n >= 4) { ebR(); lastOp = 'R'; }
+          if (n >= 4) { ebR(); opType = 'R'; lastOp = 'R'; }
         } else {
-          // All other separators -> C
-          if (cOpsRemaining > 0) { ebC(); cOpsRemaining--; lastOp = 'C'; }
-          else if (n >= 4) { ebR(); lastOp = 'R'; }
-          else { ebE(); lastOp = 'E'; }
+          if (cOpsRemaining > 0) { ebC(); cOpsRemaining--; opType = 'C'; lastOp = 'C'; }
+          else if (n >= 4) { ebR(); opType = 'R'; lastOp = 'R'; }
+          else { ebE(); opType = 'E'; lastOp = 'E'; }
         }
       } else {
-        // No separator: context-dependent
         if (lastOp === null || lastOp === 'E') {
-          if (cOpsRemaining > 0) { ebC(); cOpsRemaining--; lastOp = 'C'; }
-          else { ebE(); lastOp = 'E'; }
+          if (cOpsRemaining > 0) { ebC(); cOpsRemaining--; opType = 'C'; lastOp = 'C'; }
+          else { ebE(); opType = 'E'; lastOp = 'E'; }
         } else if (lastOp === 'C') {
-          if (n >= 4) { ebR(); lastOp = 'R'; }
-          else { ebE(); lastOp = 'E'; }
+          if (n >= 4) { ebR(); opType = 'R'; lastOp = 'R'; }
+          else { ebE(); opType = 'E'; lastOp = 'E'; }
         } else if (lastOp === 'R') {
-          if (n >= 4) { ebL(); lastOp = 'L'; }
-          else if (n === 3) { ebE(); lastOp = 'E'; }
+          if (n >= 4) { ebL(); opType = 'L'; lastOp = 'L'; }
+          else if (n === 3) { ebE(); opType = 'E'; lastOp = 'E'; }
         } else if (lastOp === 'L') {
-          if (n === 3) { ebE(); lastOp = 'E'; }
-          else if (n >= 4) { ebL(); lastOp = 'L'; }
+          if (n === 3) { ebE(); opType = 'E'; lastOp = 'E'; }
+          else if (n >= 4) { ebL(); opType = 'L'; lastOp = 'L'; }
         }
       }
+
+      debugTrace.push({
+        op: opType,
+        byte2: op.byte2,
+        hi: op.hi, lo: op.lo,
+        sep: op.sep,
+        L, R,
+        prevBnd: prevOnBnd,
+        bndSize: n,
+        newV: opType === 'C' ? nv - 1 : null,
+      });
     }
 
-    // Copy decoded faces
     for (const f of ebFaces) faces.push(f);
+    // Store debug trace
+    warnings._debugTrace = debugTrace;
+    warnings._coordValues = coordValues;
+    warnings._opsWithSep = opsWithSep;
   }
 
   // Filter out faces referencing non-existent vertices
@@ -703,12 +729,28 @@ function parseOOT(arrayBuffer) {
   console.log('[parseOOT v2] First 5 verts:', vertices.slice(0,5).map(v => `(${v[0]?.toFixed(1)},${v[1]?.toFixed(1)},${v[2]?.toFixed(1)})`).join(' '));
   if (warnings.length) console.log('[parseOOT v2] Warnings:', warnings);
 
+  // Build debug info
+  const debugInfo = {
+    coordValues: coordValues,
+    groups: groups.map((g,i) => ({
+      idx: i, value: g.value, kind: g.kind, axis: g.axis,
+      tags: g.tags.map(t => `${t.cls}:${t.byte2.toString(16).padStart(2,'0')}`),
+      c0: g.c0Assignments,
+    })),
+    trace: warnings._debugTrace || [],
+    isNewFormat,
+  };
+  delete warnings._debugTrace;
+  delete warnings._coordValues;
+  delete warnings._opsWithSep;
+
   return {
     vertices: vertices.map(v => [v[0] || 0, v[1] || 0, v[2] || 0]),
     faces: validFaces,
     warnings,
     nVertsHeader,
-    nFacesHeader
+    nFacesHeader,
+    debugInfo
   };
 }
 
@@ -867,6 +909,82 @@ window.toggleWire = () => { showWire=!showWire; for (const id of ['left','right'
 window.togglePts = () => { showPts=!showPts; for (const id of ['left','right']) if(points[id]) points[id].visible=showPts; };
 window.toggleLabels = () => { showLabels=!showLabels; for (const id of ['left','right']) for (const lb of labels[id]) lb.visible=showLabels; };
 window.resetView = () => { theta=Math.PI/4; phi=Math.PI/3; updateCameras(); };
+window.toggleDebug = () => {
+  const panel = document.getElementById('debug-panel');
+  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+  if (panel.style.display === 'block' && currentOOT && currentOOT.debugInfo) renderDebug(currentOOT);
+};
+
+function renderDebug(result) {
+  const d = result.debugInfo;
+  if (!d) return;
+  const el = document.getElementById('debug-content');
+  const axName = ['X','Y','Z'];
+  let html = '';
+
+  // Coord palette
+  html += '<div style="color:#4ade80;margin-bottom:8px"><b>Coord Palette</b> (unique values from coord section)</div>';
+  html += '<table style="border-collapse:collapse;margin-bottom:12px;width:100%">';
+  html += '<tr style="color:#888"><td>Idx</td><td>Value</td><td>Kind</td><td>Axis</td><td>Tags</td></tr>';
+  for (const g of d.groups.slice(0, 40)) {
+    const ax = g.axis >= 0 && g.axis <= 2 ? axName[g.axis] : '?';
+    const axColor = g.axis===0?'#f88':g.axis===1?'#8f8':g.axis===2?'#88f':'#888';
+    const small = Math.abs(g.value) < 10 && g.idx > 3;
+    html += `<tr style="border-top:1px solid #333;${small?'color:#555':''}">`;
+    html += `<td style="padding:1px 6px">G${g.idx}</td>`;
+    html += `<td style="padding:1px 6px;text-align:right">${g.value.toFixed(2)}</td>`;
+    html += `<td style="padding:1px 6px;color:#aaa">${g.kind}</td>`;
+    html += `<td style="padding:1px 6px;color:${axColor};font-weight:bold">${ax}</td>`;
+    html += `<td style="padding:1px 6px;color:#777;font-size:10px">${g.tags.join(' ')}</td>`;
+    html += '</tr>';
+  }
+  html += '</table>';
+
+  // Vertices
+  html += '<div style="color:#f97316;margin-bottom:8px"><b>Vertices</b> (' + result.vertices.length + ')</div>';
+  html += '<table style="border-collapse:collapse;margin-bottom:12px;width:100%">';
+  html += '<tr style="color:#888"><td>V#</td><td>X</td><td>Y</td><td>Z</td></tr>';
+  for (let i = 0; i < Math.min(result.vertices.length, 50); i++) {
+    const [x,y,z] = result.vertices[i];
+    html += `<tr style="border-top:1px solid #333">`;
+    html += `<td style="padding:1px 6px">V${i}</td>`;
+    html += `<td style="padding:1px 6px;color:#f88;text-align:right">${x.toFixed(1)}</td>`;
+    html += `<td style="padding:1px 6px;color:#8f8;text-align:right">${y.toFixed(1)}</td>`;
+    html += `<td style="padding:1px 6px;color:#88f;text-align:right">${z.toFixed(1)}</td>`;
+    html += '</tr>';
+  }
+  html += '</table>';
+
+  // EdgeBreaker trace
+  if (d.trace.length > 0) {
+    html += '<div style="color:#c084fc;margin-bottom:8px"><b>EdgeBreaker Trace</b> (' + d.trace.length + ' ops)</div>';
+    html += '<table style="border-collapse:collapse;margin-bottom:12px;width:100%">';
+    html += '<tr style="color:#888"><td>Op</td><td>Tag</td><td>Sep</td><td>L</td><td>R</td><td>Prev</td><td>New</td><td>Bnd</td></tr>';
+    for (let i = 0; i < d.trace.length; i++) {
+      const t = d.trace[i];
+      if (t.op === 'FIN') {
+        html += `<tr style="border-top:1px solid #333;color:#555"><td colspan=8>FIN (gate-1)</td></tr>`;
+        continue;
+      }
+      const opColor = t.op==='C'?'#4ade80':t.op==='R'?'#f97316':t.op==='L'?'#60a5fa':t.op==='E'?'#f43f5e':'#888';
+      const sepStr = t.sep !== null ? '0x'+t.sep.toString(16).padStart(2,'0') : '-';
+      const newStr = t.newV !== null ? `<b style="color:#4ade80">V${t.newV}</b>` : '-';
+      html += `<tr style="border-top:1px solid #333">`;
+      html += `<td style="padding:1px 4px;color:${opColor};font-weight:bold">${t.op}</td>`;
+      html += `<td style="padding:1px 4px">40:${t.byte2.toString(16).padStart(2,'0')}</td>`;
+      html += `<td style="padding:1px 4px;color:#777">${sepStr}</td>`;
+      html += `<td style="padding:1px 4px">V${t.L}</td>`;
+      html += `<td style="padding:1px 4px">V${t.R}</td>`;
+      html += `<td style="padding:1px 4px;color:#aaa">V${t.prevBnd}</td>`;
+      html += `<td style="padding:1px 4px">${newStr}</td>`;
+      html += `<td style="padding:1px 4px;color:#555">${t.bndSize}</td>`;
+      html += '</tr>';
+    }
+    html += '</table>';
+  }
+
+  el.innerHTML = html;
+}
 window.exportOBJ = () => {
   if (!currentOOT) return;
   let obj = '# Vulcan .00t export (Z-up)\n';
@@ -921,6 +1039,8 @@ setupDrop('right', file => {
     document.getElementById('rverts').innerHTML = vhtml;
     loadMesh('right', result, 0xf97316);
     console.log('OOT:', result);
+    // Auto-render debug if panel is open
+    if (document.getElementById('debug-panel').style.display !== 'none') renderDebug(result);
   };
   reader.readAsArrayBuffer(file);
 });

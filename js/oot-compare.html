@@ -48,6 +48,7 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
   <button onclick="toggleLabels()">Labels</button>
   <button onclick="resetView()">Reset</button>
   <button onclick="exportOBJ()">Export OOT as OBJ</button>
+  <button onclick="toggleZColor()">Z-Color</button>
   <button onclick="toggleDebug()" style="background:#4a2a2a;border-color:#f66">Debug</button>
 </div>
 <div id="debug-panel" style="display:none;position:fixed;top:40px;right:0;width:50%;height:calc(100%-40px);background:rgba(10,10,30,0.95);z-index:20;overflow-y:auto;font-family:monospace;font-size:11px;padding:12px;color:#ccc">
@@ -762,7 +763,7 @@ let meshes = { left: null, right: null };
 let wires = { left: null, right: null };
 let points = { left: null, right: null };
 let labels = { left: [], right: [] };
-let showWire = false, showPts = false, showLabels = true;
+let showWire = false, showPts = false, showLabels = true, showZLabels = false;
 let theta = Math.PI/4, phi = Math.PI/3, radius = 500;
 let target = new THREE.Vector3();
 let isDragging = false, prevX = 0, prevY = 0;
@@ -859,26 +860,46 @@ function loadMesh(panelId, result, color) {
     s.add(wires[panelId]);
   }
 
-  const pm = new THREE.PointsMaterial({ color: 0xff6666, size: 6, sizeAttenuation: false });
-  points[panelId] = new THREE.Points(geo, pm);
-  points[panelId].visible = true; // always show points
-  s.add(points[panelId]);
-
-  // Auto-fit camera
+  // Color points by axis value (Z=blue gradient, or per-axis coloring)
   geo.computeBoundingBox();
   const box = geo.boundingBox;
   const center = new THREE.Vector3(); box.getCenter(center);
   const size = box.getSize(new THREE.Vector3()).length();
 
-  // Vertex labels (scaled relative to mesh size)
+  // Build per-vertex colors: color by Z value (blue=low, red=high)
+  const colors = new Float32Array(result.vertices.length * 3);
+  let zMin = Infinity, zMax = -Infinity;
+  for (const [x,y,z] of result.vertices) { if (isFinite(z)) { zMin = Math.min(zMin, z); zMax = Math.max(zMax, z); } }
+  const zRange = zMax - zMin || 1;
+  for (let i = 0; i < result.vertices.length; i++) {
+    const z = result.vertices[i][2];
+    const t = (z - zMin) / zRange; // 0=low Z, 1=high Z
+    colors[i*3+0] = t;           // R: high at top
+    colors[i*3+1] = 0.2;         // G: dim
+    colors[i*3+2] = 1.0 - t;     // B: high at bottom
+  }
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+  const pm = new THREE.PointsMaterial({ size: 8, sizeAttenuation: false, vertexColors: true });
+  points[panelId] = new THREE.Points(geo, pm);
+  points[panelId].visible = true;
+  s.add(points[panelId]);
+
+  // Store a flat-color material for toggling
+  points[panelId]._colorMat = pm;
+  points[panelId]._flatMat = new THREE.PointsMaterial({ color: 0xff6666, size: 6, sizeAttenuation: false });
+
+  // Vertex labels with Z value and axis info
   const labelColor = panelId === 'left' ? '#4ade80' : '#fb923c';
   const labelScale = Math.max(size * 0.06, 1);
   for (let i = 0; i < result.vertices.length; i++) {
     const [x,y,z] = result.vertices[i];
     if (!isFinite(x) || !isFinite(y) || !isFinite(z)) continue;
-    const sprite = makeTextSprite(String(i), labelColor);
-    sprite.position.set(x, z + labelScale * 1.2, -y); // Z-up to Y-up, offset above point
-    sprite.scale.set(labelScale * 2, labelScale, 1);
+    // Show index + Z value in label
+    const labelText = showZLabels ? `${i} z=${z.toFixed(0)}` : String(i);
+    const sprite = makeTextSprite(labelText, labelColor);
+    sprite.position.set(x, z + labelScale * 1.2, -y);
+    sprite.scale.set(labelScale * (showZLabels ? 3 : 2), labelScale, 1);
     sprite.visible = showLabels;
     s.add(sprite);
     labels[panelId].push(sprite);
@@ -908,6 +929,35 @@ document.addEventListener('wheel', e => {
 window.toggleWire = () => { showWire=!showWire; for (const id of ['left','right']) if(wires[id]) wires[id].visible=showWire; };
 window.togglePts = () => { showPts=!showPts; for (const id of ['left','right']) if(points[id]) points[id].visible=showPts; };
 window.toggleLabels = () => { showLabels=!showLabels; for (const id of ['left','right']) for (const lb of labels[id]) lb.visible=showLabels; };
+window.toggleZColor = () => {
+  showZLabels = !showZLabels;
+  // Reload meshes to update labels with Z values
+  if (currentOOT) {
+    // Rebuild OOT labels
+    const s = scenes['right'];
+    for (const lb of labels['right']) s.remove(lb);
+    labels['right'] = [];
+    if (currentOOT.vertices.length > 0) {
+      const geo = points['right']?.geometry;
+      if (geo) {
+        geo.computeBoundingBox();
+        const sz = geo.boundingBox.getSize(new THREE.Vector3()).length();
+        const ls = Math.max(sz * 0.06, 1);
+        for (let i = 0; i < currentOOT.vertices.length; i++) {
+          const [x,y,z] = currentOOT.vertices[i];
+          if (!isFinite(x)||!isFinite(y)||!isFinite(z)) continue;
+          const txt = showZLabels ? `${i} z=${z.toFixed(0)}` : String(i);
+          const sp = makeTextSprite(txt, '#fb923c');
+          sp.position.set(x, z + ls * 1.2, -y);
+          sp.scale.set(ls * (showZLabels ? 3 : 2), ls, 1);
+          sp.visible = showLabels;
+          s.add(sp);
+          labels['right'].push(sp);
+        }
+      }
+    }
+  }
+};
 window.resetView = () => { theta=Math.PI/4; phi=Math.PI/3; updateCameras(); };
 window.toggleDebug = () => {
   const panel = document.getElementById('debug-panel');

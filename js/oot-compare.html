@@ -611,7 +611,21 @@ function parseOOT(arrayBuffer) {
               }
             }
           } else {
-            vCoords = [running[0], running[1], running[2]];
+            // No coord value: use boundary ref + Z-select from lo_nib bit3
+            const prevIdx = bnd[((gate - 1) % n + n) % n];
+            const zVals = [...new Set(vertices.map(v => v[2]))].sort((a,b) => a-b);
+            const bZ = zVals[0] || 0, aZ = zVals.length > 1 ? zVals[1] : bZ;
+            const useAltZ = !!(op.lo & 0x8);
+            const targetZ = useAltZ ? aZ : bZ;
+            // Try Prev, R, L — pick first producing unique vertex
+            let bestRef = vertices[L] || running;
+            for (const ri of [prevIdx, R, L]) {
+              const ref = vertices[ri] || running;
+              const cand = [ref[0], ref[1], targetZ];
+              const isDup = vertices.some(v => Math.abs(v[0]-cand[0])<0.1 && Math.abs(v[1]-cand[1])<0.1 && Math.abs(v[2]-cand[2])<0.1);
+              if (!isDup) { bestRef = ref; break; }
+            }
+            vCoords = [bestRef[0], bestRef[1], targetZ];
           }
 
           const vIdx = nv++;

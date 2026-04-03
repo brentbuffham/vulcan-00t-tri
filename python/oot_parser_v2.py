@@ -603,15 +603,18 @@ def parse_oot_v2(filepath: str) -> OotResult:
     if shaded_pos < 0:
         shaded_pos = len(raw)
 
-    # Face section starts at the last "20 00" before SHADED
+    # Face section end: "separator_line" string marks true attribute data start
+    sep_line_pos = raw.find(b'separator_line', ds)
+    face_end = sep_line_pos - 2 if sep_line_pos > 0 else shaded_pos
+
+    # Face section starts at the last "20 00" before face_end
     face_marker = -1
-    for i in range(shaded_pos - 2, coord_start, -1):
+    for i in range(face_end - 2, coord_start, -1):
         if raw[i] == 0x20 and raw[i + 1] == 0x00:
             face_marker = i
             break
 
-    coord_end = face_marker if face_marker > 0 else shaded_pos
-    face_end = shaded_pos
+    coord_end = face_marker if face_marker > 0 else face_end
 
     # ── Parse coordinate section ──
     # Detect format: new format uses Variant/C:... (variant_len > 8)

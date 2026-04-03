@@ -109,11 +109,17 @@
 ---
 
 ### TEST-007: E0 Tag as Axis Encoder
-- **Status:** In Progress
-- **Description:** E0 tags (always hi_nib=0) may encode the axis for the group they follow. E0 lo_nib values observed: 0, 1, 5, 6, 7, E, F.
-- **Process:** TBD — analyze E0 tags across all files, correlate lo_nib with known correct axis.
-- **Findings:** TBD
-- **Conclusion:** TBD
+- **Status:** Unsuccessful — E0 does NOT encode axis
+- **Description:** E0 tags (always hi_nib=0) may encode the axis for the group they follow.
+- **Process:** Analyzed 172 E0 tags across all 13 test files. Built correlation tables: E0 lo_nib vs current axis, next axis, previous axis. Checked transitions.
+- **Findings:**
+  - E0 hi_nib is 0 in 93% of cases (159/172). Non-zero only in mis-parsed face data.
+  - E0:00 (40% of all E0s) appears equally on X(16), Y(11), Z(42). No axis correlation.
+  - E0:07 = "vertex completion" marker — co-occurs with C0 vertex assignment tags
+  - E0:03 (always paired with 20:03) = COORD SECTION TERMINATOR
+  - E0:05/E0:06 on G3 (second Y value) is a Y-continuation signal, but not general axis encoding
+  - No lo_nib value maps cleanly to a single axis
+- **Conclusion:** E0 tags are structural/state markers, NOT axis encoders. E0:00=reset, E0:07=flush, E0:03=terminator.
 
 ---
 
@@ -173,7 +179,15 @@
 ---
 
 ### TEST-010: Per-Axis Prev Tracking (3 separate prev values)
-- **Status:** In Progress (background agent)
+- **Status:** Unsuccessful — single-prev is correct
+- **Description:** Test whether DELTA encoding uses per-axis prev values instead of global single-prev.
+- **Process:** Re-decoded Hexhole and Cube coords with per-axis prev. Compared both methods against DXF expected values.
+- **Findings:**
+  - Hexhole: 3 coords differ, both methods score 11/31 — NO improvement
+  - Cube: 4 coords differ, single-prev is BETTER (6/11 vs 5/11)
+  - Critical: Cube G5 (X=300) uses DELTA byte 0x72. Single-prev from Z=950 gives correct 300.0. Per-axis prev from X=100 gives wrong 288.0.
+  - Differing coords are all small values from face-section data leak — not real coordinates
+- **Conclusion:** Single-global-prev is confirmed correct. Each DELTA uses the immediately preceding coordinate regardless of axis.
 - **Description:** Instead of a single `prev` value for DELTA encoding, maintain separate prev values per axis. Each coord's DELTA would be relative to the last value on the SAME axis, not the last coord overall.
 - **Process:** TBD
 - **Findings:** TBD
@@ -191,8 +205,17 @@
 ---
 
 ### TEST-012: Multi-File Cross-Reference
-- **Status:** Not Started
-- **Description:** Compare tag patterns across files with different axis range configurations. Files where X≠Y ranges (cube, triangle) serve as ground truth. Files where X=Y ranges (hexhole) reveal ambiguous cases. The DIFFERENCE in tag patterns between these cases may reveal the axis encoding.
-- **Process:** TBD
-- **Findings:** TBD
-- **Conclusion:** TBD
+- **Status:** Successful — KEY STRUCTURAL FINDINGS
+- **Description:** Compare tag patterns across working (disjoint axes) vs failing (overlapping axes) files.
+- **Process:** Analyzed tag class distribution by axis across Cube, Triangle, Hexhole, SPHERE. Compared base group tags, primary tags, sequences, and separators.
+- **Findings:**
+  - **Class 60 on G1 is UNIVERSAL Y indicator** — in every file, G1 (Y base) has class 60 as primary tag
+  - **E0:05/E0:06 on G3** = reliable Y-continuation marker (second Y value)
+  - **"E0:00 → C0:2F" pattern is Z-exclusive** in correctly-parsed data
+  - Old format G0=80:15(X), G1=60:08(Y), G2=80:07(Z) — consistent across Triangle/Cube
+  - New format G0=20:00(X), G1=60:xx(Y), G2=E0:00(Z) — consistent across Hexhole/SPHERE
+  - **The SPHERE has 144 "coord groups" when it should have ~50** — confirms face data leak is the ROOT CAUSE
+  - Class 40 tags flood Z groups in SPHERE (89 occurrences) — these are face topology ops being misparsed as coords
+  - "40:2F → 60:17 → C0:2F" sequence is Z-exclusive in SPHERE
+  - No tag class is axis-exclusive in working files
+- **Conclusion:** The fundamental problem is NOT tag-based axis assignment — it is that the coord/face boundary is WRONG for new-format files. Fixing boundary detection would eliminate most axis misassignments. The axis overlap issue (X=Y range) is secondary to the boundary problem.

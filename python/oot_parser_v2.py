@@ -315,7 +315,9 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
 # ══════════════════════════════════════════════════════════════
 
 def parse_face_section(face_region: bytes, n_verts_header: int):
-    """Parse face section and extract topology ops + vertex refs."""
+    """Parse face section and extract topology ops + vertex refs.
+
+    """
     elements = []
     pos = 0
 
@@ -603,16 +605,44 @@ def parse_oot_v2(filepath: str) -> OotResult:
     if shaded_pos < 0:
         shaded_pos = len(raw)
 
-    # Face section end: "separator_line" string marks true attribute data start
+    # Face section end: "separator_line" marks attribute data start (more precise than SHADED)
     sep_line_pos = raw.find(b'separator_line', ds)
     face_end = sep_line_pos - 2 if sep_line_pos > 0 else shaded_pos
 
-    # Face section starts at the last "20 00" before face_end
+    # Detect format early for boundary logic
+    is_new_format = variant_len > 8
+
+    # Face section boundary detection differs by format:
     face_marker = -1
-    for i in range(face_end - 2, coord_start, -1):
-        if raw[i] == 0x20 and raw[i + 1] == 0x00:
-            face_marker = i
-            break
+    if is_new_format:
+        # New format: coord section ends with E0:03 terminator pattern.
+        # Find the first "20 00" that follows an E0:03, which marks face start.
+        # E0:03 = [0xE0, 0x03] appears at the coord/face boundary.
+        first_e003 = -1
+        for i in range(coord_start + 10, face_end - 1):
+            if raw[i] == 0xE0 and raw[i + 1] == 0x03:
+                first_e003 = i
+                break
+        if first_e003 > 0:
+            # Search for first "20 00" after the E0:03 terminator region
+            for i in range(first_e003, face_end - 1):
+                if raw[i] == 0x20 and raw[i + 1] == 0x00:
+                    # Verify it's a face section start (followed by 40:xx topology tag)
+                    if i + 2 < face_end and (raw[i + 2] & 0xE0) == 0x40:
+                        face_marker = i
+                        break
+        # Fallback: last "20 00" before face_end
+        if face_marker < 0:
+            for i in range(face_end - 2, coord_start, -1):
+                if raw[i] == 0x20 and raw[i + 1] == 0x00:
+                    face_marker = i
+                    break
+    else:
+        # Old format: last "20 00" before face_end (proven to work)
+        for i in range(face_end - 2, coord_start, -1):
+            if raw[i] == 0x20 and raw[i + 1] == 0x00:
+                face_marker = i
+                break
 
     coord_end = face_marker if face_marker > 0 else face_end
 

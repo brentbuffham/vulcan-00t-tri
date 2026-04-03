@@ -56,6 +56,9 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
     elements = []
     prev = [0] * 8
     pos = 0
+    # Dynamic IDELTA threshold: after seeing first 3 FULL values, set to 3× max
+    full_values = []
+    idelta_threshold = 10000  # default until we have base values
 
     while pos < len(region):
         b = region[pos]
@@ -83,6 +86,12 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
             if stored[0] in (0x40, 0x41, 0xC0, 0xC1):
                 r = stored + [0] * (8 - nb)
                 kind = 'FULL'
+                # Track FULL values for dynamic threshold
+                fv = read_be_double(bytes((r + [0] * 8)[:8]))
+                if abs(fv) > 1:
+                    full_values.append(abs(fv))
+                    if len(full_values) == 3:
+                        idelta_threshold = max(full_values) * 3
             else:
                 if new_format:
                     # New format: zero out trailing bytes
@@ -93,11 +102,10 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
                 kind = 'DELTA'
                 if new_format and kind == 'DELTA':
                     # Check if standard DELTA produced an unreasonable value.
-                    # When the result is clearly garbage (>50000), stored bytes may
-                    # represent a signed integer delta on the IEEE 754 representation.
+                    # Use dynamic threshold based on first 3 FULL values (base coords).
                     test_r = (r + [0] * 8)[:8]
                     test_val = read_be_double(bytes(test_r))
-                    if abs(test_val) > 10000:
+                    if abs(test_val) > idelta_threshold:
                         # Signed integer delta: treat stored as signed big-endian
                         # offset applied to prev's IEEE 754 integer representation
                         prev_int = struct.unpack('>Q', bytes(prev))[0]

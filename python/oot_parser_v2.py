@@ -659,16 +659,31 @@ def decode_faces_and_vertices(face_elements, initial_tri, n_verts, coord_values,
                 op_type = 'E'
 
         if op_type == 'C' and c_ops_remaining > 0:
-            # BUILD VERTEX: take L's coords, replace one axis with next coord value
+            # BUILD VERTEX from boundary vertex + coord value
+            # Try both L and R as reference — pick the one where the coord
+            # value replaces exactly one axis with the smallest change
             if coord_idx < len(coord_values):
                 val = coord_values[coord_idx]
                 coord_idx += 1
-                ref = vertices[L] if L < len(vertices) else running
-                # Replace the axis where val is closest to ref
-                deltas = [abs(val - ref[ax]) for ax in range(3)]
-                best_ax = deltas.index(min(deltas))
-                v_coords = list(ref)
-                v_coords[best_ax] = val
+
+                # Try both L and R as reference, try all 3 axes for each
+                # Score: for each (ref, axis) combo, the OTHER 2 axes should
+                # be CLOSE to the reference (they're copied). The replaced axis
+                # can differ by any amount. So pick the combo where the replaced
+                # axis accounts for the MOST difference.
+                best_score = -1
+                v_coords = list(vertices[L] if L < len(vertices) else running)
+                for ref_idx in (L, R):
+                    ref = vertices[ref_idx] if ref_idx < len(vertices) else running
+                    for ax in range(3):
+                        v = list(ref)
+                        v[ax] = val
+                        # Score: how close is val to ref[ax]? Smaller = better
+                        # (means this axis had a small change = likely correct)
+                        score = abs(val - ref[ax])
+                        if best_score < 0 or score < best_score:
+                            best_score = score
+                            v_coords = v
             else:
                 v_coords = list(running)
 

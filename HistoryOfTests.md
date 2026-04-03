@@ -204,6 +204,23 @@
 
 ---
 
+### TEST-014: EdgeBreaker-Coupled Vertex Builder — Axis Selection Variants
+- **Status:** In Progress
+- **Description:** The coupled vertex builder creates vertices during C operations by taking boundary vertex L's coords and replacing one axis with the next coord value. Testing which axis selection heuristic works best.
+- **Process:** Tested 4 variants on all files:
+  - A) L-only, min-delta (replace axis closest to coord value): Cube 8/8 ✓, Hexhole 5/12, SPHERE 4/50
+  - B) L+R, min-delta (try both boundary verts, pick smallest delta): Cube 8/8, Hexhole 6/12 (+1), SPHERE 2/50 (-2)
+  - C) L+R, all-axes, min-delta (brute 6 combos): Cube 8/8, Hexhole 6/12, SPHERE 2/50 (same as B)
+  - D) L+R, all-axes, max-delta (replace axis with LARGEST delta): Cube 3/8 ✗, everything worse
+- **Findings:**
+  - Min-delta (closest to ref) is correct for non-overlapping ranges (cube 8/8)
+  - Neither min nor max delta solves overlapping X/Y ranges (SPHERE/Hexhole)
+  - Using R as reference sometimes helps (Hexhole +1) but hurts elsewhere
+  - The axis information MUST come from somewhere other than value proximity
+- **Conclusion:** Value-proximity heuristics hit a ceiling. The axis is likely encoded in the topology tags (byte2 hi/lo) or in the E0 state markers that precede each operation. Next: test parallelogram prediction and tag-encoded axis.
+
+---
+
 ### TEST-012: Multi-File Cross-Reference
 - **Status:** Successful — KEY STRUCTURAL FINDINGS
 - **Description:** Compare tag patterns across working (disjoint axes) vs failing (overlapping axes) files.

@@ -457,77 +457,106 @@ class EdgeBreakerDecoder:
             self.g = (self.g + offset) % len(self.bnd)
 
 
-def decode_faces_simple(topology_ops, initial_tri):
-    """Decode faces using the group-based C/C/finalizer pattern.
+def decode_faces_separator(face_elements, topology_ops, initial_tri, n_verts):
+    """Decode faces using separator-based operation detection.
 
-    For open meshes (strips, fans, planes):
-    - Groups of 3 ops: C, C_or_R, finalizer(gate -1)
-    - Back-reference groups: C, R, finalizer
-    - Closing group: single E/L/R op
-
-    This is the simple deterministic decoder for strip/fan topologies.
+    The separator byte BEFORE each topology op determines the operation:
+    - SEP 0x2F, 0x17, 0x3F, 0x27, 0x0F, 0xDF → C (create new vertex)
+    - SEP 0x5F, 0x87 → R (reuse right neighbor)
+    - No separator → context-dependent:
+      - After C → R
+      - After R → L
+      - After L → E (if boundary=3) or L
+      - First no-sep op → C
+    - 0x1B byte2 → finalizer (gate advance -1)
     """
     dec = EdgeBreakerDecoder(initial_tri)
 
-    # Filter to just 40/C0 class ops (skip E0, E1, 20 class)
-    ops = [o for o in topology_ops if o['cls'] in ('40', 'C0')]
+    # Build separator context for each topology op
+    # Walk through all face elements and track the last separator before each topo op
+    last_sep = None
+    ops_with_sep = []
+    for el in face_elements:
+        if el[0] == 'SEP':
+            last_sep = el[1]
+        elif el[0] == 'TAG' and el[1] in ('40', 'C0', 'E1'):
+            ops_with_sep.append({
+                'cls': el[1], 'byte2': el[2],
+                'lo': el[3], 'hi': el[4],
+                'sep': last_sep,
+            })
+            last_sep = None  # consumed
 
-    if not ops:
+    if not ops_with_sep:
         return dec.faces
 
-    # Skip the first op if it's the initial face metadata tag
-    # (it appears before vertex data in the face section)
-    start = 0
-    # Check if first op is before any vertex data — heuristic
-    if len(ops) > 1:
-        start = 0  # include all for now
+    # Expected number of C operations
+    c_ops_remaining = max(n_verts - len(initial_tri), 0)
+    last_op = None
 
-    i = start
-    while i < len(ops):
-        op = ops[i]
+    for oi, op in enumerate(ops_with_sep):
+        if not dec.bnd:
+            break
 
-        # Is this a finalizer? (lo=B, hi=1 with tag 40:1B)
+        # Finalizer: gate advance -1
         if op['byte2'] == 0x1B:
             dec.gate_advance(-1)
-            i += 1
             continue
 
-        # Single remaining op at end = closing (E)
-        if i == len(ops) - 1:
-            dec.E()
-            i += 1
-            continue
+        sep = op['sep']
+        n = len(dec.bnd)
 
-        # Check if next op is a finalizer (lookahead)
-        next_op = ops[i + 1] if i + 1 < len(ops) else None
-        next_is_fin = next_op and next_op['byte2'] == 0x1B
-
-        if next_is_fin:
-            # Single op before finalizer = C
-            dec.C()
-            i += 1
-            continue
-
-        # Two ops before finalizer (or end) = C + C or C + R
-        next_next = ops[i + 2] if i + 2 < len(ops) else None
-        next_next_is_fin = next_next and next_next['byte2'] == 0x1B
-
-        if next_next_is_fin:
-            # Pair of ops: first is C, second is C or R
-            dec.C()
-            i += 1
-            # Second op: C if we still have new vertices to create, R otherwise
-            # Heuristic: if boundary is growing, C. If it's time to close, R.
-            if len(dec.bnd) < 8:  # simple heuristic
-                dec.C()
+        if sep is not None:
+            # Separator determines operation
+            if sep in (0x5F, 0x87):
+                # Large separators → R
+                if n >= 4:
+                    dec.R()
+                    last_op = 'R'
             else:
-                dec.R()
-            i += 1
-            continue
-
-        # Default: treat as C
-        dec.C()
-        i += 1
+                # All other separators → C
+                if c_ops_remaining > 0:
+                    dec.C()
+                    c_ops_remaining -= 1
+                    last_op = 'C'
+                elif n >= 4:
+                    dec.R()
+                    last_op = 'R'
+                else:
+                    dec.E()
+                    last_op = 'E'
+        else:
+            # No separator: context-dependent
+            if last_op is None or last_op == 'E':
+                # First op or after E → C
+                if c_ops_remaining > 0:
+                    dec.C()
+                    c_ops_remaining -= 1
+                    last_op = 'C'
+                else:
+                    dec.E()
+                    last_op = 'E'
+            elif last_op == 'C':
+                if n >= 4:
+                    dec.R()
+                    last_op = 'R'
+                else:
+                    dec.E()
+                    last_op = 'E'
+            elif last_op == 'R':
+                if n >= 4:
+                    dec.L()
+                    last_op = 'L'
+                elif n == 3:
+                    dec.E()
+                    last_op = 'E'
+            elif last_op == 'L':
+                if n == 3:
+                    dec.E()
+                    last_op = 'E'
+                elif n >= 4:
+                    dec.L()
+                    last_op = 'L'
 
     return dec.faces
 
@@ -670,14 +699,46 @@ def parse_oot_v2(filepath: str) -> OotResult:
             face_region, result.n_verts_header
         )
 
+        # Re-parse face elements for separator context (needed by new decoder)
+        face_elements = []
+        fpos = 0
+        while fpos < len(face_region):
+            fb = face_region[fpos]
+            if fb <= 0x06:
+                fnb = fb + 1
+                if fpos + 1 + fnb > len(face_region):
+                    break
+                dv = face_region[fpos + 1] if fnb == 1 else int.from_bytes(
+                    face_region[fpos + 1:fpos + 1 + fnb], 'big')
+                face_elements.append(('DATA', dv, fpos))
+                fpos += 1 + fnb
+            elif is_separator(fb):
+                face_elements.append(('SEP', fb, fpos))
+                fpos += 1
+            elif fpos + 1 < len(face_region):
+                fb2 = face_region[fpos + 1]
+                hi_cls = fb & 0xE0
+                cls = {0x20: '20', 0x40: '40', 0xC0: 'C0', 0xE0: 'E0'}.get(
+                    hi_cls, '{:02X}'.format(fb))
+                if fb == 0xE1:
+                    cls = 'E1'
+                lo = fb2 & 0x0F
+                hi = (fb2 >> 4) & 0x0F
+                face_elements.append(('TAG', cls, fb2, lo, hi, fpos))
+                fpos += 2
+            else:
+                break
+
         # Determine initial triangle
         if len(initial_verts) >= 3:
             init_tri = tuple(v - 1 for v in initial_verts[:3])  # 1-based to 0-based
         else:
             init_tri = (0, 1, 2)  # implicit
 
-        # Decode faces
-        faces = decode_faces_simple(topology_ops, init_tri)
+        # Decode faces using separator-based operation detection
+        faces = decode_faces_separator(
+            face_elements, topology_ops, init_tri, result.n_verts_header
+        )
         result.faces = faces
 
     result.success = len(result.vertices) > 0

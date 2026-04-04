@@ -43,6 +43,7 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
 <body>
 
 <div id="controls">
+  <button onclick="toggleFaces()">Faces</button>
   <button onclick="toggleWire()">Wireframe</button>
   <button onclick="togglePts()">Points</button>
   <button onclick="toggleLabels()">Labels</button>
@@ -654,7 +655,7 @@ let meshes = { left: null, right: null };
 let wires = { left: null, right: null };
 let points = { left: null, right: null };
 let labels = { left: [], right: [] };
-let showWire = false, showPts = false, showLabels = true, showZLabels = false;
+let showWire = false, showPts = false, showLabels = true, showZLabels = false, showFaces = true;
 let theta = Math.PI/4, phi = Math.PI/3, radius = 500;
 let target = new THREE.Vector3();
 let isDragging = false, prevX = 0, prevY = 0;
@@ -817,6 +818,7 @@ document.addEventListener('wheel', e => {
 });
 
 // Controls
+window.toggleFaces = () => { showFaces=!showFaces; for (const id of ['left','right']) if(meshes[id]) meshes[id].visible=showFaces; };
 window.toggleWire = () => { showWire=!showWire; for (const id of ['left','right']) if(wires[id]) wires[id].visible=showWire; };
 window.togglePts = () => { showPts=!showPts; for (const id of ['left','right']) if(points[id]) points[id].visible=showPts; };
 window.toggleLabels = () => { showLabels=!showLabels; for (const id of ['left','right']) for (const lb of labels[id]) lb.visible=showLabels; };

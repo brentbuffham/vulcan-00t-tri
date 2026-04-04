@@ -552,13 +552,14 @@ function parseOOT(arrayBuffer) {
     }
 
     // ── Separator-based EdgeBreaker face decoder ──
-    let lastSep2 = null;
+    let lastSep2 = null, lastE0 = null;
     const opsWithSep = [];
     for (const el of faceElements) {
       if (el.type === 'SEP') { lastSep2 = el.value; }
+      else if (el.type === 'TAG' && el.cls === 'E0') { lastE0 = el.byte2; }
       else if (el.type === 'TAG' && (el.cls === '40' || el.cls === 'C0' || el.cls === 'E1')) {
-        opsWithSep.push({ cls: el.cls, byte2: el.byte2, lo: el.lo, hi: el.hi, sep: lastSep2 });
-        lastSep2 = null;
+        opsWithSep.push({ cls: el.cls, byte2: el.byte2, lo: el.lo, hi: el.hi, sep: lastSep2, e0Before: lastE0 });
+        lastSep2 = null; lastE0 = null;
       }
     }
 
@@ -585,8 +586,16 @@ function parseOOT(arrayBuffer) {
       const sep = op.sep;
       let opType = '?';
 
+      // E1 class = always C
+      if (op.cls === 'E1') {
+        if (cOpsRemaining > 0) { ebC(); cOpsRemaining--; opType = 'C'; lastOp = 'C'; }
+        debugTrace.push({op:opType,byte2:op.byte2,hi:op.hi,lo:op.lo,sep:op.sep,L,R,prevBnd:prevOnBnd,bndSize:n,newV:opType==='C'?nv-1:null});
+        continue;
+      }
+
       if (sep !== null) {
         if (sep === 0x5F || sep === 0x87) opType = 'R';
+        else if (sep === 0x17 && op.e0Before === 0x07) opType = 'R'; // 0x17 after E0:07 = R
         else opType = cOpsRemaining > 0 ? 'C' : (n >= 4 ? 'R' : 'E');
       } else {
         if (lastOp === null || lastOp === 'E') opType = cOpsRemaining > 0 ? 'C' : 'E';

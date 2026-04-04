@@ -481,19 +481,24 @@ def decode_faces_separator(face_elements, topology_ops, initial_tri, n_verts):
     dec = EdgeBreakerDecoder(initial_tri)
 
     # Build separator context for each topology op
-    # Walk through all face elements and track the last separator before each topo op
+    # Track last separator AND last E0 tag before each topo op
     last_sep = None
+    last_e0 = None
     ops_with_sep = []
     for el in face_elements:
         if el[0] == 'SEP':
             last_sep = el[1]
+        elif el[0] == 'TAG' and el[1] == 'E0':
+            last_e0 = el[2]  # E0 byte2
         elif el[0] == 'TAG' and el[1] in ('40', 'C0', 'E1'):
             ops_with_sep.append({
                 'cls': el[1], 'byte2': el[2],
                 'lo': el[3], 'hi': el[4],
                 'sep': last_sep,
+                'e0_before': last_e0,
             })
-            last_sep = None  # consumed
+            last_sep = None
+            last_e0 = None
 
     if not ops_with_sep:
         return dec.faces
@@ -512,7 +517,16 @@ def decode_faces_separator(face_elements, topology_ops, initial_tri, n_verts):
             continue
 
         sep = op['sep']
+        e0_before = op.get('e0_before')
         n = len(dec.bnd)
+
+        # E1 class tags are ALWAYS C operations
+        if op['cls'] == 'E1':
+            if c_ops_remaining > 0:
+                dec.C()
+                c_ops_remaining -= 1
+                last_op = 'C'
+            continue
 
         if sep is not None:
             # Separator determines operation
@@ -521,8 +535,13 @@ def decode_faces_separator(face_elements, topology_ops, initial_tri, n_verts):
                 if n >= 4:
                     dec.R()
                     last_op = 'R'
+            elif sep == 0x17 and e0_before == 0x07:
+                # sep 0x17 after E0:07 → R (not C)
+                if n >= 4:
+                    dec.R()
+                    last_op = 'R'
             else:
-                # All other separators → C
+                # Other separators (0x2F, 0x3F, 0x27, etc.) → C
                 if c_ops_remaining > 0:
                     dec.C()
                     c_ops_remaining -= 1

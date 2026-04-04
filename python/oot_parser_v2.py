@@ -920,33 +920,15 @@ def parse_oot_v2(filepath: str) -> OotResult:
         else:
             init_tri = (0, 1, 2)
 
-        # Trim coord values: exclude face section data that leaked in
-        # Stop at first negative value (when base positive) or first very small value
-        base_vals = [groups[i].value for i in range(min(3, len(groups)))]
-        base_min = min(abs(v) for v in base_vals) if base_vals else 1
-        base_positive = all(v >= 0 for v in base_vals)
-        trimmed_coords = list(result.coord_values)
-        for ci in range(3, len(trimmed_coords)):
-            v = trimmed_coords[ci]
-            if base_positive and v < 0:
-                trimmed_coords = trimmed_coords[:ci]
-                break
-            if base_min > 10 and abs(v) < base_min / 20:
-                trimmed_coords = trimmed_coords[:ci]
-                break
-
-        # Use EdgeBreaker-coupled vertex builder: faces + vertices built together
-        # Each C operation creates a vertex from boundary vertex L + coord value
-        vertices, faces = decode_faces_and_vertices(
-            face_elements, init_tri, result.n_verts_header,
-            trimmed_coords, base_vals if len(base_vals) >= 3 else [0, 0, 0]
+        # Decode faces using separator-based operation detection
+        faces = decode_faces_separator(
+            face_elements, topology_ops, init_tri, result.n_verts_header
         )
-        result.vertices = [(v[0], v[1], v[2]) for v in vertices]
         result.faces = faces
-    else:
-        # No face section — fall back to old vertex builder
-        vertices = build_vertex_table(groups, n_faces=result.n_faces_header)
-        result.vertices = [(v[0], v[1], v[2]) for v in vertices if v[0] is not None]
+
+    # Build vertex table (separate from face decode — proven to work for cube 8/8)
+    vertices = build_vertex_table(groups, n_faces=result.n_faces_header)
+    result.vertices = [(v[0], v[1], v[2]) for v in vertices if v[0] is not None]
 
     result.success = len(result.vertices) > 0
     return result

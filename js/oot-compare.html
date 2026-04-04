@@ -428,19 +428,44 @@ function parseOOT(arrayBuffer) {
     }
   }
 
-  // ── 10. Trim coord values (exclude face data leakage) ──
-  const baseVals = trimmedGroups.length >= 3 ? [trimmedGroups[0].value, trimmedGroups[1].value, trimmedGroups[2].value] : [0,0,0];
-  const baseMin = Math.min(...baseVals.map(Math.abs).filter(v => v > 0)) || 1;
-  const basePositive = baseVals.every(v => v >= 0);
-  let trimmedCoords = coordValues.slice();
-  for (let ci = 3; ci < trimmedCoords.length; ci++) {
-    const v = trimmedCoords[ci];
-    if (basePositive && v < 0) { trimmedCoords = trimmedCoords.slice(0, ci); break; }
-    if (baseMin > 10 && Math.abs(v) < baseMin / 20) { trimmedCoords = trimmedCoords.slice(0, ci); break; }
-  }
-
-  // Vertices will be built during face decoding (coupled builder)
+  // ── 10. Build vertex table (slot accumulator — proven for cube 8/8) ──
   const vertices = [];
+
+  if (trimmedGroups.length >= 3) {
+    const base = [trimmedGroups[0].value, trimmedGroups[1].value, trimmedGroups[2].value];
+    const zValues = [];
+    for (const g of trimmedGroups) {
+      if (g.axis === 2 && Math.abs(g.value) > 1 && !zValues.includes(g.value)) zValues.push(g.value);
+    }
+    const baseZ = zValues[0] || base[2], altZ = zValues.length > 1 ? zValues[1] : baseZ;
+    const maxVerts = nFacesHeader > 0 ? Math.max(nFacesHeader + 2, 3) : 100;
+    const slotState = {};
+    vertices.push([base[0], base[1], base[2]]);
+    const running = [...base];
+
+    for (let i = 3; i < trimmedGroups.length; i++) {
+      const g = trimmedGroups[i];
+      const ax = g.axis;
+      if (ax < 0 || ax > 2) continue;
+      if (vertices.length >= maxVerts) break;
+      running[ax] = g.value;
+      if (g.c0Assignments.length > 0) {
+        for (const [slotVi, lo] of g.c0Assignments) {
+          if (vertices.length >= maxVerts) break;
+          if (!slotState[slotVi]) slotState[slotVi] = {};
+          slotState[slotVi][ax] = g.value;
+          const vx = slotState[slotVi][0] !== undefined ? slotState[slotVi][0] : base[0];
+          const vy = slotState[slotVi][1] !== undefined ? slotState[slotVi][1] : base[1];
+          let vz = slotState[slotVi][2] !== undefined ? slotState[slotVi][2] : base[2];
+          if (lo === 0x7) vz = baseZ;
+          else if (lo === 0xF) vz = altZ;
+          vertices.push([vx, vy, vz]);
+        }
+      } else {
+        vertices.push([running[0], running[1], running[2]]);
+      }
+    }
+  }
 
   // ── 11. Face decoder (EdgeBreaker) ──
   const faces = [];
@@ -526,152 +551,58 @@ function parseOOT(arrayBuffer) {
       initTri = [0, 1, 2];
     }
 
-    // ── Coupled EdgeBreaker: build vertices AND faces together ──
-    // V0 = base, V1/V2 from running state
-    if (trimmedCoords.length >= 3) {
-      vertices.push([trimmedCoords[0], trimmedCoords[1], trimmedCoords[2]]);
-      const running = [trimmedCoords[0], trimmedCoords[1], trimmedCoords[2]];
-      let coordIdx = 3;
-      for (let vi = 1; vi < Math.min(3, nVertsHeader); vi++) {
-        if (coordIdx < trimmedCoords.length) {
-          const val = trimmedCoords[coordIdx++];
-          const deltas = [Math.abs(val-running[0]), Math.abs(val-running[1]), Math.abs(val-running[2])];
-          const bestAx = deltas.indexOf(Math.min(...deltas));
-          running[bestAx] = val;
-          vertices.push([running[0], running[1], running[2]]);
-        }
+    // ── Separator-based EdgeBreaker face decoder ──
+    let lastSep2 = null;
+    const opsWithSep = [];
+    for (const el of faceElements) {
+      if (el.type === 'SEP') { lastSep2 = el.value; }
+      else if (el.type === 'TAG' && (el.cls === '40' || el.cls === 'C0' || el.cls === 'E1')) {
+        opsWithSep.push({ cls: el.cls, byte2: el.byte2, lo: el.lo, hi: el.hi, sep: lastSep2 });
+        lastSep2 = null;
       }
-
-      // Build separator context
-      let lastSep2 = null;
-      const opsWithSep = [];
-      for (const el of faceElements) {
-        if (el.type === 'SEP') { lastSep2 = el.value; }
-        else if (el.type === 'TAG' && (el.cls === '40' || el.cls === 'C0' || el.cls === 'E1')) {
-          opsWithSep.push({ cls: el.cls, byte2: el.byte2, lo: el.lo, hi: el.hi, sep: lastSep2 });
-          lastSep2 = null;
-        }
-      }
-
-      // EdgeBreaker state
-      faces.push(initTri.slice());
-      let bnd = initTri.slice();
-      let gate = 1;
-      let nv = vertices.length;
-      let cOpsRemaining = Math.max(nVertsHeader - vertices.length, 0);
-      let lastOp = null;
-      const debugTrace = [];
-
-      for (const op of opsWithSep) {
-        if (!bnd.length) break;
-        if (op.byte2 === 0x1B) {
-          gate = ((gate - 1) % bnd.length + bnd.length) % bnd.length;
-          debugTrace.push({op:'FIN',byte2:op.byte2,sep:op.sep});
-          continue;
-        }
-
-        const n = bnd.length;
-        if (n < 3) break;
-        const li = gate % n;
-        const ri = (gate + 1) % n;
-        const L = bnd[li], R = bnd[ri];
-        const prevOnBnd = bnd[((gate - 1) % n + n) % n];
-        const sep = op.sep;
-        let opType = '?';
-
-        // Determine operation from separator
-        if (sep !== null) {
-          if (sep === 0x5F || sep === 0x87) opType = 'R';
-          else opType = cOpsRemaining > 0 ? 'C' : (n >= 4 ? 'R' : 'E');
-        } else {
-          if (lastOp === null || lastOp === 'E') opType = cOpsRemaining > 0 ? 'C' : 'E';
-          else if (lastOp === 'C') opType = n >= 4 ? 'R' : 'E';
-          else if (lastOp === 'R') opType = n >= 4 ? 'L' : 'E';
-          else if (lastOp === 'L') opType = n === 3 ? 'E' : 'L';
-          else opType = 'E';
-        }
-
-        if (opType === 'C' && cOpsRemaining > 0) {
-          // BUILD VERTEX from boundary + coord value
-          let vCoords;
-          if (coordIdx < trimmedCoords.length) {
-            const val = trimmedCoords[coordIdx++];
-            // Try both L and R, pick smallest delta
-            let bestScore = -1;
-            vCoords = [running[0], running[1], running[2]];
-            for (const refIdx of [L, R]) {
-              const ref = refIdx < vertices.length ? vertices[refIdx] : running;
-              for (let ax = 0; ax < 3; ax++) {
-                const score = Math.abs(val - ref[ax]);
-                if (bestScore < 0 || score < bestScore) {
-                  bestScore = score;
-                  vCoords = [ref[0], ref[1], ref[2]];
-                  vCoords[ax] = val;
-                }
-              }
-            }
-          } else {
-            // No coord value: use boundary ref + Z-select from lo_nib bit3
-            const prevIdx = bnd[((gate - 1) % n + n) % n];
-            const zVals = [...new Set(vertices.map(v => v[2]))].sort((a,b) => a-b);
-            const bZ = zVals[0] || 0, aZ = zVals.length > 1 ? zVals[1] : bZ;
-            const useAltZ = !!(op.lo & 0x8);
-            const targetZ = useAltZ ? aZ : bZ;
-            // Try Prev, R, L — pick first producing unique vertex
-            let bestRef = vertices[L] || running;
-            for (const ri of [prevIdx, R, L]) {
-              const ref = vertices[ri] || running;
-              const cand = [ref[0], ref[1], targetZ];
-              const isDup = vertices.some(v => Math.abs(v[0]-cand[0])<0.1 && Math.abs(v[1]-cand[1])<0.1 && Math.abs(v[2]-cand[2])<0.1);
-              if (!isDup) { bestRef = ref; break; }
-            }
-            vCoords = [bestRef[0], bestRef[1], targetZ];
-          }
-
-          const vIdx = nv++;
-          cOpsRemaining--;
-          vertices.push(vCoords);
-          for (let i = 0; i < 3; i++) running[i] = vCoords[i];
-
-          faces.push([L, R, vIdx]);
-          bnd.splice(li + 1, 0, vIdx);
-          gate = li + 1;
-          lastOp = 'C';
-          debugTrace.push({op:'C',byte2:op.byte2,hi:op.hi,lo:op.lo,sep:op.sep,L,R,prevBnd:prevOnBnd,bndSize:n,newV:vIdx});
-
-        } else if (opType === 'R' && n >= 4) {
-          const fr = bnd[(gate + 2) % n];
-          faces.push([L, R, fr]);
-          bnd.splice(ri, 1);
-          if (gate >= bnd.length) gate = gate % bnd.length;
-          lastOp = 'R';
-          debugTrace.push({op:'R',byte2:op.byte2,hi:op.hi,lo:op.lo,sep:op.sep,L,R,prevBnd:prevOnBnd,bndSize:n,newV:null});
-
-        } else if (opType === 'L' && n >= 4) {
-          const fl = bnd[((gate - 1) % n + n) % n];
-          faces.push([fl, L, R]);
-          bnd.splice(li, 1);
-          gate = ((li - 1) % bnd.length + bnd.length) % bnd.length;
-          lastOp = 'L';
-          debugTrace.push({op:'L',byte2:op.byte2,hi:op.hi,lo:op.lo,sep:op.sep,L,R,prevBnd:prevOnBnd,bndSize:n,newV:null});
-
-        } else if (opType === 'E') {
-          if (n === 3) {
-            faces.push([bnd[0], bnd[1], bnd[2]]);
-            bnd = [];
-          } else if (n >= 4) {
-            const fl = bnd[((gate - 1) % n + n) % n];
-            faces.push([fl, L, R]);
-            bnd.splice(li, 1);
-            gate = ((li - 1) % bnd.length + bnd.length) % bnd.length;
-          }
-          lastOp = 'E';
-          debugTrace.push({op:'E',byte2:op.byte2,hi:op.hi,lo:op.lo,sep:op.sep,L,R,prevBnd:prevOnBnd,bndSize:n,newV:null});
-        }
-      }
-
-      warnings._debugTrace = debugTrace;
     }
+
+    faces.push(initTri.slice());
+    let bnd = initTri.slice();
+    let gate = 1;
+    let nv = Math.max(...initTri) + 1;
+    let cOpsRemaining = Math.max(nVertsHeader - 3, 0);
+    let lastOp = null;
+    const debugTrace = [];
+
+    function ebC() { const n=bnd.length; if(n<3)return; const li=gate%n; const v=nv++; faces.push([bnd[li],bnd[(gate+1)%n],v]); bnd.splice(li+1,0,v); gate=li+1; }
+    function ebR() { const n=bnd.length; if(n<4)return; const ri=(gate+1)%n; faces.push([bnd[gate%n],bnd[ri],bnd[(gate+2)%n]]); bnd.splice(ri,1); if(gate>=bnd.length)gate%=bnd.length; }
+    function ebL() { const n=bnd.length; if(n<4)return; const li=gate%n; const fl=bnd[((gate-1)%n+n)%n]; faces.push([fl,bnd[li],bnd[(gate+1)%n]]); bnd.splice(li,1); gate=((li-1)%bnd.length+bnd.length)%bnd.length; }
+    function ebE() { const n=bnd.length; if(n===3){faces.push([bnd[0],bnd[1],bnd[2]]);bnd=[];} else if(n>=4){const li=gate%n;const fl=bnd[((gate-1)%n+n)%n];faces.push([fl,bnd[li],bnd[(gate+1)%n]]);bnd.splice(li,1);gate=((li-1)%bnd.length+bnd.length)%bnd.length;} }
+
+    for (const op of opsWithSep) {
+      if (!bnd.length) break;
+      if (op.byte2 === 0x1B) { gate=((gate-1)%bnd.length+bnd.length)%bnd.length; debugTrace.push({op:'FIN',byte2:op.byte2,sep:op.sep}); continue; }
+      const n = bnd.length;
+      if (n < 3) break;
+      const li=gate%n, ri=(gate+1)%n;
+      const L=bnd[li], R=bnd[ri], prevOnBnd=bnd[((gate-1)%n+n)%n];
+      const sep = op.sep;
+      let opType = '?';
+
+      if (sep !== null) {
+        if (sep === 0x5F || sep === 0x87) opType = 'R';
+        else opType = cOpsRemaining > 0 ? 'C' : (n >= 4 ? 'R' : 'E');
+      } else {
+        if (lastOp === null || lastOp === 'E') opType = cOpsRemaining > 0 ? 'C' : 'E';
+        else if (lastOp === 'C') opType = n >= 4 ? 'R' : 'E';
+        else if (lastOp === 'R') opType = n >= 4 ? 'L' : 'E';
+        else if (lastOp === 'L') opType = n === 3 ? 'E' : 'L';
+        else opType = 'E';
+      }
+
+      if (opType === 'C' && cOpsRemaining > 0) { ebC(); cOpsRemaining--; lastOp='C'; }
+      else if (opType === 'R' && n >= 4) { ebR(); lastOp='R'; }
+      else if (opType === 'L' && n >= 4) { ebL(); lastOp='L'; }
+      else if (opType === 'E') { ebE(); lastOp='E'; }
+      debugTrace.push({op:opType,byte2:op.byte2,hi:op.hi,lo:op.lo,sep:op.sep,L,R,prevBnd:prevOnBnd,bndSize:n,newV:opType==='C'?nv-1:null});
+    }
+    warnings._debugTrace = debugTrace;
   }
 
   // Filter out faces referencing non-existent vertices
@@ -697,7 +628,7 @@ function parseOOT(arrayBuffer) {
   delete warnings._opsWithSep;
 
   return {
-    vertices: vertices.slice(0, nVertsHeader || vertices.length).map(v => [v[0] || 0, v[1] || 0, v[2] || 0]),
+    vertices: vertices.map(v => [v[0] || 0, v[1] || 0, v[2] || 0]),
     faces: validFaces,
     warnings,
     nVertsHeader,

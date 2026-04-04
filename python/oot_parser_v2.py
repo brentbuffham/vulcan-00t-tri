@@ -926,8 +926,10 @@ def parse_oot_v2(filepath: str) -> OotResult:
         )
         result.faces = faces
 
-    # Build vertex table (separate from face decode — proven to work for cube 8/8)
+    # Build vertex table, cap at header vertex count
     vertices = build_vertex_table(groups, n_faces=result.n_faces_header)
+    if result.n_verts_header > 0:
+        vertices = vertices[:result.n_verts_header]
     result.vertices = [(v[0], v[1], v[2]) for v in vertices if v[0] is not None]
 
     result.success = len(result.vertices) > 0

@@ -628,7 +628,7 @@ function parseOOT(arrayBuffer) {
   delete warnings._opsWithSep;
 
   return {
-    vertices: vertices.map(v => [v[0] || 0, v[1] || 0, v[2] || 0]),
+    vertices: (nVertsHeader > 0 ? vertices.slice(0, nVertsHeader) : vertices).map(v => [v[0] || 0, v[1] || 0, v[2] || 0]),
     faces: validFaces,
     warnings,
     nVertsHeader,

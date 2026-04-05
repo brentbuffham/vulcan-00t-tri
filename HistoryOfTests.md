@@ -229,6 +229,33 @@
 
 ---
 
+### TEST-017: lo=F Creates Second Vertex by Reverting Previous Axis to Base
+- **Status:** Successful — PLANE SOLVED
+- **Description:** When a coord group's first non-C0 tag has lo_nib=0xF, create a SECOND primary vertex where the PREVIOUS group's axis is reverted to its base value.
+- **Process:** Analyzed plane's missing vertex (300,500,900). G4 (X=300) has A0:0F (lo=F). Previous group G3 had axis=Y. Reverting Y to base (500) gives (300,500,900).
+- **Findings:**
+  - For the plane (1 Z value): G4 lo=F, prev axis=Y, base_Y=500 → second vertex (300,500,900) ✓
+  - For the cube (2 Z values): same rule falls back to both-Z-variants when prev-axis-revert gives duplicate
+  - This is a STRUCTURAL RULE of the format, not a hack
+  - The rule generalizes: lo=F means "this group defines TWO vertices — one running, one with previous axis at base"
+- **Conclusion:** Plane now 4/4 unique vertices + 2/2 faces. Cube unchanged at 8/8. No regressions.
+
+---
+
+### TEST-018: Expanded Slot Assigner Classes (40/80/60/A0/20)
+- **Status:** Partial — helps SPHERE face count, mixed vertex results
+- **Description:** Tag classes 40, 80, 60, A0, 20 (not just C0) create slot assignments when hi_nib > 0.
+- **Process:** Added all classes to extract_c0_assignments and build_vertex_table slot collection.
+- **Findings:**
+  - SPHERE face count restored to 96/96 ✓
+  - Cube stays at 8/8 ✓ (C0 slots dominate)
+  - Hexhole: 3/12 (slight improvement from 2/12)
+  - The 40:A7 tag on the plane's G4 is in the FACE section (after 20:00 marker), NOT in the coord section
+  - 80:15 on G0 creates a slot1 assignment from the base X value (mostly harmless duplicate)
+- **Conclusion:** Keep expanded classes — they don't hurt solved files and help SPHERE. The axis overlap remains unsolved.
+
+---
+
 ### TEST-014: EdgeBreaker-Coupled Vertex Builder — Axis Selection Variants
 - **Status:** In Progress
 - **Description:** The coupled vertex builder creates vertices during C operations by taking boundary vertex L's coords and replacing one axis with the next coord value. Testing which axis selection heuristic works best.

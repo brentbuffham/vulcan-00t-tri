@@ -204,6 +204,31 @@
 
 ---
 
+### TEST-016: Reverse-Engineering the Working Commit (868ec49)
+- **Status:** Successful — CRITICAL DISCOVERY
+- **Description:** Analyzed exactly how commit 868ec49 ("THE CUBE IS SOLVED") built vertices and mapped them to face indices. This is the only code that ever had the cube displaying correctly.
+- **Process:** Extracted the complete vertex builder + face decoder from that commit and traced every step for the cube.
+- **Findings:**
+  - **Vertex ordering: PRIMARIES FIRST, then C0 SLOTS APPENDED.**
+    - Primaries = running state snapshots from each coord group (V0 at G2, then one per subsequent group)
+    - For groups where first non-C0 tag has lo=F AND 2+ Z variants: create TWO primaries (one per Z value)
+    - C0 slot vertices appended in slot NUMBER order (slot1, slot2, slot4, slot5)
+  - **Face decoder uses a VERTEX QUEUE for C operations:**
+    - Face section DATA values (1-based vertex refs like [3,6,7,5]) point to SPECIFIC vertices in the primaries+slots list
+    - These refs are split: pre-topology refs and post-topology refs (reversed)
+    - "Implicit" vertices (not in initial tri, not in DATA refs, not coordinate-duplicates) fill remaining slots
+    - Queue order: implicit[0], pre-topo explicits, implicit[1], post-topo explicits(rev), remaining implicits
+    - Each C operation consumes the NEXT vertex from this queue via `nextCVertex()`
+  - **For the cube, this produces the exact correct mapping:**
+    - Vertex list: V0-V8 (primaries + slots, 9 entries, 8 unique)
+    - Initial tri: (V0, V1, V2) = (100,500,900), (100,500,950), (100,600,900)
+    - C-op queue: [V8, V7, V4, V5, V3] = [(300,500,950), (300,500,900), (300,600,950), (300,600,900), (100,600,950)]
+    - All 8 DXF vertices are covered with correct face connectivity
+  - **The face section DATA values are the KEY to the vertex-face mapping.** They reference specific vertex indices that the face decoder assigns to specific C operations. Without these refs, the mapping is impossible.
+- **Conclusion:** The vertex queue system IS the correct model. It uses face section DATA values as vertex references for C operations, with implicit vertices filling gaps. This must be implemented in both Python and JS.
+
+---
+
 ### TEST-014: EdgeBreaker-Coupled Vertex Builder — Axis Selection Variants
 - **Status:** In Progress
 - **Description:** The coupled vertex builder creates vertices during C operations by taking boundary vertex L's coords and replacing one axis with the next coord value. Testing which axis selection heuristic works best.

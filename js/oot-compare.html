@@ -403,7 +403,7 @@ function parseOOT(arrayBuffer) {
   }
 
   // ── 8. Extract vertex assignments ──
-  const assignerClasses = new Set(['C0', '80', '60', 'A0', '20']);
+  const assignerClasses = new Set(['C0', '40', '80', '60', 'A0', '20']);
   for (const g of groups) {
     for (const t of g.tags) {
       if (assignerClasses.has(t.cls) && t.hiNib > 0) {
@@ -429,7 +429,7 @@ function parseOOT(arrayBuffer) {
     }
   }
 
-  // ── 10. Build vertex table (slot accumulator — proven for cube 8/8) ──
+  // ── 10. Build vertex table: PRIMARIES FIRST, then C0 SLOTS ──
   const vertices = [];
 
   if (trimmedGroups.length >= 3) {
@@ -439,33 +439,58 @@ function parseOOT(arrayBuffer) {
       if (g.axis === 2 && Math.abs(g.value) > 1 && !zValues.includes(g.value)) zValues.push(g.value);
     }
     const baseZ = zValues[0] || base[2], altZ = zValues.length > 1 ? zValues[1] : baseZ;
-    const maxVerts = nFacesHeader > 0 ? Math.max(nFacesHeader + 2, 3) : 100;
-    const slotState = {};
-    vertices.push([base[0], base[1], base[2]]);
-    const running = [...base];
 
-    for (let i = 3; i < trimmedGroups.length; i++) {
+    const running = [0, 0, 0];
+    const primaries = [];
+    const c0Slots = {};
+
+    for (let i = 0; i < trimmedGroups.length; i++) {
       const g = trimmedGroups[i];
       const ax = g.axis;
       if (ax < 0 || ax > 2) continue;
-      if (vertices.length >= maxVerts) break;
       running[ax] = g.value;
-      if (g.c0Assignments.length > 0) {
-        for (const [slotVi, lo] of g.c0Assignments) {
-          if (vertices.length >= maxVerts) break;
-          if (!slotState[slotVi]) slotState[slotVi] = {};
-          slotState[slotVi][ax] = g.value;
-          const vx = slotState[slotVi][0] !== undefined ? slotState[slotVi][0] : base[0];
-          const vy = slotState[slotVi][1] !== undefined ? slotState[slotVi][1] : base[1];
-          let vz = slotState[slotVi][2] !== undefined ? slotState[slotVi][2] : base[2];
-          if (lo === 0x7) vz = baseZ;
-          else if (lo === 0xF) vz = altZ;
-          vertices.push([vx, vy, vz]);
+
+      // Collect C0 slot assignments (all assigner classes with hi>0)
+      const assignerClasses = new Set(['C0','40','80','60','A0','20']);
+      for (const t of g.tags) {
+        if (assignerClasses.has(t.cls) && t.hiNib > 0) {
+          const slot = t.hiNib;
+          if (!c0Slots[slot]) c0Slots[slot] = [...base];
+          c0Slots[slot][ax] = g.value;
+          if (t.loNib === 0x7) c0Slots[slot][2] = baseZ;
+          else if (t.loNib === 0xF) c0Slots[slot][2] = altZ;
         }
-      } else {
-        vertices.push([running[0], running[1], running[2]]);
+      }
+
+      // Build primaries
+      if (i === 2) {
+        primaries.push([running[0], running[1], running[2]]);
+      } else if (i > 2) {
+        let ft = null;
+        for (const t of g.tags) { if (t.cls !== 'C0') { ft = t; break; } }
+
+        if (ft && ft.loNib === 0xF) {
+          // lo=F: two primaries — running + previous axis reverted to base
+          primaries.push([running[0], running[1], running[2]]);
+          const baseV = [running[0], running[1], running[2]];
+          const prevAx = i > 0 && trimmedGroups[i-1].axis >= 0 ? trimmedGroups[i-1].axis : -1;
+          if (prevAx >= 0) baseV[prevAx] = base[prevAx];
+          if (baseV[0] !== running[0] || baseV[1] !== running[1] || baseV[2] !== running[2]) {
+            primaries.push(baseV);
+          } else if (zValues.length >= 2) {
+            primaries[primaries.length-1] = [running[0], running[1], zValues[0]];
+            primaries.push([running[0], running[1], zValues[1]]);
+          }
+        } else {
+          primaries.push([running[0], running[1], running[2]]);
+        }
       }
     }
+
+    // Vertex list: primaries first, then C0 slots in slot number order
+    for (const p of primaries) vertices.push(p);
+    const slotNums = Object.keys(c0Slots).map(Number).sort((a,b) => a-b);
+    for (const slot of slotNums) vertices.push(c0Slots[slot]);
   }
 
   // ── 11. Face decoder (EdgeBreaker) ──

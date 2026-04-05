@@ -202,14 +202,18 @@ def assign_axes(groups: List[CoordGroup]) -> None:
 
 
 def extract_c0_assignments(groups: List[CoordGroup]) -> None:
-    """Extract C0 vertex slot assignments from tags.
+    """Extract vertex slot assignments from coord section tags.
 
-    Only C0 class tags create vertex slot assignments.
-    Other tag classes (80, 60, A0, 20) serve different purposes.
+    Multiple tag classes create slot assignments, not just C0:
+    - C0: primary assigner (proven for cube)
+    - 40: also assigns in coord section (proven for plane — 40:A7 creates missing vertex)
+    - 80, 60, A0, 20: may also assign (hi_nib>0 = slot index, lo_nib = Z select)
+    E0 tags (hi_nib always 0) are state markers, not assigners.
     """
+    assigner_classes = {'C0', '40', '80', '60', 'A0', '20'}
     for g in groups:
         for t in g.tags:
-            if t.cls == 'C0':
+            if t.cls in assigner_classes and t.hi_nib > 0:
                 g.c0_assignments.append((t.hi_nib, t.lo_nib))
 
 
@@ -276,9 +280,11 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
             continue
         running[ax] = g.value
 
-        # Collect C0 slot assignments (C0 only — other classes don't assign slots)
+        # Collect slot assignments from assigner tag classes
+        # C0 is primary, 40/80/60/A0/20 with hi_nib>0 also assign
+        assigner_classes = {'C0', '40', '80', '60', 'A0', '20'}
         for t in g.tags:
-            if t.cls != 'C0':
+            if not (t.cls in assigner_classes and t.hi_nib > 0):
                 continue
             slot = t.hi_nib
             if slot not in c0_slots:
@@ -301,10 +307,24 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
                     ft = t
                     break
 
-            if len(z_values) >= 2 and ft and ft.lo_nib == 0xF:
-                # lo=F with 2+ Z variants: create TWO primaries
-                primaries.append([running[0], running[1], z_values[0]])
-                primaries.append([running[0], running[1], z_values[1]])
+            if ft and ft.lo_nib == 0xF:
+                # lo=F: create TWO primaries.
+                # Primary 1: running state as-is.
+                # Primary 2: running state with PREVIOUS group's axis reverted to base.
+                # (For 2+ Z variants, this creates both Z variants.
+                #  For 1 Z variant, this creates a vertex where the prev axis = base.)
+                primaries.append([running[0], running[1], running[2]])
+                base_v = [running[0], running[1], running[2]]
+                prev_ax = groups[i - 1].axis if i > 0 and 0 <= groups[i - 1].axis <= 2 else -1
+                if prev_ax >= 0:
+                    base_v[prev_ax] = base[prev_ax]
+                # Only add if different from first primary
+                if base_v != [running[0], running[1], running[2]]:
+                    primaries.append(base_v)
+                elif len(z_values) >= 2:
+                    # Fallback: create both Z variants
+                    primaries[-1] = [running[0], running[1], z_values[0]]
+                    primaries.append([running[0], running[1], z_values[1]])
             else:
                 # One primary from running state
                 primaries.append([running[0], running[1], running[2]])

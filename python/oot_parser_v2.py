@@ -202,19 +202,14 @@ def assign_axes(groups: List[CoordGroup]) -> None:
 
 
 def extract_c0_assignments(groups: List[CoordGroup]) -> None:
-    """Extract vertex slot assignments from tags.
+    """Extract C0 vertex slot assignments from tags.
 
-    C0 is the primary vertex assigner class, but 80, 60, A0 tags with
-    hi_nib > 0 also function as vertex assigners (same slot/Z_select model).
-    E0 tags (always hi_nib=0) are state markers, not vertex assigners.
+    Only C0 class tags create vertex slot assignments.
+    Other tag classes (80, 60, A0, 20) serve different purposes.
     """
-    # Tag classes that function as vertex slot assigners.
-    # All use hi_nib=slot_index, lo_nib=Z_select (7=base_Z, F=alt_Z).
-    # E0 tags (always hi_nib=0) are state markers, not assigners.
-    assigner_classes = {'C0', '80', '60', 'A0', '20'}
     for g in groups:
         for t in g.tags:
-            if t.cls in assigner_classes and t.hi_nib > 0:
+            if t.cls == 'C0':
                 g.c0_assignments.append((t.hi_nib, t.lo_nib))
 
 
@@ -281,17 +276,18 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
             continue
         running[ax] = g.value
 
-        # Collect C0 slot assignments
+        # Collect C0 slot assignments (C0 only — other classes don't assign slots)
         for t in g.tags:
-            if t.cls == 'C0':
-                slot = t.hi_nib
-                if slot not in c0_slots:
-                    c0_slots[slot] = list(base)
-                c0_slots[slot][ax] = g.value
-                if t.lo_nib == 0x7:
-                    c0_slots[slot][2] = base_z
-                elif t.lo_nib == 0xF:
-                    c0_slots[slot][2] = alt_z
+            if t.cls != 'C0':
+                continue
+            slot = t.hi_nib
+            if slot not in c0_slots:
+                c0_slots[slot] = list(base)
+            c0_slots[slot][ax] = g.value
+            if t.lo_nib == 0x7:
+                c0_slots[slot][2] = base_z
+            elif t.lo_nib == 0xF:
+                c0_slots[slot][2] = alt_z
 
         # Build primaries
         if i == 2:
@@ -922,23 +918,201 @@ def parse_oot_v2(filepath: str) -> OotResult:
             else:
                 break
 
-        # Determine initial triangle
+        # ── Build vertex table FIRST (primaries + C0 slots) ──
+        # This must happen before face decode so the vertex queue can
+        # reference vertex coordinates for dedup.
+        vertices = build_vertex_table(groups, n_faces=result.n_faces_header)
+
+        # ── Determine initial triangle ──
         if len(initial_verts) >= 3:
-            init_tri = tuple(v - 1 for v in initial_verts[:3])
+            init_tri = list(v - 1 for v in initial_verts[:3])  # 1-based to 0-based
         else:
-            init_tri = (0, 1, 2)
+            init_tri = [0, 1, 2]
 
-        # Decode faces using separator-based operation detection
-        faces = decode_faces_separator(
-            face_elements, topology_ops, init_tri, result.n_verts_header
-        )
-        result.faces = faces
+        # ── Build vertex queue for C operations ──
+        # (Proven model from commit 868ec49 "THE CUBE IS SOLVED")
+        #
+        # The face section DATA values are 1-based vertex REFERENCES.
+        # They tell the face decoder which vertex to use for specific C operations.
+        # Split refs into pre-topology (before first 40/C0 tag) and post-topology.
+        # Post-topology refs are consumed in REVERSE order.
+        # "Implicit" vertices (not in initial tri, not in refs, not coord-dupes)
+        # fill remaining C-op slots.
+        #
+        # Queue order: implicit[0], pre-topo, implicit[1], post-topo(rev), implicits...
 
-    # Build vertex table (primaries first, then C0 slots)
-    # Don't cap at nVertsHeader — the list may have duplicates that
-    # the face decoder's vertex queue handles via dedup
-    vertices = build_vertex_table(groups, n_faces=result.n_faces_header)
-    result.vertices = [(v[0], v[1], v[2]) for v in vertices if v[0] is not None]
+        # Collect vertex refs from face section, split by topology tag position
+        pre_topo_verts = []
+        post_topo_verts = []
+        past_init = False
+        seen_topo = False
+        for el in face_elements:
+            if not past_init:
+                if el[0] == 'TAG' and el[1] == 'E0':
+                    past_init = True
+                continue
+            if el[0] == 'TAG' and el[1] in ('40', 'C0', 'E1'):
+                seen_topo = True
+            if el[0] == 'DATA':
+                dv = el[1]
+                raw_idx = dv - 1  # 1-based to 0-based
+                if dv >= 1 and raw_idx < len(vertices) and dv != 0x40 and dv != 0x82 and dv != 0xC0:
+                    # Skip coordinate-duplicates of already-referenced vertices
+                    v_coord = vertices[raw_idx]
+                    all_used = list(init_tri) + pre_topo_verts + post_topo_verts
+                    is_dup = any(
+                        oi < len(vertices) and
+                        abs(vertices[oi][0] - v_coord[0]) < 0.1 and
+                        abs(vertices[oi][1] - v_coord[1]) < 0.1 and
+                        abs(vertices[oi][2] - v_coord[2]) < 0.1
+                        for oi in all_used
+                    )
+                    if not is_dup:
+                        if not seen_topo:
+                            pre_topo_verts.append(raw_idx)
+                        else:
+                            post_topo_verts.append(raw_idx)
+
+        post_topo_verts.reverse()  # consumed in reverse order
+
+        # Find implicit vertices: not in initial tri, not in refs, not coord-dupes
+        used_verts = set(init_tri) | set(pre_topo_verts) | set(post_topo_verts)
+        used_coords = set()
+        for vi in used_verts:
+            if vi < len(vertices):
+                v = vertices[vi]
+                used_coords.add((round(v[0], 1), round(v[1], 1), round(v[2], 1)))
+
+        implicit_verts = []
+        for vi in range(len(vertices)):
+            if vi in used_verts:
+                continue
+            v = vertices[vi]
+            key = (round(v[0], 1), round(v[1], 1), round(v[2], 1))
+            if key in used_coords:
+                continue  # skip coordinate duplicates
+            used_coords.add(key)
+            implicit_verts.append(vi)
+        implicit_verts.reverse()
+
+        # Build C-vertex order: implicit[0], pre-topo, implicit[1], post-topo(rev), implicits...
+        c_vertex_order = []
+        ii = 0
+        if implicit_verts:
+            c_vertex_order.append(implicit_verts[ii]); ii += 1
+        for v in pre_topo_verts:
+            c_vertex_order.append(v)
+        if ii < len(implicit_verts):
+            c_vertex_order.append(implicit_verts[ii]); ii += 1
+        for v in post_topo_verts:
+            c_vertex_order.append(v)
+        while ii < len(implicit_verts):
+            c_vertex_order.append(implicit_verts[ii]); ii += 1
+
+        # ── Decode faces with vertex queue ──
+        # The separator-based decoder uses the vertex queue for C operations.
+        # Instead of creating new vertex indices, C operations consume from the queue.
+        dec = EdgeBreakerDecoder(init_tri)
+        cv_idx = [0]  # mutable counter for closure
+
+        def next_c_vertex():
+            if cv_idx[0] < len(c_vertex_order):
+                v = c_vertex_order[cv_idx[0]]
+                cv_idx[0] += 1
+                return v
+            return -1
+
+        # Build separator context
+        last_sep = None
+        ops_with_sep = []
+        for el in face_elements:
+            if el[0] == 'SEP':
+                last_sep = el[1]
+            elif el[0] == 'TAG' and el[1] in ('40', 'C0', 'E1'):
+                ops_with_sep.append({
+                    'cls': el[1], 'byte2': el[2],
+                    'lo': el[3], 'hi': el[4],
+                    'sep': last_sep,
+                })
+                last_sep = None
+
+        c_ops_remaining = max(result.n_verts_header - len(init_tri), 0)
+        last_op = None
+
+        for op in ops_with_sep:
+            if not dec.bnd:
+                break
+            if op['byte2'] == 0x1B:
+                dec.gate_advance(-1)
+                continue
+
+            sep = op['sep']
+            n = len(dec.bnd)
+
+            if sep is not None:
+                if sep in (0x5F, 0x87):
+                    if n >= 4:
+                        dec.R()
+                        last_op = 'R'
+                else:
+                    if c_ops_remaining > 0:
+                        # C operation: use vertex from queue instead of new index
+                        v = next_c_vertex()
+                        if v >= 0:
+                            li = dec.g % n
+                            L, R = dec.bnd[li], dec.bnd[(dec.g + 1) % n]
+                            dec.faces.append((L, R, v))
+                            dec.bnd.insert(li + 1, v)
+                            dec.g = li + 1
+                            c_ops_remaining -= 1
+                            last_op = 'C'
+                    elif n >= 4:
+                        dec.R()
+                        last_op = 'R'
+                    else:
+                        dec.E()
+                        last_op = 'E'
+            else:
+                if last_op is None or last_op == 'E':
+                    if c_ops_remaining > 0:
+                        v = next_c_vertex()
+                        if v >= 0:
+                            li = dec.g % n
+                            L, R = dec.bnd[li], dec.bnd[(dec.g + 1) % n]
+                            dec.faces.append((L, R, v))
+                            dec.bnd.insert(li + 1, v)
+                            dec.g = li + 1
+                            c_ops_remaining -= 1
+                            last_op = 'C'
+                elif last_op == 'C':
+                    if n >= 4:
+                        dec.R()
+                        last_op = 'R'
+                    else:
+                        dec.E()
+                        last_op = 'E'
+                elif last_op == 'R':
+                    if n >= 4:
+                        dec.L()
+                        last_op = 'L'
+                    elif n == 3:
+                        dec.E()
+                        last_op = 'E'
+                elif last_op == 'L':
+                    if n == 3:
+                        dec.E()
+                        last_op = 'E'
+                    elif n >= 4:
+                        dec.L()
+                        last_op = 'L'
+
+        result.faces = dec.faces
+        result.vertices = [(v[0], v[1], v[2]) for v in vertices if v[0] is not None]
+
+    else:
+        # No face section
+        vertices = build_vertex_table(groups, n_faces=result.n_faces_header)
+        result.vertices = [(v[0], v[1], v[2]) for v in vertices if v[0] is not None]
 
     result.success = len(result.vertices) > 0
     return result

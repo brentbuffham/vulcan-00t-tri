@@ -520,23 +520,10 @@ def decode_faces_separator(face_elements, topology_ops, initial_tri, n_verts):
         e0_before = op.get('e0_before')
         n = len(dec.bnd)
 
-        # E1 class tags are ALWAYS C operations
-        if op['cls'] == 'E1':
-            if c_ops_remaining > 0:
-                dec.C()
-                c_ops_remaining -= 1
-                last_op = 'C'
-            continue
-
         if sep is not None:
             # Separator determines operation
             if sep in (0x5F, 0x87):
                 # Large separators → R
-                if n >= 4:
-                    dec.R()
-                    last_op = 'R'
-            elif sep == 0x17 and e0_before == 0x07:
-                # sep 0x17 after E0:07 → R (not C)
                 if n >= 4:
                     dec.R()
                     last_op = 'R'
@@ -837,46 +824,45 @@ def parse_oot_v2(filepath: str) -> OotResult:
     if coord_start < 0:
         coord_start = anchor + 18  # last resort fallback
 
-    # Find section boundaries using SHADED as universal attribute marker
+    # Find section boundaries
+    is_new_format = variant_len > 8
+
+    # Find section boundaries
     shaded_pos = raw.find(b'SHADED', ds)
     if shaded_pos < 0:
         shaded_pos = len(raw)
 
-    # Face section end: "separator_line" marks attribute data start (more precise than SHADED)
-    sep_line_pos = raw.find(b'separator_line', ds)
-    face_end = sep_line_pos - 2 if sep_line_pos > 0 else shaded_pos
-
-    # Detect format early for boundary logic
-    is_new_format = variant_len > 8
-
-    # Face section boundary detection differs by format:
-    face_marker = -1
     if is_new_format:
-        # New format: coord section ends with E0:03 terminator pattern.
-        # Find the first "20 00" that follows an E0:03, which marks face start.
-        # E0:03 = [0xE0, 0x03] appears at the coord/face boundary.
+        # New format: use separator_line or SHADED as face_end
+        sep_line_pos = raw.find(b'separator_line', ds)
+        face_end = sep_line_pos - 2 if sep_line_pos > 0 else shaded_pos
+
+        # E0:03 terminator + first "20 00 40:xx" after it
+        face_marker = -1
         first_e003 = -1
         for i in range(coord_start + 10, face_end - 1):
             if raw[i] == 0xE0 and raw[i + 1] == 0x03:
                 first_e003 = i
                 break
         if first_e003 > 0:
-            # Search for first "20 00" after the E0:03 terminator region
             for i in range(first_e003, face_end - 1):
                 if raw[i] == 0x20 and raw[i + 1] == 0x00:
-                    # Verify it's a face section start (followed by 40:xx topology tag)
                     if i + 2 < face_end and (raw[i + 2] & 0xE0) == 0x40:
                         face_marker = i
                         break
-        # Fallback: last "20 00" before face_end
         if face_marker < 0:
             for i in range(face_end - 2, coord_start, -1):
                 if raw[i] == 0x20 and raw[i + 1] == 0x00:
                     face_marker = i
                     break
     else:
-        # Old format: last "20 00" before face_end (proven to work)
-        for i in range(face_end - 2, coord_start, -1):
+        # Old format: use attrSuffix pattern as boundary, forward search for face marker
+        attr_suffix = b'\x00\x05\x40\x04\x00\x0A\x20\x08\x07'
+        attr_pos = raw.find(attr_suffix, ds)
+        face_end = attr_pos if attr_pos > 0 else shaded_pos
+
+        face_marker = -1
+        for i in range(coord_start + 20, face_end - 1):
             if raw[i] == 0x20 and raw[i + 1] == 0x00:
                 face_marker = i
                 break

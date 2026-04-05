@@ -196,14 +196,14 @@ function parseOOT(arrayBuffer) {
   let shadedPos = findBytes(data, shadedNeedle, ds);
   if (shadedPos < 0) shadedPos = data.length;
 
-  // Face section end: "separator_line" marks attribute data start
-  const sepLineNeedle = [0x73,0x65,0x70,0x61,0x72,0x61,0x74,0x6F,0x72,0x5F,0x6C,0x69,0x6E,0x65];
-  let sepLinePos = findBytes(data, sepLineNeedle, ds);
-  let faceEnd = sepLinePos > 0 ? sepLinePos - 2 : shadedPos;
+  let faceEnd, faceMarker = -1;
 
-  let faceMarker = -1;
   if (isNewFormat) {
-    // New format: find first E0:03 terminator, then first "20 00 40:xx" after it
+    // New format: separator_line or SHADED as face_end, E0:03 terminator for face start
+    const sepLineNeedle = [0x73,0x65,0x70,0x61,0x72,0x61,0x74,0x6F,0x72,0x5F,0x6C,0x69,0x6E,0x65];
+    let sepLinePos = findBytes(data, sepLineNeedle, ds);
+    faceEnd = sepLinePos > 0 ? sepLinePos - 2 : shadedPos;
+
     let firstE003 = -1;
     for (let i = coordStart + 10; i < faceEnd - 1; i++) {
       if (data[i] === 0xE0 && data[i+1] === 0x03) { firstE003 = i; break; }
@@ -215,15 +215,18 @@ function parseOOT(arrayBuffer) {
         }
       }
     }
-    // Fallback: last "20 00" before faceEnd
     if (faceMarker < 0) {
       for (let i = faceEnd - 2; i > coordStart; i--) {
         if (data[i] === 0x20 && data[i+1] === 0x00) { faceMarker = i; break; }
       }
     }
   } else {
-    // Old format: last "20 00" before faceEnd
-    for (let i = faceEnd - 2; i > coordStart; i--) {
+    // Old format: attrSuffix pattern as boundary, forward search for face marker
+    const attrSuffix = [0x00,0x05,0x40,0x04,0x00,0x0A,0x20,0x08,0x07];
+    let attrPos = findBytes(data, attrSuffix, ds);
+    faceEnd = attrPos > 0 ? attrPos : shadedPos;
+
+    for (let i = coordStart + 20; i < faceEnd - 1; i++) {
       if (data[i] === 0x20 && data[i+1] === 0x00) { faceMarker = i; break; }
     }
   }

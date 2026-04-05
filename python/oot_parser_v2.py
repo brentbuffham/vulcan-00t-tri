@@ -240,16 +240,16 @@ def trim_coord_groups(groups: List[CoordGroup]) -> List[CoordGroup]:
 
 
 def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[Optional[float]]]:
-    """Build vertex table from coord groups + axis assignments + tag assignments.
+    """Build vertex table: PRIMARIES FIRST, then C0 SLOTS APPENDED.
 
-    Model:
-    1. V0 = first 3 coord groups (X, Y, Z) — the "base" values.
-    2. Running state tracks current [X, Y, Z], updated by each coord.
-    3. Each vertex assignment tag (C0, 80, 60, A0 with hi_nib>0) creates
-       a vertex using accumulated slot state + base values for unassigned axes.
-       lo_nib: 0x7=base_Z, 0xF=alt_Z.
-    4. Non-assigned coords update running state. They create an implicit
-       vertex only if they're the ONLY coord before the next assigned group.
+    Proven model from commit 868ec49 ("THE CUBE IS SOLVED"):
+    1. Primaries: running state snapshot from each coord group.
+       - V0 at group 2 (base XYZ)
+       - For groups where first non-C0 tag has lo=F AND 2+ Z values:
+         create TWO primaries (one per Z variant)
+       - Otherwise: one primary from running state
+    2. C0 slots: accumulate axis values, appended in slot number order.
+       - lo=7 → base_Z, lo=F → alt_Z
     """
     if len(groups) < 3:
         return [[g.value if g.axis == ax else 0.0 for ax in range(3)]
@@ -258,7 +258,7 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
     # Trim face section data
     groups = trim_coord_groups(groups)
 
-    # Base values from V0
+    # Base values
     base = [groups[0].value, groups[1].value, groups[2].value]
 
     # Collect Z values for base/alt
@@ -270,50 +270,53 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
     base_z = z_values[0] if z_values else base[2]
     alt_z = z_values[1] if len(z_values) > 1 else base_z
 
-    # Estimate expected vertex count from face count
-    max_verts = max(n_faces + 2, 3) if n_faces > 0 else 100
+    # Phase 1: Build primaries from running state
+    running = [0.0, 0.0, 0.0]
+    primaries = []
+    c0_slots = {}  # slot_idx -> [x, y, z]
 
-    # Per-slot accumulator: tracks which axes have been assigned
-    slot_state = {}  # slot_idx -> {axis: value}
-
-    # Build vertex list
-    vertices = [list(base)]  # V0
-    running = list(base)
-
-    for g in groups[3:]:
+    for i, g in enumerate(groups):
         ax = g.axis
         if ax < 0 or ax > 2:
             continue
-
-        if len(vertices) >= max_verts:
-            break
-
         running[ax] = g.value
 
-        if g.c0_assignments:
-            # Each assignment creates a vertex via slot accumulation
-            for slot_vi, lo in g.c0_assignments:
-                if len(vertices) >= max_verts:
+        # Collect C0 slot assignments
+        for t in g.tags:
+            if t.cls == 'C0':
+                slot = t.hi_nib
+                if slot not in c0_slots:
+                    c0_slots[slot] = list(base)
+                c0_slots[slot][ax] = g.value
+                if t.lo_nib == 0x7:
+                    c0_slots[slot][2] = base_z
+                elif t.lo_nib == 0xF:
+                    c0_slots[slot][2] = alt_z
+
+        # Build primaries
+        if i == 2:
+            # V0 from base
+            primaries.append([running[0], running[1], running[2]])
+        elif i > 2:
+            # Check first non-C0 tag for lo_nib
+            ft = None
+            for t in g.tags:
+                if t.cls != 'C0':
+                    ft = t
                     break
 
-                if slot_vi not in slot_state:
-                    slot_state[slot_vi] = {}
+            if len(z_values) >= 2 and ft and ft.lo_nib == 0xF:
+                # lo=F with 2+ Z variants: create TWO primaries
+                primaries.append([running[0], running[1], z_values[0]])
+                primaries.append([running[0], running[1], z_values[1]])
+            else:
+                # One primary from running state
+                primaries.append([running[0], running[1], running[2]])
 
-                slot_state[slot_vi][ax] = g.value
-
-                vx = slot_state[slot_vi].get(0, base[0])
-                vy = slot_state[slot_vi].get(1, base[1])
-                vz = slot_state[slot_vi].get(2, base[2])
-
-                if lo == 0x7:
-                    vz = base_z
-                elif lo == 0xF:
-                    vz = alt_z
-
-                vertices.append([vx, vy, vz])
-        else:
-            # Non-assigned: create implicit vertex from running state
-            vertices.append(list(running))
+    # Phase 2: Vertex list = primaries first, then C0 slots in slot number order
+    vertices = list(primaries)
+    for slot in sorted(c0_slots.keys()):
+        vertices.append(c0_slots[slot])
 
     return vertices
 
@@ -931,10 +934,10 @@ def parse_oot_v2(filepath: str) -> OotResult:
         )
         result.faces = faces
 
-    # Build vertex table, cap at header vertex count
+    # Build vertex table (primaries first, then C0 slots)
+    # Don't cap at nVertsHeader — the list may have duplicates that
+    # the face decoder's vertex queue handles via dedup
     vertices = build_vertex_table(groups, n_faces=result.n_faces_header)
-    if result.n_verts_header > 0:
-        vertices = vertices[:result.n_verts_header]
     result.vertices = [(v[0], v[1], v[2]) for v in vertices if v[0] is not None]
 
     result.success = len(result.vertices) > 0

@@ -226,8 +226,17 @@ function parseOOT(arrayBuffer) {
     let attrPos = findBytes(data, attrSuffix, ds);
     faceEnd = attrPos > 0 ? attrPos : shadedPos;
 
-    for (let i = coordStart + 20; i < faceEnd - 1; i++) {
-      if (data[i] === 0x20 && data[i+1] === 0x00) { faceMarker = i; break; }
+    // Prefer "20 00" followed by a DATA count byte (<=0x06) — this is the
+    // face-section vertex-ref list. Plain "20 00" can also appear as a tag
+    // inside coord data (L-Shape), so the data-count requirement
+    // disambiguates. Fall back to bare "20 00" if no such candidate exists.
+    for (let i = coordStart + 5; i < faceEnd - 2; i++) {
+      if (data[i] === 0x20 && data[i+1] === 0x00 && data[i+2] <= 0x06) { faceMarker = i; break; }
+    }
+    if (faceMarker < 0) {
+      for (let i = coordStart + 20; i < faceEnd - 1; i++) {
+        if (data[i] === 0x20 && data[i+1] === 0x00) { faceMarker = i; break; }
+      }
     }
   }
 

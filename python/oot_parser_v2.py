@@ -880,11 +880,20 @@ def parse_oot_v2(filepath: str) -> OotResult:
         attr_pos = raw.find(attr_suffix, ds)
         face_end = attr_pos if attr_pos > 0 else shaded_pos
 
+        # Prefer "20 00" followed by a DATA count byte (<=0x06) — this is the
+        # face-section vertex-ref list. Plain "20 00" can also appear as a tag
+        # inside coord data (e.g. L-Shape), so the data-count requirement
+        # disambiguates. Fall back to bare "20 00" if no such candidate exists.
         face_marker = -1
-        for i in range(coord_start + 20, face_end - 1):
-            if raw[i] == 0x20 and raw[i + 1] == 0x00:
+        for i in range(coord_start + 5, face_end - 2):
+            if raw[i] == 0x20 and raw[i + 1] == 0x00 and raw[i + 2] <= 0x06:
                 face_marker = i
                 break
+        if face_marker < 0:
+            for i in range(coord_start + 20, face_end - 1):
+                if raw[i] == 0x20 and raw[i + 1] == 0x00:
+                    face_marker = i
+                    break
 
     coord_end = face_marker if face_marker > 0 else face_end
 

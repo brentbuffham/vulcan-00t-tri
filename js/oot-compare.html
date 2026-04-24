@@ -43,6 +43,22 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
 <body>
 
 <div id="controls">
+  <select id="file-picker" onchange="loadExample(this.value)" style="background:#2a2a3e;color:#eee;border:1px solid #444;padding:4px 8px;font:inherit">
+    <option value="">— Load test case —</option>
+    <option value="triangle">Triangle (3v/1f)</option>
+    <option value="plane">Plane (4v/2f)</option>
+    <option value="cube">Cube (8v/12f)</option>
+    <option value="linear">Linear Strip (7v/5f)</option>
+    <option value="fan">Fan (6v/6f)</option>
+    <option value="prism">Prism (4v/2f)</option>
+    <option value="prism4">4-Sides Prism (5v/6f)</option>
+    <option value="stepped">Stepped Pyramid (20v/18f)</option>
+    <option value="lshape">L-Shape (12v/20f)</option>
+    <option value="hexhole">Hexhole (12v/12f)</option>
+    <option value="nonround">NonRound (16v/14f)</option>
+    <option value="sphere">Sphere (50v/96f)</option>
+    <option value="biggrid">BigGrid (10201v/20000f)</option>
+  </select>
   <button onclick="toggleFaces()">Faces</button>
   <button onclick="toggleWire()">Wireframe</button>
   <button onclick="togglePts()">Points</button>
@@ -984,6 +1000,67 @@ function setupDrop(panelId, handler) {
     for (const f of e.dataTransfer.files) { handler(f); break; }
   });
 }
+
+// Dropdown loader for test cases in ../exampleFiles/
+const EXAMPLE_PAIRS = {
+  triangle: ['tri-crack-triangle.00t', 'tri-crack-triangle.dxf'],
+  plane:    ['tri-crack.00t', 'tri-crack.dxf'],
+  cube:     ['tri-crack-solid.00t', 'tri-crack-solid.dxf'],
+  linear:   ['tri-crack-linear.00t', 'tri-crack-linear.dxf'],
+  fan:      ['tri-crack-fan.00t', 'tri-crack-fan.dxf'],
+  prism:    ['tri-crack-prism.00t', 'tri-crack-prism.dxf'],
+  prism4:   ['tri-crack-4sides-prism.00t', 'tri-crack-4sides-prism.dxf'],
+  stepped:  ['tri-crack-Stepped-pyramid.00t', 'tri-crack-Stepped-pyramid.dxf'],
+  lshape:   ['tri-crack-L-SHAPE.00t', 'tri-crack-L-Shape.dxf'],
+  hexhole:  ['tri-crack-Hexhole.00t', 'tri-crack-HexHole.dxf'],
+  nonround: ['tri-crack-NonRound.00t', 'tri-crack-NonRound.dxf'],
+  sphere:   ['tri-crack-SPHERE.00t', 'tri-crack-Sphere.dxf'],
+  biggrid:  ['tri-crack-BigGrid.00t', 'tri-crack-big-grid.dxf'],
+};
+
+window.loadExample = async (key) => {
+  if (!key) return;
+  const [ootName, dxfName] = EXAMPLE_PAIRS[key];
+  const base = '../exampleFiles/';
+  try {
+    const [ootRes, dxfRes] = await Promise.all([
+      fetch(base + ootName + '?v=' + Date.now()),
+      fetch(base + dxfName + '?v=' + Date.now()),
+    ]);
+    const ootBuf = await ootRes.arrayBuffer();
+    const dxfTxt = await dxfRes.text();
+
+    const dxfResult = parseDXF(dxfTxt);
+    document.getElementById('hint-left').style.display = 'none';
+    document.getElementById('info-left').style.display = 'block';
+    document.getElementById('lv').textContent = dxfResult.vertices.length;
+    document.getElementById('lf').textContent = dxfResult.faces.length;
+    loadMesh('left', dxfResult, 0x4ade80);
+
+    const ootResult = parseOOT(ootBuf);
+    currentOOT = ootResult;
+    document.getElementById('hint-right').style.display = 'none';
+    document.getElementById('info-right').style.display = 'block';
+    document.getElementById('rv').textContent = ootResult.vertices.length;
+    document.getElementById('rf').textContent = ootResult.faces.length;
+    const rwarn = document.getElementById('rwarn');
+    if (ootResult.warnings && ootResult.warnings.length) {
+      rwarn.style.display = 'block';
+      rwarn.textContent = ootResult.warnings.join('; ');
+    } else {
+      rwarn.style.display = 'none';
+    }
+    document.getElementById('rverts').innerHTML = ootResult.vertices.map((v,i) =>
+      `V${i}: (${v[0].toFixed(1)}, ${v[1].toFixed(1)}, ${v[2].toFixed(1)})`
+    ).join('<br>');
+    loadMesh('right', ootResult, 0xf97316);
+    if (document.getElementById('debug-panel').style.display !== 'none') renderDebug(ootResult);
+    console.log('[loadExample]', key, {dxf: dxfResult, oot: ootResult});
+  } catch (err) {
+    console.error('[loadExample] failed:', err);
+    alert('Load failed: ' + err.message);
+  }
+};
 
 setupDrop('left', file => {
   const reader = new FileReader();

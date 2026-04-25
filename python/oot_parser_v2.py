@@ -1281,8 +1281,37 @@ def parse_oot_v2(filepath: str) -> OotResult:
                         dec.L()
                         last_op = 'L'
 
-        result.faces = dec.faces
-        result.vertices = [(v[0], v[1], v[2]) for v in vertices if v[0] is not None]
+        # Drop unused coord-duplicate vertices (the "phantom" slot vertex
+        # from 80:15 on G0 in triangle/plane/cube etc.). A vertex is dropped
+        # when it's a coord-duplicate of an earlier vertex AND no face
+        # references it. Face indices are remapped so any references to a
+        # dropped duplicate point to the earlier original.
+        clean_verts = [(v[0], v[1], v[2]) for v in vertices if v[0] is not None]
+        referenced = set()
+        for f in dec.faces:
+            for idx in f:
+                referenced.add(idx)
+
+        def coord_eq(a, b):
+            return (abs(a[0]-b[0]) < 0.1 and abs(a[1]-b[1]) < 0.1 and abs(a[2]-b[2]) < 0.1)
+
+        remap = {}
+        new_verts = []
+        for i, v in enumerate(clean_verts):
+            dup_of = -1
+            if i not in referenced:
+                for j in range(i):
+                    if coord_eq(v, clean_verts[j]):
+                        dup_of = j
+                        break
+            if dup_of >= 0:
+                remap[i] = remap[dup_of]
+            else:
+                remap[i] = len(new_verts)
+                new_verts.append(v)
+
+        result.faces = [tuple(remap.get(idx, idx) for idx in f) for f in dec.faces]
+        result.vertices = new_verts
 
     else:
         # No face section

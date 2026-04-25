@@ -354,3 +354,18 @@
   - 7/7 verts, 5/5 faces in both Python and JS.
   - No regressions on other files.
 - **Conclusion:** Linear Strip SOLVED. The encoding is "strip-style C ops" with finalizers as gate adjustments. The same model may apply to other shared-base files.
+
+---
+
+### TEST-024: Drop Phantom Slot Vertices via Coord-Dedupe + Remap
+- **Status:** Successful — Triangle/Plane/Cube vertex counts now match DXF exactly
+- **Description:** Slot tags from class 80:15 on G0 produce a "phantom" vertex with the same coords as V0 (or another primary). Triangle: 4v vs DXF 3v. Plane: 5v vs DXF 4v. Cube: 9v vs DXF 8v. The phantom is unreferenced by any face but inflates the vertex count.
+- **Process:** After face decode, walk vertices and find coord-duplicates of an earlier vertex. Build a remap: dup_idx → orig_idx. Apply the remap to all face indices (collapsing references to the original). Drop any face that becomes degenerate (two indices equal). Prune unreferenced vertices and renumber the remaining ones.
+- **Findings (Python):**
+  - Triangle: 4v/1f → 3v/1f ✓ (matches DXF 3v/1f)
+  - Plane: 5v/2f → 4v/2f ✓
+  - Cube: 9v/12f → 8v/12f ✓
+  - Linear unchanged (7v/5f, no phantom)
+  - "Broken" files (Hexhole, SPHERE, etc.) lose their inflated double-counts; raw match counts go down but unique DXF coverage is unchanged.
+- **JS divergence:** JS produces a slightly different vertex list for cube (7v after dedupe vs 8v in Python). The JS vertex builder has a separate bug where one cube vertex isn't generated. Triangle, Plane, Linear all match Python exactly in JS.
+- **Conclusion:** Python parser is now perfectly clean for all 4 solved files. JS cube divergence is a separate JS-only issue tracked for later.

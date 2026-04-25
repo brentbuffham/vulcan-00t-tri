@@ -1125,19 +1125,33 @@ def parse_oot_v2(filepath: str) -> OotResult:
             implicit_verts.append(vi)
         implicit_verts.reverse()
 
-        # Build C-vertex order: implicit[0], pre-topo, implicit[1], post-topo(rev), implicits...
-        c_vertex_order = []
-        ii = 0
-        if implicit_verts:
-            c_vertex_order.append(implicit_verts[ii]); ii += 1
-        for v in pre_topo_verts:
-            c_vertex_order.append(v)
-        if ii < len(implicit_verts):
-            c_vertex_order.append(implicit_verts[ii]); ii += 1
-        for v in post_topo_verts:
-            c_vertex_order.append(v)
-        while ii < len(implicit_verts):
-            c_vertex_order.append(implicit_verts[ii]); ii += 1
+        # For shared-base files, use natural vertex-index order (V3, V4, V5, V6)
+        # which matches the strip traversal of the encoded mesh.
+        if leading_40_header is False and groups and groups[0].tags and groups[0].tags[0].cls == '60':
+            first_vals = [g.value for g in groups[:4] if abs(g.value) > 1]
+            if len(first_vals) >= 2 and min(first_vals) > 0 and max(first_vals)/min(first_vals) < 1.5:
+                # Shared-base: queue all non-init vertices in index order
+                used = set(init_tri)
+                c_vertex_order = [vi for vi in range(len(vertices)) if vi not in used]
+            else:
+                c_vertex_order = None
+        else:
+            c_vertex_order = None
+
+        if c_vertex_order is None:
+            # Standard build: implicit[0], pre-topo, implicit[1], post-topo(rev), implicits...
+            c_vertex_order = []
+            ii = 0
+            if implicit_verts:
+                c_vertex_order.append(implicit_verts[ii]); ii += 1
+            for v in pre_topo_verts:
+                c_vertex_order.append(v)
+            if ii < len(implicit_verts):
+                c_vertex_order.append(implicit_verts[ii]); ii += 1
+            for v in post_topo_verts:
+                c_vertex_order.append(v)
+            while ii < len(implicit_verts):
+                c_vertex_order.append(implicit_verts[ii]); ii += 1
 
         # ── Decode faces with vertex queue ──
         # The separator-based decoder uses the vertex queue for C operations.
@@ -1175,6 +1189,16 @@ def parse_oot_v2(filepath: str) -> OotResult:
         c_ops_remaining = max(result.n_verts_header - len(init_tri), 0)
         last_op = None
 
+        # Detect shared-base for face decode strategy: keep doing C ops
+        # in strip-style traversal instead of R fallback when sep=None.
+        shared_base_decode = (
+            groups and groups[0].tags and groups[0].tags[0].cls == '60' and
+            len([g.value for g in groups[:4] if abs(g.value) > 1]) >= 2 and
+            min(g.value for g in groups[:4] if abs(g.value) > 1) > 0 and
+            (max(g.value for g in groups[:4] if abs(g.value) > 1) /
+             min(g.value for g in groups[:4] if abs(g.value) > 1)) < 1.5
+        )
+
         for op in ops_with_sep:
             if not dec.bnd:
                 break
@@ -1184,6 +1208,21 @@ def parse_oot_v2(filepath: str) -> OotResult:
 
             sep = op['sep']
             n = len(dec.bnd)
+
+            # Shared-base: every non-finalizer op is a C op while queue has items.
+            # Once queue is exhausted, stop (no R/L fallback) — the strip is complete.
+            if shared_base_decode:
+                if c_ops_remaining > 0:
+                    v = next_c_vertex()
+                    if v >= 0:
+                        li = dec.g % n
+                        L, R = dec.bnd[li], dec.bnd[(dec.g + 1) % n]
+                        dec.faces.append((L, R, v))
+                        dec.bnd.insert(li + 1, v)
+                        dec.g = li + 1
+                        c_ops_remaining -= 1
+                        last_op = 'C'
+                continue
 
             if sep is not None:
                 if sep in (0x5F, 0x87):

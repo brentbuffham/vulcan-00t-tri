@@ -340,3 +340,17 @@
   - 4-Sides Prism: detection correctly skipped (values 100/1000/5000 span too wide)
   - All other files: unchanged
 - **Conclusion:** Linear Strip vertex decode SOLVED. The G0=60:xx + tight-range signature is a reliable detector for this encoding variant. Face count still off by one (5 vs 6) — requires face-decoder investigation.
+
+---
+
+### TEST-023: Linear Strip Face Decoder — Shared-Base C-Only Strip
+- **Status:** Successful — Linear Strip face decode SOLVED
+- **Description:** After TEST-022 fixed vertices, linear strip produced 6 faces vs DXF's 5 because the EdgeBreaker decoder did R/L fallbacks when sep=None instead of continuing the strip with C ops.
+- **Process:**
+  1. For shared-base files, queue all non-init vertices in raw-index order (V3, V4, V5, V6) instead of the implicit/pre/post merge order.
+  2. In the decoder loop, every non-finalizer op consumes the next queue vertex as a C op until the queue is empty. After exhaustion, skip remaining ops (no R/L fallback) — the strip is complete.
+- **Findings:**
+  - Linear: F0={0,1,2}, F1={1,2,3}, F2={2,3,4}, F3={3,4,5}, F4={4,5,6} — all 5 face sets match DXF.
+  - 7/7 verts, 5/5 faces in both Python and JS.
+  - No regressions on other files.
+- **Conclusion:** Linear Strip SOLVED. The encoding is "strip-style C ops" with finalizers as gate adjustments. The same model may apply to other shared-base files.

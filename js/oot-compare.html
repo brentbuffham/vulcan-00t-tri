@@ -678,6 +678,17 @@ function parseOOT(arrayBuffer) {
     function ebL() { const n=bnd.length; if(n<4)return; const li=gate%n; const fl=bnd[((gate-1)%n+n)%n]; faces.push([fl,bnd[li],bnd[(gate+1)%n]]); bnd.splice(li,1); gate=((li-1)%bnd.length+bnd.length)%bnd.length; }
     function ebE() { const n=bnd.length; if(n===3){faces.push([bnd[0],bnd[1],bnd[2]]);bnd=[];} else if(n>=4){const li=gate%n;const fl=bnd[((gate-1)%n+n)%n];faces.push([fl,bnd[li],bnd[(gate+1)%n]]);bnd.splice(li,1);gate=((li-1)%bnd.length+bnd.length)%bnd.length;} }
 
+    // Shared-base detection — for linear strip, all non-finalizer ops are
+    // strip-style C ops; stop when c-queue exhausted (no R/L fallback).
+    let sharedBaseDecode = false;
+    if (trimmedGroups.length >= 2 && trimmedGroups[0].tags.length > 0 && trimmedGroups[0].tags[0].cls === '60') {
+      const fv = trimmedGroups.slice(0, 4).map(g => g.value).filter(v => Math.abs(v) > 1);
+      if (fv.length >= 2) {
+        const vmin = Math.min(...fv), vmax = Math.max(...fv);
+        if (vmin > 0 && vmax/vmin < 1.5) sharedBaseDecode = true;
+      }
+    }
+
     for (const op of opsWithSep) {
       if (!bnd.length) break;
       if (op.byte2 === 0x1B) { gate=((gate-1)%bnd.length+bnd.length)%bnd.length; debugTrace.push({op:'FIN',byte2:op.byte2,sep:op.sep}); continue; }
@@ -687,6 +698,12 @@ function parseOOT(arrayBuffer) {
       const L=bnd[li], R=bnd[ri], prevOnBnd=bnd[((gate-1)%n+n)%n];
       const sep = op.sep;
       let opType = '?';
+
+      if (sharedBaseDecode) {
+        if (cOpsRemaining > 0) { ebC(); cOpsRemaining--; lastOp='C'; opType='C'; }
+        debugTrace.push({op:opType,byte2:op.byte2,hi:op.hi,lo:op.lo,sep:op.sep,L,R,prevBnd:prevOnBnd,bndSize:n,newV:opType==='C'?nv-1:null});
+        continue;
+      }
 
       // E1 class = always C
       if (op.cls === 'E1') {

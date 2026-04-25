@@ -967,8 +967,16 @@ function loadMesh(panelId, result, color) {
     s.add(sprite);
     labels[panelId].push(sprite);
   }
-  target.copy(center);
-  radius = size * 2.5;
+  // If this mesh is degenerate (single vertex / size=0), don't collapse
+  // the camera onto it. Keep current camera state if it's already set.
+  if (size > 1) {
+    target.copy(center);
+    radius = size * 2.5;
+  } else if (radius < 1) {
+    // First load and degenerate — use a sensible default
+    target.copy(center);
+    radius = 1000;
+  }
   updateCameras();
 }
 

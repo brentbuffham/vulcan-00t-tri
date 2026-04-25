@@ -1308,8 +1308,10 @@ def parse_oot_v2(filepath: str) -> OotResult:
                     break
             dup_remap.append(mapped)
 
-        # Step 2: apply remap to faces, drop degenerate
-        remapped_faces = [tuple(dup_remap[idx] for idx in f) for f in dec.faces]
+        # Step 2: apply remap to faces (drop faces with out-of-range indices),
+        # then drop degenerate faces
+        valid_dec_faces = [f for f in dec.faces if all(0 <= idx < len(clean_verts) for idx in f)]
+        remapped_faces = [tuple(dup_remap[idx] for idx in f) for f in valid_dec_faces]
         remapped_faces = [f for f in remapped_faces
                           if f[0] != f[1] and f[1] != f[2] and f[0] != f[2]]
 

@@ -390,22 +390,35 @@ def parse_face_section(face_region: bytes, n_verts_header: int):
             if 1 <= dv <= max(n_verts_header, 20) and dv != 0x40 and dv != 0x82 and dv != 0xC0:
                 vertex_refs.append(dv)
 
-    # Identify initial triangle vertices
-    # Pattern: after 20:00 start, look for DATA values before first E0:03
+    # Identify initial triangle vertices.
+    # Pattern: after 20:00 start, collect DATA values until E0:03 terminator,
+    # ignoring intermediate 20/40/C0 tags (they act as separators / headers).
+    # If only 2 DATA values are present, the third initial vertex is implicit
+    # V1 (1-based, raw_idx 0) — this is the "40:a7 leading header" form
+    # found in plane (20 00 40 a7 [3] 20 07 [4] 20 03 e0 03).
+    # Cube has all three DATA explicit (20 00 [1] 20 03 [2] 20 03 [4] 20 03 e0 03).
     initial_verts = []
     found_start = False
+    leading_40_header = False
     for el in elements:
         if el[0] == 'TAG' and el[1] == '20' and (len(el) > 2 and el[2] == 0x00):
             found_start = True
             continue
         if found_start:
-            if el[0] == 'TAG' and el[1] in ('40', 'C0'):
-                # Topology tag before vertex data = implicit initial triangle
+            if el[0] == 'TAG' and el[1] == 'E0':
+                break
+            if el[0] == 'TAG' and el[1] == '40' and not initial_verts and not leading_40_header:
+                # Leading 40:xx header (e.g. 40:a7 in plane) signals an
+                # implicit V1 first vertex; remaining DATA fills the rest.
+                leading_40_header = True
+                continue
+            if el[0] == 'TAG' and el[1] in ('40', 'C0') and initial_verts:
+                # Topology tag after some DATA collected = end of init refs
                 break
             if el[0] == 'DATA' and 1 <= el[1] <= max(n_verts_header, 20):
                 initial_verts.append(el[1])
-            if el[0] == 'TAG' and el[1] == 'E0':
-                break
+    if leading_40_header and len(initial_verts) == 2:
+        initial_verts = [1] + initial_verts  # prepend implicit V1
 
     return topology_ops, vertex_refs, initial_verts
 

@@ -579,22 +579,33 @@ function parseOOT(arrayBuffer) {
       }
     }
 
-    // Identify initial triangle vertices
-    // Pattern: after 20:00 start, look for DATA values before first E0 or topology tag
+    // Identify initial triangle vertices.
+    // Pattern: after 20:00 start, collect DATA until E0:03 terminator,
+    // ignoring intermediate 20/40/C0 tags. A leading 40:xx header (e.g.
+    // 40:a7 in plane) signals an implicit V1 first vertex; remaining
+    // DATA fills the rest. Cube has all three DATA explicit.
     const initialVerts = [];
     let foundStart = false;
+    let leading40Header = false;
     for (const el of faceElements) {
       if (el.type === 'TAG' && el.cls === '20' && el.byte2 === 0x00) {
         foundStart = true;
         continue;
       }
       if (foundStart) {
-        if (el.type === 'TAG' && (el.cls === '40' || el.cls === 'C0')) break;
+        if (el.type === 'TAG' && el.cls === 'E0') break;
+        if (el.type === 'TAG' && el.cls === '40' && initialVerts.length === 0 && !leading40Header) {
+          leading40Header = true;
+          continue;
+        }
+        if (el.type === 'TAG' && (el.cls === '40' || el.cls === 'C0') && initialVerts.length > 0) break;
         if (el.type === 'DATA' && el.value >= 1 && el.value <= maxRef) {
           initialVerts.push(el.value);
         }
-        if (el.type === 'TAG' && el.cls === 'E0') break;
       }
+    }
+    if (leading40Header && initialVerts.length === 2) {
+      initialVerts.unshift(1);  // prepend implicit V1
     }
 
     // Determine initial triangle (1-based to 0-based)

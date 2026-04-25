@@ -630,7 +630,9 @@ function parseOOT(arrayBuffer) {
 
     faces.push(initTri.slice());
     let bnd = initTri.slice();
-    let gate = 1;
+    // Plane-form leading 40:xx header puts the gate at edge V0-V_data[0]
+    // (position 0) so the next C op shares that diagonal — flat quad.
+    let gate = leading40Header ? 0 : 1;
     let nv = Math.max(...initTri) + 1;
     let cOpsRemaining = Math.max(nVertsHeader - 3, 0);
     let lastOp = null;
@@ -735,7 +737,7 @@ function initPanel(id) {
   s.add(new THREE.AxesHelper(50));
 
   const c = new THREE.PerspectiveCamera(60, el.clientWidth/el.clientHeight, 0.1, 100000);
-  const r = new THREE.WebGLRenderer({ antialias: true });
+  const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
   r.setSize(el.clientWidth, el.clientHeight);
   r.setPixelRatio(window.devicePixelRatio);
   el.appendChild(r.domElement);

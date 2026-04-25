@@ -420,7 +420,7 @@ def parse_face_section(face_region: bytes, n_verts_header: int):
     if leading_40_header and len(initial_verts) == 2:
         initial_verts = [1] + initial_verts  # prepend implicit V1
 
-    return topology_ops, vertex_refs, initial_verts
+    return topology_ops, vertex_refs, initial_verts, leading_40_header
 
 
 # ══════════════════════════════════════════════════════════════
@@ -926,7 +926,7 @@ def parse_oot_v2(filepath: str) -> OotResult:
     # ── Parse face section and build vertices simultaneously ──
     if face_marker > 0:
         face_region = raw[face_marker:face_end]
-        topology_ops, vertex_refs, initial_verts = parse_face_section(
+        topology_ops, vertex_refs, initial_verts, leading_40_header = parse_face_section(
             face_region, result.n_verts_header
         )
 
@@ -1055,6 +1055,12 @@ def parse_oot_v2(filepath: str) -> OotResult:
         # The separator-based decoder uses the vertex queue for C operations.
         # Instead of creating new vertex indices, C operations consume from the queue.
         dec = EdgeBreakerDecoder(init_tri)
+        if leading_40_header:
+            # Plane-form leading header: gate sits at edge V0-V_data[0] (position 0)
+            # rather than the default V_data[0]-V_data[1] (position 1). This makes
+            # the next C op produce a triangle that shares the V0-V_data[0]
+            # diagonal with the init triangle — flat quad instead of butterfly.
+            dec.g = 0
         cv_idx = [0]  # mutable counter for closure
 
         def next_c_vertex():

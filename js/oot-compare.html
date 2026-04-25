@@ -460,7 +460,42 @@ function parseOOT(arrayBuffer) {
   // ── 10. Build vertex table: PRIMARIES FIRST, then C0 SLOTS ──
   const vertices = [];
 
-  if (trimmedGroups.length >= 3) {
+  // Shared-base encoding (TEST-019): linear strip pattern.
+  // G0 leads with class 60 AND first 4 group values are within tight ratio.
+  // All 3 axes start at G0.value; G1 becomes Y_alt; G2+ are X-deltas;
+  // slot tags create (X, Y_base, Z) and (X, Y_alt, Z) vertices.
+  if (trimmedGroups.length >= 3 && trimmedGroups[0].tags.length > 0 && trimmedGroups[0].tags[0].cls === '60') {
+    const firstVals = trimmedGroups.slice(0, 4).map(g => g.value).filter(v => Math.abs(v) > 1);
+    if (firstVals.length >= 2) {
+      const vmax = Math.max(...firstVals), vmin = Math.min(...firstVals);
+      if (vmin > 0 && vmax / vmin < 1.5) {
+        const yBase = trimmedGroups[0].value;
+        const yAlt = trimmedGroups[1].value;
+        const zBase = trimmedGroups[0].value;
+        const seen = new Set();
+        const addUnique = v => {
+          const key = v.map(x => x.toFixed(4)).join(',');
+          if (!seen.has(key)) { seen.add(key); vertices.push(v); }
+        };
+        addUnique([yBase, yBase, zBase]);
+        const assignerClasses = new Set(['C0','40','80','60','A0','20']);
+        for (let i = 1; i < trimmedGroups.length; i++) {
+          const g = trimmedGroups[i];
+          const x = g.value;
+          const slotHis = new Set();
+          for (const t of g.tags) {
+            if (assignerClasses.has(t.cls) && t.hiNib > 0) slotHis.add(t.hiNib);
+          }
+          if (slotHis.has(1)) addUnique([x, yAlt, zBase]);
+          addUnique([x, yBase, zBase]);
+        }
+        // Skip standard builder
+        // (vertices already populated by shared-base path)
+      }
+    }
+  }
+
+  if (vertices.length === 0 && trimmedGroups.length >= 3) {
     const base = [trimmedGroups[0].value, trimmedGroups[1].value, trimmedGroups[2].value];
     const zValues = [];
     for (const g of trimmedGroups) {

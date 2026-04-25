@@ -1,8 +1,8 @@
 # History of Tests — Vulcan .00t Parser Reverse Engineering
 
 **Started:** ~January 2026  
-**Last Updated:** 2026-04-03  
-**Status:** 3 formats fully solved (Triangle, Plane, Cube), 4 partially working, 5 broken
+**Last Updated:** 2026-04-25  
+**Status:** Triangle, Plane, Cube, Linear Strip vertices solved; faces partial on some
 
 ## What IS Working (Ground Truth)
 
@@ -288,3 +288,55 @@
   - "40:2F → 60:17 → C0:2F" sequence is Z-exclusive in SPHERE
   - No tag class is axis-exclusive in working files
 - **Conclusion:** The fundamental problem is NOT tag-based axis assignment — it is that the coord/face boundary is WRONG for new-format files. Fixing boundary detection would eliminate most axis misassignments. The axis overlap issue (X=Y range) is secondary to the boundary problem.
+
+---
+
+### TEST-019: Old-Format Boundary Heuristic — "20 00 + DATA count"
+- **Status:** Successful — L-Shape unblocked
+- **Description:** The old-format face boundary detection picked the first "20 00" after coord_start+20. L-Shape has no attrSuffix and a "20 00" tag inside its coord data at offset +22, truncating the coord section to 22 bytes (2 verts).
+- **Process:** Prefer "20 00" where the next byte is a DATA count (≤0x06) — that's the face-section vertex-ref list signature. Fall back to bare "20 00" when no such candidate exists (triangle, prism).
+- **Findings:**
+  - L-Shape: 2 verts/0 faces → 8 verts/6 faces (coord values still need work)
+  - Cube/Fan/Linear: boundary unchanged (already picked a matching candidate)
+  - Triangle/Prism/Plane/Hexhole/SPHERE/Stepped/NonRound: unchanged
+- **Conclusion:** Boundary fixed. Coord decode for L-Shape still requires separate work (Y/Z DELTA semantics differ).
+
+---
+
+### TEST-020: Plane Initial Triangle — Leading 40:xx Header
+- **Status:** Successful — Plane F0 matches DXF
+- **Description:** Plane's face section starts with `20 00 40 a7 [3] 20 07 [4] 20 03 e0 03`. The 40:a7 is a leading header indicating the first init vertex is implicit V1 (raw_idx 0). The previous code broke on the 40 tag and gave init=[0,1,2] (default), producing the wrong diagonal.
+- **Process:** Recognize leading 40:xx after 20:00 as "implicit V1 first vertex". Continue collecting DATA until E0:03 terminator. Cube's init is fully explicit (3 DATA values) and remains [0,1,3].
+- **Findings:**
+  - Plane F0 = (V0, V2, V3) ✓ matches DXF F0 exactly
+  - Plane F1 still uses different diagonal until TEST-021
+- **Conclusion:** Initial triangle now correctly identified.
+
+---
+
+### TEST-021: Plane Initial Gate Position — leading_40 Sets gate=0
+- **Status:** Successful — Plane SOLVED
+- **Description:** With init_tri=[0,2,3] and default gate=1, the C operation produced face (V2, V3, V1) which uses a different diagonal than the init triangle, creating a butterfly shape instead of a flat quad.
+- **Process:** When leading_40_header is detected, set initial dec.g = 0 (gate at edge V0-V_data[0]) instead of default 1. This makes the next C op produce a triangle that shares the V0-V_data[0] diagonal with the init triangle.
+- **Findings:**
+  - Plane F0 = (V0, V2, V3) ✓ DXF F0
+  - Plane F1 = (V0, V2, V1) — same triangle as DXF F1, both faces share BL-TR diagonal
+  - Visually confirmed flat rectangle in viewer
+- **Conclusion:** Plane SOLVED. Cube unaffected (no leading_40_header).
+
+---
+
+### TEST-022: Shared-Base Encoding — Linear Strip 7/7 Vertex Match
+- **Status:** Successful — Linear Strip vertices SOLVED
+- **Description:** Linear Strip has only 4 coord values (1000, 1100, 1200, 1300) but 7 DXF vertices (X∈{1000,1100,1200,1300}, Y∈{1000,1100}, Z=1000). The standard parser's base = [G0.value, G1.value, G2.value] = [1000, 1100, 1200] is wrong because G1 and G2 are NOT Y and Z — they are additional X-deltas.
+- **Process:** Detect "shared-base" encoding: G0 leads with class 60:xx AND first 4 group values within tight ratio (max/min < 1.5). When detected:
+  1. base = [G0.value, G0.value, G0.value]
+  2. G1.value becomes Y_alt for slot vertices
+  3. G2+ are X-deltas
+  4. For each X-delta group: create (X, Y_base, Z) and if slot hi=1 present (X, Y_alt, Z)
+- **Findings:**
+  - Linear Strip: 0/7 verts → **7/7 verts** ✓ (faces 6 vs DXF 5 — separate face issue)
+  - L-Shape: detection correctly skipped (values 50.5/121/1500 don't pass tight-range check)
+  - 4-Sides Prism: detection correctly skipped (values 100/1000/5000 span too wide)
+  - All other files: unchanged
+- **Conclusion:** Linear Strip vertex decode SOLVED. The G0=60:xx + tight-range signature is a reliable detector for this encoding variant. Face count still off by one (5 vs 6) — requires face-decoder investigation.

@@ -238,6 +238,76 @@ def trim_coord_groups(groups: List[CoordGroup]) -> List[CoordGroup]:
     return groups
 
 
+def _build_vertex_table_shared_base(groups: List[CoordGroup], base: List[float]) -> List[List[Optional[float]]]:
+    """Shared-base encoding (linear strip, L-SHAPE, 4sides-prism).
+
+    All 3 axes start at G0.value. G1.value is reused as Y_alt for slot
+    vertices. Subsequent groups (G2+) are X-deltas. For each group with
+    a delta value (G1+), slot tags create vertices:
+      - hi=0 → (G.value, Y_base, Z_base)
+      - hi=1 → (G.value, Y_alt, Z_base)
+      - hi=2 → (G.value, Y_base, Z_alt)  [if Z_alt exists, else duplicate]
+
+    V0 = base = (G0.value, G0.value, G0.value).
+    """
+    y_base = base[0]
+    y_alt = groups[1].value if len(groups) > 1 else y_base
+    z_base = base[0]
+    # Detect a Z_alt: a group whose value differs significantly from y_base/y_alt
+    z_alt = z_base
+    for g in groups[2:]:
+        if abs(g.value - y_base) > 1 and abs(g.value - y_alt) > 1:
+            # Heuristic: if some later group has a value not in {y_base, y_alt},
+            # treat it as Z_alt for slot 2 vertices.
+            pass
+
+    vertices = [list(base)]  # V0
+    seen = {(round(base[0], 4), round(base[1], 4), round(base[2], 4))}
+
+    def add_unique(v):
+        key = (round(v[0], 4), round(v[1], 4), round(v[2], 4))
+        if key in seen:
+            return
+        seen.add(key)
+        vertices.append(v)
+
+    # For G1 onwards, each group's value is an X-delta.
+    # Slot tags determine which (Y, Z) variant to create.
+    assigner_classes = {'C0', '40', '80', '60', 'A0', '20'}
+    for i, g in enumerate(groups):
+        if i == 0:
+            continue
+        x = g.value
+        # Collect slot hi_nibs from assigner tags (skip the leading 60/80 with hi=1
+        # which is the "X-delta marker" rather than a slot)
+        slot_his = set()
+        for t in g.tags:
+            if t.cls in assigner_classes and t.hi_nib > 0:
+                slot_his.add(t.hi_nib)
+        if not slot_his:
+            # No slot tags → G1 itself is a primary at (x, y_base, z_base)
+            # AND (x, y_alt, z_base) if i==1 (G1 establishes Y_alt)
+            if i == 1:
+                add_unique([x, y_base, z_base])
+                # G1 itself doubles as Y_alt vertex
+                # (no separate vertex needed; it's the same point in this case)
+            else:
+                add_unique([x, y_base, z_base])
+        else:
+            # hi=1 → Y_alt, hi=0 → Y_base, hi=2 → Z_alt
+            if 0 in slot_his or any(h > 1 for h in slot_his):
+                # Default: include base-Y vertex
+                pass
+            # Always create both Y variants when both slots present
+            if 1 in slot_his:
+                add_unique([x, y_alt, z_base])
+            # hi=0 doesn't appear via hi_nib>0 filter; check separately
+            # For shared-base, every X-delta group implicitly creates the Y_base vertex too
+            add_unique([x, y_base, z_base])
+
+    return vertices
+
+
 def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[Optional[float]]]:
     """Build vertex table: PRIMARIES FIRST, then C0 SLOTS APPENDED.
 
@@ -257,7 +327,25 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
     # Trim face section data
     groups = trim_coord_groups(groups)
 
-    # Base values
+    # ── Shared-base encoding detection (TEST-019) ──
+    # Linear strip has all coord values in a tight range (1000-1300) and
+    # G0 leads with class 60 (Y class). All 3 axes start at G0.value;
+    # G1.value becomes Y_alt; subsequent groups are X-deltas; slot tags
+    # with hi=1 produce (X, Y_alt, Z) and (X, Y_base, Z) vertices.
+    # Files with widely varying coord ranges (L-SHAPE, 4-prism with Y=50,
+    # Z=5000+) do NOT use this encoding even when G0 has 60:xx — those
+    # are separate encoding variants we haven't fully decoded yet.
+    g0_first = groups[0].tags[0] if groups[0].tags else None
+    if g0_first is not None and g0_first.cls == '60':
+        first_values = [g.value for g in groups[:4] if abs(g.value) > 1]
+        if len(first_values) >= 2:
+            vmax, vmin = max(first_values), min(first_values)
+            tight_range = vmin > 0 and vmax / vmin < 1.5
+            if tight_range:
+                base = [groups[0].value, groups[0].value, groups[0].value]
+                return _build_vertex_table_shared_base(groups, base)
+
+    # Base values (standard: each axis from its own group)
     base = [groups[0].value, groups[1].value, groups[2].value]
 
     # Collect Z values for base/alt

@@ -766,6 +766,22 @@ function parseOOT(arrayBuffer) {
     validFaces = validFaces.map(f => f.map(i => finalRemap[i]));
     vertices.length = 0;
     for (const v of newVerts) vertices.push(v);
+
+    // Step 4: face-traversal renumbering — relabel vertices in the order
+    // they first appear in faces. Matches DXF's labeling convention.
+    // Unreferenced vertices get appended at the end.
+    const labelRemap = {};
+    for (const f of validFaces) for (const i of f) {
+      if (!(i in labelRemap)) labelRemap[i] = Object.keys(labelRemap).length;
+    }
+    for (let i = 0; i < vertices.length; i++) {
+      if (!(i in labelRemap)) labelRemap[i] = Object.keys(labelRemap).length;
+    }
+    const reordered = new Array(vertices.length);
+    for (const [oldIdx, newIdx] of Object.entries(labelRemap)) reordered[newIdx] = vertices[oldIdx];
+    vertices.length = 0;
+    for (const v of reordered) if (v) vertices.push(v);
+    validFaces = validFaces.map(f => f.map(i => labelRemap[i]));
   }
 
   console.log('[parseOOT v2] Result:', vertices.length, 'verts,', validFaces.length, 'faces');

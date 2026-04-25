@@ -1321,8 +1321,27 @@ def parse_oot_v2(filepath: str) -> OotResult:
             final_remap[i] = len(new_verts)
             new_verts.append(v)
 
-        result.faces = [tuple(final_remap[idx] for idx in f) for f in remapped_faces]
-        result.vertices = new_verts
+        # Face-traversal renumbering: relabel vertices in the order they
+        # first appear in faces. This is what makes Linear Strip's labels
+        # match DXF — DXF labels vertices in face-traversal order too.
+        # Unreferenced vertices (e.g. cube V2 not visited by EdgeBreaker)
+        # get appended at the end with the highest indices.
+        kept_faces = [tuple(final_remap[idx] for idx in f) for f in remapped_faces]
+        label_remap = {}
+        for f in kept_faces:
+            for vi in f:
+                if vi not in label_remap:
+                    label_remap[vi] = len(label_remap)
+        # Append unreferenced vertices
+        for i in range(len(new_verts)):
+            if i not in label_remap:
+                label_remap[i] = len(label_remap)
+
+        reordered = [None] * len(new_verts)
+        for old, new in label_remap.items():
+            reordered[new] = new_verts[old]
+        result.vertices = [v for v in reordered if v is not None]
+        result.faces = [tuple(label_remap[idx] for idx in f) for f in kept_faces]
 
     else:
         # No face section

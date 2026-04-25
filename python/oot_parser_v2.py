@@ -488,6 +488,7 @@ def parse_face_section(face_region: bytes, n_verts_header: int):
     initial_verts = []
     found_start = False
     leading_40_header = False
+    leading_40_lo = None
     for el in elements:
         if el[0] == 'TAG' and el[1] == '20' and (len(el) > 2 and el[2] == 0x00):
             found_start = True
@@ -499,6 +500,7 @@ def parse_face_section(face_region: bytes, n_verts_header: int):
                 # Leading 40:xx header (e.g. 40:a7 in plane) signals an
                 # implicit V1 first vertex; remaining DATA fills the rest.
                 leading_40_header = True
+                leading_40_lo = el[3]  # lo_nib of leading 40 tag
                 continue
             if el[0] == 'TAG' and el[1] in ('40', 'C0') and initial_verts:
                 # Topology tag after some DATA collected = end of init refs
@@ -506,6 +508,10 @@ def parse_face_section(face_region: bytes, n_verts_header: int):
             if el[0] == 'DATA' and 1 <= el[1] <= max(n_verts_header, 20):
                 initial_verts.append(el[1])
     if leading_40_header and len(initial_verts) == 2:
+        # Reversed F0 winding when leading 40 has lo=F (e.g. triangle 40:8f).
+        # lo=7 (plane 40:a7) keeps DATA in encoded order. This matches DXF F0.
+        if leading_40_lo == 0xF:
+            initial_verts = list(reversed(initial_verts))
         initial_verts = [1] + initial_verts  # prepend implicit V1
 
     return topology_ops, vertex_refs, initial_verts, leading_40_header

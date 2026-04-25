@@ -369,3 +369,16 @@
   - "Broken" files (Hexhole, SPHERE, etc.) lose their inflated double-counts; raw match counts go down but unique DXF coverage is unchanged.
 - **JS divergence:** JS produces a slightly different vertex list for cube (7v after dedupe vs 8v in Python). The JS vertex builder has a separate bug where one cube vertex isn't generated. Triangle, Plane, Linear all match Python exactly in JS.
 - **Conclusion:** Python parser is now perfectly clean for all 4 solved files. JS cube divergence is a separate JS-only issue tracked for later.
+
+---
+
+### TEST-025: Leading 40 lo_nib Controls F0 Winding — Triangle Solved
+- **Status:** Successful — Triangle vertex labels now match DXF exactly
+- **Description:** After TEST-024's face-traversal renumbering, plane and linear matched DXF labels but triangle still had V1↔V2 swapped. Triangle's leading header is `40:8f` (lo=F) while plane's is `40:a7` (lo=7) — the lo_nib differs.
+- **Process:** When leading 40:xx has lo_nib = 0xF, reverse the DATA values before constructing init_verts. lo_nib = 0x7 keeps the encoded order. Triangle's DATA [2,3] reversed → [3,2] → init = [1,3,2] → init_tri = [V0, V2, V1] = (BL, TR, BR) matching DXF F0. Plane's lo=7 stays unchanged.
+- **Findings:**
+  - Triangle: 3/3 vertex labels match DXF, 1/1 face exact match — PERFECT
+  - Plane: still 4/4 verts and matching faces — unchanged
+  - Linear: still perfect
+  - Cube has no leading 40 header, untouched
+- **Conclusion:** Triangle SOLVED. Pattern: lo=F on leading 40 = reverse F0 winding. Three of four "simple" files now match DXF perfectly.

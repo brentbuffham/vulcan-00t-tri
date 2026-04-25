@@ -622,6 +622,7 @@ function parseOOT(arrayBuffer) {
     const initialVerts = [];
     let foundStart = false;
     let leading40Header = false;
+    let leading40Lo = null;
     for (const el of faceElements) {
       if (el.type === 'TAG' && el.cls === '20' && el.byte2 === 0x00) {
         foundStart = true;
@@ -631,6 +632,7 @@ function parseOOT(arrayBuffer) {
         if (el.type === 'TAG' && el.cls === 'E0') break;
         if (el.type === 'TAG' && el.cls === '40' && initialVerts.length === 0 && !leading40Header) {
           leading40Header = true;
+          leading40Lo = el.lo;
           continue;
         }
         if (el.type === 'TAG' && (el.cls === '40' || el.cls === 'C0') && initialVerts.length > 0) break;
@@ -640,6 +642,9 @@ function parseOOT(arrayBuffer) {
       }
     }
     if (leading40Header && initialVerts.length === 2) {
+      // Reverse F0 winding when leading 40 has lo=F (e.g. triangle 40:8f).
+      // lo=7 (plane 40:a7) keeps DATA in encoded order. Matches DXF F0.
+      if (leading40Lo === 0xF) initialVerts.reverse();
       initialVerts.unshift(1);  // prepend implicit V1
     }
 

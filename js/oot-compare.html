@@ -736,28 +736,32 @@ function parseOOT(arrayBuffer) {
   // Filter out faces referencing non-existent vertices
   let validFaces = faces.filter(f => f.every(vi => vi >= 0 && vi < vertices.length));
 
-  // Coord-dedupe: always collapse coord-duplicates to their first occurrence.
-  // A "phantom" slot vertex from 80:15 on G0 collapses to V0; faces that
-  // referenced it (typically a bogus C op produced face with the phantom)
-  // become degenerate and are dropped. Then unreferenced vertices are
-  // pruned and remaining face indices are renumbered.
+  // Coord-dedupe: collapse coord-duplicates so face indices that point at
+  // a duplicate are remapped to the original. Keep all UNIQUE vertices,
+  // even if they're unreferenced by faces (e.g. cube V2). Only drop
+  // vertices that are BOTH unreferenced AND a duplicate (the phantom slot
+  // from 80:15 on G0 in triangle/plane).
   {
     const coordEq = (a, b) => Math.abs(a[0]-b[0])<0.1 && Math.abs(a[1]-b[1])<0.1 && Math.abs(a[2]-b[2])<0.1;
-    // Step 1: collapse coord-duplicates to their first occurrence
+    // Step 1: build dup remap (idx -> first occurrence of same coord)
     const dupRemap = vertices.map((v, i) => {
       for (let j = 0; j < i; j++) if (coordEq(v, vertices[j])) return j;
       return i;
     });
+    // Step 2: apply dup remap to faces, then drop degenerate faces
     validFaces = validFaces.map(f => f.map(i => dupRemap[i]));
-    // Step 2: drop degenerate faces (any pair of identical indices)
     validFaces = validFaces.filter(f => f[0] !== f[1] && f[1] !== f[2] && f[0] !== f[2]);
-    // Step 3: prune unreferenced vertices and renumber
+    // Step 3: build final vertex list: keep unique vertices (dupRemap[i]===i)
+    // OR referenced duplicates. Drop unreferenced duplicates only.
     const referenced = new Set();
     for (const f of validFaces) for (const i of f) referenced.add(i);
     const finalRemap = {};
     const newVerts = [];
     for (let i = 0; i < vertices.length; i++) {
-      if (referenced.has(i)) { finalRemap[i] = newVerts.length; newVerts.push(vertices[i]); }
+      const isDup = dupRemap[i] !== i;
+      if (isDup && !referenced.has(i)) continue;  // drop unreferenced duplicate
+      finalRemap[i] = newVerts.length;
+      newVerts.push(vertices[i]);
     }
     validFaces = validFaces.map(f => f.map(i => finalRemap[i]));
     vertices.length = 0;

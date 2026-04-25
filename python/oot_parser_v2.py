@@ -1281,36 +1281,47 @@ def parse_oot_v2(filepath: str) -> OotResult:
                         dec.L()
                         last_op = 'L'
 
-        # Drop unused coord-duplicate vertices (the "phantom" slot vertex
-        # from 80:15 on G0 in triangle/plane/cube etc.). A vertex is dropped
-        # when it's a coord-duplicate of an earlier vertex AND no face
-        # references it. Face indices are remapped so any references to a
-        # dropped duplicate point to the earlier original.
+        # Drop UNREFERENCED coord-duplicates. Keep UNIQUE vertices even if
+        # unreferenced (e.g. cube V2 which the EdgeBreaker decoder doesn't
+        # explicitly visit but is a real vertex of the mesh). Face indices
+        # are remapped so references to a duplicate collapse to its first
+        # occurrence; any face that becomes degenerate (two equal indices)
+        # is dropped.
         clean_verts = [(v[0], v[1], v[2]) for v in vertices if v[0] is not None]
-        referenced = set()
-        for f in dec.faces:
-            for idx in f:
-                referenced.add(idx)
 
         def coord_eq(a, b):
             return (abs(a[0]-b[0]) < 0.1 and abs(a[1]-b[1]) < 0.1 and abs(a[2]-b[2]) < 0.1)
 
-        remap = {}
+        # Step 1: dup remap (idx -> first occurrence)
+        dup_remap = []
+        for i, v in enumerate(clean_verts):
+            mapped = i
+            for j in range(i):
+                if coord_eq(v, clean_verts[j]):
+                    mapped = j
+                    break
+            dup_remap.append(mapped)
+
+        # Step 2: apply remap to faces, drop degenerate
+        remapped_faces = [tuple(dup_remap[idx] for idx in f) for f in dec.faces]
+        remapped_faces = [f for f in remapped_faces
+                          if f[0] != f[1] and f[1] != f[2] and f[0] != f[2]]
+
+        # Step 3: keep uniques and referenced duplicates; drop unreferenced dups
+        referenced = set()
+        for f in remapped_faces:
+            for idx in f:
+                referenced.add(idx)
+        final_remap = {}
         new_verts = []
         for i, v in enumerate(clean_verts):
-            dup_of = -1
-            if i not in referenced:
-                for j in range(i):
-                    if coord_eq(v, clean_verts[j]):
-                        dup_of = j
-                        break
-            if dup_of >= 0:
-                remap[i] = remap[dup_of]
-            else:
-                remap[i] = len(new_verts)
-                new_verts.append(v)
+            is_dup = dup_remap[i] != i
+            if is_dup and i not in referenced:
+                continue
+            final_remap[i] = len(new_verts)
+            new_verts.append(v)
 
-        result.faces = [tuple(remap.get(idx, idx) for idx in f) for f in dec.faces]
+        result.faces = [tuple(final_remap[idx] for idx in f) for f in remapped_faces]
         result.vertices = new_verts
 
     else:

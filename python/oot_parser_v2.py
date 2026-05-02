@@ -60,6 +60,29 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
     full_values = []
     idelta_threshold = 10000  # default until we have base values
 
+    # FULL-run mode (Fan, NonRound): if the first byte isn't a count (0-6),
+    # isn't 0x07 in new format, and isn't a standard tag class, treat it as
+    # a "full-precision run start" marker. Then read consecutive 8-byte IEEE
+    # 754 BE doubles until the next byte isn't a FULL indicator (0x40/0x41/
+    # 0xC0/0xC1). After the run, resume standard parsing.
+    TAG_CLASSES = (0x20, 0x40, 0x60, 0x80, 0xA0, 0xC0, 0xE0)
+    FULL_INDICATORS = (0x40, 0x41, 0xC0, 0xC1)
+    if (len(region) > 0 and region[0] > 0x07 and not is_separator(region[0])
+            and (region[0] & 0xE0) not in TAG_CLASSES):
+        pos = 1  # skip the run-start marker
+        while pos + 8 <= len(region) and region[pos] in FULL_INDICATORS:
+            data = list(region[pos:pos + 8])
+            val = read_be_double(bytes(data))
+            elements.append(CoordElement(
+                etype='COORD', offset=pos, value=val, kind='FULL', n_bytes=8
+            ))
+            if abs(val) > 1:
+                full_values.append(abs(val))
+                if len(full_values) == 3:
+                    idelta_threshold = max(full_values) * 3
+            prev = data
+            pos += 8
+
     while pos < len(region):
         b = region[pos]
         if b <= 0x06 or (new_format and b == 0x07):

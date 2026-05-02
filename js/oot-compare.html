@@ -305,6 +305,33 @@ function parseOOT(arrayBuffer) {
     return result;
   }
 
+  // FULL-run mode (Fan, NonRound): if first byte isn't a count (0-6),
+  // isn't 0x07 in new format, isn't a separator, and isn't a standard tag
+  // class, treat it as a "full-precision run start" marker. Read consecutive
+  // 8-byte IEEE 754 BE doubles until next byte isn't a FULL indicator.
+  const TAG_CLASSES = new Set([0x20, 0x40, 0x60, 0x80, 0xA0, 0xC0, 0xE0]);
+  if (coordRegion.length > 0) {
+    const fb = coordRegion[0];
+    const fbIsSep = (fb & 0x07) === 0x07 && fb >= 0x07;
+    if (fb > 0x07 && !fbIsSep && !TAG_CLASSES.has(fb & 0xE0)) {
+      pos = 1;
+      while (pos + 8 <= coordRegion.length) {
+        const ind = coordRegion[pos];
+        if (ind !== 0x40 && ind !== 0x41 && ind !== 0xC0 && ind !== 0xC1) break;
+        const data = new Uint8Array(8);
+        for (let i = 0; i < 8; i++) data[i] = coordRegion[pos + i];
+        const val = readBE64(data);
+        elements.push({ type: 'COORD', offset: pos, value: val, kind: 'FULL', nBytes: 8 });
+        if (Math.abs(val) > 1) {
+          fullValues.push(Math.abs(val));
+          if (fullValues.length === 3) ideltaThreshold = Math.max(...fullValues) * 3;
+        }
+        prev = data;
+        pos += 8;
+      }
+    }
+  }
+
   while (pos < coordRegion.length) {
     const b = coordRegion[pos];
     if (b <= 0x06 || (isNewFormat && b === 0x07)) {

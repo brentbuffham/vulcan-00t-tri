@@ -382,3 +382,15 @@
   - Linear: still perfect
   - Cube has no leading 40 header, untouched
 - **Conclusion:** Triangle SOLVED. Pattern: lo=F on leading 40 = reverse F0 winding. Three of four "simple" files now match DXF perfectly.
+
+---
+
+### TEST-026: Fan/NonRound Full-Precision Run — 3/6 Fan Vertex Match
+- **Status:** Successful — Fan unblocked from 0/6 to 3/6 unique vertex matches
+- **Description:** Fan and NonRound start with non-standard bytes (0x12 and 0x1f respectively) that aren't count bytes, separators, or standard tag classes. After the marker, consecutive 8-byte IEEE 754 BE doubles encode coords directly without DELTA compression.
+- **Process:** When the first byte of the coord region is > 0x07, not a separator, and not a standard tag class (0x20/0x40/0x60/0x80/0xA0/0xC0/0xE0), enter "FULL-run mode": skip the marker byte and read 8-byte IEEE doubles back-to-back until the next byte isn't a FULL indicator (0x40/0x41/0xC0/0xC1). After the run, resume standard parsing.
+- **Findings:**
+  - Fan: 0/6 → 3/6 unique vertex matches. V0=(254.29, 482.66, 900.05) ↔ DXF V3, V1=(300.02, 600.05, 900.05) ↔ DXF V1, V3=(300.02, 467.40, 900.05) ↔ DXF V4. Three more verts (V0, V2, V5 in DXF) still need decoding from the post-FULL DELTA stream.
+  - NonRound: parses 4 FULL doubles correctly (matching DXF V0 + V1.X), but vertex builder produces wrong combinations from the subsequent groups. Coord-decode partially fixed; vertex assembly still needs work.
+  - All other files: unchanged (the rule only fires when first byte fits the pattern).
+- **Conclusion:** Mystery C partially solved. Marker byte semantics (why 0x12 vs 0x1f) still unclear but doesn't matter for parsing — the consecutive-FULL-until-non-indicator rule handles both. Remaining Fan vertices are encoded via DELTAs in the bytes after the FULL run, which need additional decoding work.

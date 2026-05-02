@@ -151,6 +151,24 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
         elif pos + 1 < len(region):
             b2 = region[pos + 1]
             hi_cls = b & 0xE0
+            # Compact FULL detection (Stepped Pyramid): byte0 = FULL indicator
+            # (0x40/0x41/0xC0/0xC1) AND byte1 is in clean compact-FULL byte2
+            # range (specific values that decode to clean integer-ish coords).
+            # 40:49=50, 40:59=100, 40:69=200, 40:79=400 (and negatives via C0).
+            COMPACT_FULL_BYTE2 = {0x49, 0x59, 0x69, 0x79}
+            if b in (0x40, 0x41, 0xC0, 0xC1) and b2 in COMPACT_FULL_BYTE2:
+                r = [b, b2, 0, 0, 0, 0, 0, 0]
+                val = read_be_double(bytes(r))
+                elements.append(CoordElement(
+                    etype='COORD', offset=pos, value=val, kind='FULL', n_bytes=2
+                ))
+                if abs(val) > 1:
+                    full_values.append(abs(val))
+                    if len(full_values) == 3:
+                        idelta_threshold = max(full_values) * 3
+                prev = r
+                pos += 2
+                continue
             cls = {0x20: '20', 0x40: '40', 0x60: '60', 0x80: '80',
                    0xA0: 'A0', 0xC0: 'C0', 0xE0: 'E0'}.get(hi_cls, '{:02X}'.format(b))
             elements.append(CoordElement(

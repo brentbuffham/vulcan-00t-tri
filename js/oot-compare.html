@@ -326,7 +326,8 @@ function parseOOT(arrayBuffer) {
           fullValues.push(Math.abs(val));
           if (fullValues.length === 3) ideltaThreshold = Math.max(...fullValues) * 3;
         }
-        prev = data;
+        // prev is a Uint8Array (const ref) — copy bytes in place
+        for (let i = 0; i < 8; i++) prev[i] = data[i];
         pos += 8;
       }
     }

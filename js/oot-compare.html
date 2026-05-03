@@ -700,6 +700,17 @@ function parseOOT(arrayBuffer) {
       }
     }
 
+    // Detect shared-base early (linear strip) — uses a different vertex
+    // queue: all non-init verts in raw-index order.
+    let sharedBaseEarly = false;
+    if (trimmedGroups.length >= 2 && trimmedGroups[0].tags.length > 0 && trimmedGroups[0].tags[0].cls === '60') {
+      const fv = trimmedGroups.slice(0, 4).map(g => g.value).filter(v => Math.abs(v) > 1);
+      if (fv.length >= 2) {
+        const vmin = Math.min(...fv), vmax = Math.max(...fv);
+        if (vmin > 0 && vmax/vmin < 1.5) sharedBaseEarly = true;
+      }
+    }
+
     // Build vertex queue (mirror Python): refs from face section + implicit
     // verts (those not in init_tri/refs and not coord-dups). For cube to
     // produce DXF-matching vertex labels, refs are sorted by raw index
@@ -743,15 +754,24 @@ function parseOOT(arrayBuffer) {
       usedCoords.add(k);
       implicitVerts.push(vi);
     }
-    // Build c_vertex_order: implicit[0], refs_sorted[0], implicit[1], refs_sorted[1:]
-    const refsSorted = [...preTopoVerts, ...postTopoVerts].sort((a, b) => a - b);
-    const cVertexOrder = [];
-    let cii = 0, cri = 0;
-    if (implicitVerts.length) cVertexOrder.push(implicitVerts[cii++]);
-    if (cri < refsSorted.length) cVertexOrder.push(refsSorted[cri++]);
-    if (cii < implicitVerts.length) cVertexOrder.push(implicitVerts[cii++]);
-    while (cri < refsSorted.length) cVertexOrder.push(refsSorted[cri++]);
-    while (cii < implicitVerts.length) cVertexOrder.push(implicitVerts[cii++]);
+    // Build c_vertex_order
+    let cVertexOrder;
+    if (sharedBaseEarly) {
+      // Linear strip: all non-init verts in raw-index order
+      const usedInit = new Set(initTri);
+      cVertexOrder = [];
+      for (let vi = 0; vi < vertices.length; vi++) if (!usedInit.has(vi)) cVertexOrder.push(vi);
+    } else {
+      // Standard: implicit[0], refs_sorted[0], implicit[1], refs_sorted[1:]
+      const refsSorted = [...preTopoVerts, ...postTopoVerts].sort((a, b) => a - b);
+      cVertexOrder = [];
+      let cii = 0, cri = 0;
+      if (implicitVerts.length) cVertexOrder.push(implicitVerts[cii++]);
+      if (cri < refsSorted.length) cVertexOrder.push(refsSorted[cri++]);
+      if (cii < implicitVerts.length) cVertexOrder.push(implicitVerts[cii++]);
+      while (cri < refsSorted.length) cVertexOrder.push(refsSorted[cri++]);
+      while (cii < implicitVerts.length) cVertexOrder.push(implicitVerts[cii++]);
+    }
     let cvIdx = 0;
 
     faces.push(initTri.slice());

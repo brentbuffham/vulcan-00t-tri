@@ -778,7 +778,9 @@ function parseOOT(arrayBuffer) {
     let bnd = initTri.slice();
     // Plane-form leading 40:xx header puts the gate at edge V0-V_data[0]
     // (position 0) so the next C op shares that diagonal — flat quad.
-    let gate = leading40Header ? 0 : 1;
+    // Initial gate = 0 (edge V0-V1) for both leading_40 (plane/triangle) and
+    // explicit-init (cube). Shared-base (linear) keeps default gate=1.
+    let gate = sharedBaseEarly ? 1 : 0;
     let nv = Math.max(...initTri) + 1;
     let cOpsRemaining = Math.max(nVertsHeader - 3, 0);
     let lastOp = null;

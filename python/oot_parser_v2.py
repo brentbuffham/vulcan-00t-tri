@@ -1209,12 +1209,17 @@ def parse_oot_v2(filepath: str) -> OotResult:
         # ── Decode faces with vertex queue ──
         # The separator-based decoder uses the vertex queue for C operations.
         # Instead of creating new vertex indices, C operations consume from the queue.
+        # Detect shared-base early
+        _sb_check = (groups and groups[0].tags and groups[0].tags[0].cls == '60'
+                     and len([g.value for g in groups[:4] if abs(g.value) > 1]) >= 2
+                     and min(g.value for g in groups[:4] if abs(g.value) > 1) > 0
+                     and (max(g.value for g in groups[:4] if abs(g.value) > 1) /
+                          min(g.value for g in groups[:4] if abs(g.value) > 1)) < 1.5)
+
         dec = EdgeBreakerDecoder(init_tri)
-        if leading_40_header:
-            # Plane-form leading header: gate sits at edge V0-V_data[0] (position 0)
-            # rather than the default V_data[0]-V_data[1] (position 1). This makes
-            # the next C op produce a triangle that shares the V0-V_data[0]
-            # diagonal with the init triangle — flat quad instead of butterfly.
+        # Initial gate = 0 (edge V0-V1) for both leading_40 (plane/triangle)
+        # and explicit-init (cube). Shared-base (linear) keeps default gate=1.
+        if not _sb_check:
             dec.g = 0
         cv_idx = [0]  # mutable counter for closure
 

@@ -561,16 +561,20 @@ function parseOOT(arrayBuffer) {
         for (const t of g.tags) { if (t.cls !== 'C0') { ft = t; break; } }
 
         if (ft && ft.loNib === 0xF) {
-          // lo=F: two primaries — running + previous axis reverted to base
-          primaries.push([running[0], running[1], running[2]]);
-          const baseV = [running[0], running[1], running[2]];
           const prevAx = i > 0 && trimmedGroups[i-1].axis >= 0 ? trimmedGroups[i-1].axis : -1;
-          if (prevAx >= 0) baseV[prevAx] = base[prevAx];
-          if (baseV[0] !== running[0] || baseV[1] !== running[1] || baseV[2] !== running[2]) {
-            primaries.push(baseV);
-          } else if (zValues.length >= 2) {
-            primaries[primaries.length-1] = [running[0], running[1], zValues[0]];
+          if (prevAx === 2 && zValues.length >= 2) {
+            // Cube case: prev axis is Z, 2+ Z variants encountered.
+            // Create both Z variants in encountered order.
+            primaries.push([running[0], running[1], zValues[0]]);
             primaries.push([running[0], running[1], zValues[1]]);
+          } else {
+            // Plane case: running first, then prev-axis-reverted (if differs).
+            primaries.push([running[0], running[1], running[2]]);
+            const baseV = [running[0], running[1], running[2]];
+            if (prevAx >= 0) baseV[prevAx] = base[prevAx];
+            if (baseV[0] !== running[0] || baseV[1] !== running[1] || baseV[2] !== running[2]) {
+              primaries.push(baseV);
+            }
           }
         } else {
           primaries.push([running[0], running[1], running[2]]);

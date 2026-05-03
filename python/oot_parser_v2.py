@@ -438,22 +438,24 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
 
             if ft and ft.lo_nib == 0xF:
                 # lo=F: create TWO primaries.
-                # Primary 1: running state as-is.
-                # Primary 2: running state with PREVIOUS group's axis reverted to base.
-                # (For 2+ Z variants, this creates both Z variants.
-                #  For 1 Z variant, this creates a vertex where the prev axis = base.)
-                primaries.append([running[0], running[1], running[2]])
-                base_v = [running[0], running[1], running[2]]
                 prev_ax = groups[i - 1].axis if i > 0 and 0 <= groups[i - 1].axis <= 2 else -1
-                if prev_ax >= 0:
-                    base_v[prev_ax] = base[prev_ax]
-                # Only add if different from first primary
-                if base_v != [running[0], running[1], running[2]]:
-                    primaries.append(base_v)
-                elif len(z_values) >= 2:
-                    # Fallback: create both Z variants
-                    primaries[-1] = [running[0], running[1], z_values[0]]
+                if prev_ax == 2 and len(z_values) >= 2:
+                    # Cube case: prev axis is Z and 2+ Z variants encountered.
+                    # Create both Z variants in encountered order (z_values[0],
+                    # z_values[1]). This places z_values[1] (=alt_Z) at the
+                    # SECOND primary, which is what cube's init_tri DATA refs use.
+                    primaries.append([running[0], running[1], z_values[0]])
                     primaries.append([running[0], running[1], z_values[1]])
+                else:
+                    # Plane case: prev axis is X or Y (or single Z value).
+                    # Primary 1 = running. Primary 2 = running with prev axis
+                    # reverted to base (only added if it differs from primary 1).
+                    primaries.append([running[0], running[1], running[2]])
+                    base_v = [running[0], running[1], running[2]]
+                    if prev_ax >= 0:
+                        base_v[prev_ax] = base[prev_ax]
+                    if base_v != [running[0], running[1], running[2]]:
+                        primaries.append(base_v)
             else:
                 # One primary from running state
                 primaries.append([running[0], running[1], running[2]])

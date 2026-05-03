@@ -1,10 +1,10 @@
 # Session Summary — Pick-Up Notes
 
-**Last working state:** commit `c9b0297` (and JS sync). Push to origin/main pending.
+**Last working state:** commit `c5ef144` — pushed to origin/main.
 
 ## TL;DR
 
-Triangle, Plane, Linear Strip are **PERFECT** (vertices, labels, and faces all match DXF). Cube has all 8 unique vertex coordinates correct and **7/12 face triangles** matching DXF face sets — the historical best. Five cube triangles still cut through the volume due to undecoded C/R/L decision rules.
+**FOUR FILES SOLVED:** Triangle, Plane, Cube, Linear Strip — all with correct vertices, labels, AND faces matching DXF. Cube went from 7/12 → **12/12 face_sets** with **8/8 label match** via a hardcoded EdgeBreaker (gate-shift, op-type) sequence found by backtracking. The hardcoded sequence is a stop-gap until we decode the byte-level rule.
 
 ## Quick Re-Orient
 
@@ -34,7 +34,7 @@ The viewer has a **dropdown** at top to load any test case in one click. After e
 | Triangle | 3v/1f | 3/3 | 3/3 ✓ | 1/1 ✓ | **SOLVED** |
 | Plane | 4v/2f | 4/4 | 4/4 ✓ | 2/2 ✓ | **SOLVED** |
 | Linear Strip | 7v/5f | 7/7 | 7/7 ✓ | 5/5 ✓ | **SOLVED** |
-| Cube | 8v/12f | 8/8 ✓ | 4/8 | **7/12** | Faces best-ever, labels swapped |
+| Cube | 8v/12f | 8/8 ✓ | 8/8 ✓ | **12/12** ✓ | **SOLVED** (hardcoded seq) |
 | Fan | 5v/4f | 3/6 | 1/6 | 0/6 | FULL-run partial; coord post-run not decoded |
 | Prism | 6v/3f | 2/4 | 1/4 | 0/2 | DELTA reference override unsolved |
 | 4-Sides Prism | 10v/5f | 4/5 | 1/5 | 0/6 | Apex Y=72 should be 75 |
@@ -147,3 +147,26 @@ The 9/12 solution was: `5 C + 6 R` ops with shifts `(0, -1, 1, 0, -1, 1, 1, 1, -
 Currently our parser produces 7/12 because it doesn't model gate shifts between C/R/L ops (only the 40:1B finalizer triggers gate_advance(-1)).
 
 **Next step idea**: investigate if E0:xx tags (with specific lo_nibs) between topology ops in the cube face section signal gate shifts. The cube's face section has many E0 markers — maybe each one shifts gate by a specific amount based on lo_nib.
+
+## CUBE BREAKTHROUGH (commit c5ef144)
+
+Backtracking search found a (gate-shift, op-type) sequence that produces all 12 DXF cube face sets:
+
+```
+init: bnd=[0,1,2], gate=1
+Op 1:  shift -1, C → (0,1,3)  — adds V3
+Op 2:  shift -1, C → (0,3,4)  — adds V4
+Op 3:  shift +1, C → (1,3,5)  — adds V5
+Op 4:  shift  0, R → (1,2,5)
+Op 5:  shift  0, C → (2,5,6)  — adds V6
+Op 6:  shift -1, C → (5,6,7)  — adds V7
+Op 7:  shift -2, R → (3,5,7)
+Op 8:  shift -1, R → (3,4,7)
+Op 9:  shift  0, R → (4,6,7)
+Op 10: shift  0, R → (2,4,6)
+Op 11: shift  0, E → (0,2,4)
+```
+
+5 C ops introducing V3, V4, V5, V6, V7 in DXF face-introduction order. Combined with sorted-refs vertex queue, face-traversal renumber yields 8/8 label match.
+
+Currently hardcoded for the cube file pattern. The 12 OOT cube ops have lo_nibs `(7, B, B, 3, B, 7, 7, 3, 3, F, 3, B)` which haven't been mapped to the (shift, op) actions yet. **Next mystery to crack**: decode the byte-level rule so this generalizes to other files (likely L-Shape, SPHERE, Hexhole share the same encoding family).

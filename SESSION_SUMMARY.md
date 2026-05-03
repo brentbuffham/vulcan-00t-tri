@@ -128,3 +128,22 @@ When X, Y, Z share value range (1000–1300), closest-delta heuristic fails. **8
 - JS Fan shows 1v/0f while Python shows 5v/4f — JS-only divergence, not chased
 - Browser Chrome MCP connection sometimes flakes — use `switch_browser` to re-bind
 - Chrome auto-blocks multi-file downloads from localhost — use combined-canvas-into-one-PNG approach for screenshots
+
+## Cube Brute Force Findings (this session, after summary written)
+
+Searched the space of EdgeBreaker C/R/L/E sequences for cube using brute force:
+
+- **Plain C/R/L only with init [0,1,2]**: max **7/12** face_sets matching DXF (3M attempts)
+- **Adding E + ±1 gate shifts**: max **9/12** face_sets (60s, 3M attempts)
+- **Larger search with shifts ±2 in progress** (bu071djup background task)
+
+The 9/12 solution was: `5 C + 6 R` ops with shifts `(0, -1, 1, 0, -1, 1, 1, 1, -1, 0, 0, 0)`.
+
+**Implication**: getting 12/12 requires either:
+1. Gate manipulation rules we haven't decoded from OOT bytes (E0:xx markers between ops?)
+2. A non-standard EdgeBreaker variant
+3. Different vertex queue order combined with gate manipulation
+
+Currently our parser produces 7/12 because it doesn't model gate shifts between C/R/L ops (only the 40:1B finalizer triggers gate_advance(-1)).
+
+**Next step idea**: investigate if E0:xx tags (with specific lo_nibs) between topology ops in the cube face section signal gate shifts. The cube's face section has many E0 markers — maybe each one shifts gate by a specific amount based on lo_nib.

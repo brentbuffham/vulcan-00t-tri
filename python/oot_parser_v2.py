@@ -1172,7 +1172,6 @@ def parse_oot_v2(filepath: str) -> OotResult:
                 continue  # skip coordinate duplicates
             used_coords.add(key)
             implicit_verts.append(vi)
-        implicit_verts.reverse()
 
         # For shared-base files, use natural vertex-index order (V3, V4, V5, V6)
         # which matches the strip traversal of the encoded mesh.
@@ -1188,17 +1187,22 @@ def parse_oot_v2(filepath: str) -> OotResult:
             c_vertex_order = None
 
         if c_vertex_order is None:
-            # Standard build: implicit[0], pre-topo, implicit[1], post-topo(rev), implicits...
+            # Standard build: combine refs (pre_topo + post_topo) sorted by
+            # raw vertex index ascending, then interleave with implicits
+            # (also in encounter order, no reverse). This produces the
+            # DXF face-traversal C-op order for cube.
+            refs_sorted = sorted(pre_topo_verts + post_topo_verts)
             c_vertex_order = []
             ii = 0
+            ri = 0
             if implicit_verts:
                 c_vertex_order.append(implicit_verts[ii]); ii += 1
-            for v in pre_topo_verts:
-                c_vertex_order.append(v)
+            if ri < len(refs_sorted):
+                c_vertex_order.append(refs_sorted[ri]); ri += 1
             if ii < len(implicit_verts):
                 c_vertex_order.append(implicit_verts[ii]); ii += 1
-            for v in post_topo_verts:
-                c_vertex_order.append(v)
+            while ri < len(refs_sorted):
+                c_vertex_order.append(refs_sorted[ri]); ri += 1
             while ii < len(implicit_verts):
                 c_vertex_order.append(implicit_verts[ii]); ii += 1
 

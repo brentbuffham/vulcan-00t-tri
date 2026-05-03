@@ -762,14 +762,16 @@ function parseOOT(arrayBuffer) {
       cVertexOrder = [];
       for (let vi = 0; vi < vertices.length; vi++) if (!usedInit.has(vi)) cVertexOrder.push(vi);
     } else {
-      // Standard: implicit[0], refs_sorted[0], implicit[1], refs_sorted[1:]
-      const refsSorted = [...preTopoVerts, ...postTopoVerts].sort((a, b) => a - b);
+      // Standard (proven for cube 7/12 face_sets historical):
+      // implicit[0], pre-topo, implicit[1], post-topo (reversed),
+      // remaining_implicits...
+      implicitVerts.reverse();
       cVertexOrder = [];
-      let cii = 0, cri = 0;
+      let cii = 0;
       if (implicitVerts.length) cVertexOrder.push(implicitVerts[cii++]);
-      if (cri < refsSorted.length) cVertexOrder.push(refsSorted[cri++]);
+      for (const v of preTopoVerts) cVertexOrder.push(v);
       if (cii < implicitVerts.length) cVertexOrder.push(implicitVerts[cii++]);
-      while (cri < refsSorted.length) cVertexOrder.push(refsSorted[cri++]);
+      for (const v of [...postTopoVerts].reverse()) cVertexOrder.push(v);
       while (cii < implicitVerts.length) cVertexOrder.push(implicitVerts[cii++]);
     }
     let cvIdx = 0;
@@ -778,9 +780,9 @@ function parseOOT(arrayBuffer) {
     let bnd = initTri.slice();
     // Plane-form leading 40:xx header puts the gate at edge V0-V_data[0]
     // (position 0) so the next C op shares that diagonal — flat quad.
-    // Initial gate = 0 (edge V0-V1) for both leading_40 (plane/triangle) and
-    // explicit-init (cube). Shared-base (linear) keeps default gate=1.
-    let gate = sharedBaseEarly ? 1 : 0;
+    // Plane-form leading 40:xx header puts the gate at edge V0-V_data[0]
+    // (position 0). Otherwise default gate=1 (edge V_data[0]-V_data[1]).
+    let gate = leading40Header ? 0 : 1;
     let nv = Math.max(...initTri) + 1;
     let cOpsRemaining = Math.max(nVertsHeader - 3, 0);
     let lastOp = null;

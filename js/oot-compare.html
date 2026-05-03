@@ -700,6 +700,60 @@ function parseOOT(arrayBuffer) {
       }
     }
 
+    // Build vertex queue (mirror Python): refs from face section + implicit
+    // verts (those not in init_tri/refs and not coord-dups). For cube to
+    // produce DXF-matching vertex labels, refs are sorted by raw index
+    // ascending and interleaved with implicits.
+    const preTopoVerts = [];
+    const postTopoVerts = [];
+    {
+      let pastInit = false;
+      let seenTopo = false;
+      const usedRefs = new Set(initTri);
+      const coordEq = (a, b) => Math.abs(a[0]-b[0])<0.1 && Math.abs(a[1]-b[1])<0.1 && Math.abs(a[2]-b[2])<0.1;
+      for (const el of faceElements) {
+        if (!pastInit) {
+          if (el.type === 'TAG' && el.cls === 'E0') pastInit = true;
+          continue;
+        }
+        if (el.type === 'TAG' && (el.cls === '40' || el.cls === 'C0' || el.cls === 'E1')) seenTopo = true;
+        if (el.type === 'DATA') {
+          const dv = el.value, ri = dv - 1;
+          if (dv >= 1 && ri < vertices.length && dv !== 0x40 && dv !== 0x82 && dv !== 0xC0) {
+            const vc = vertices[ri];
+            const allUsed = [...initTri, ...preTopoVerts, ...postTopoVerts];
+            const isDup = allUsed.some(oi => oi < vertices.length && coordEq(vertices[oi], vc));
+            if (!isDup) {
+              if (!seenTopo) preTopoVerts.push(ri);
+              else postTopoVerts.push(ri);
+            }
+          }
+        }
+      }
+    }
+    const usedSet = new Set([...initTri, ...preTopoVerts, ...postTopoVerts]);
+    const usedCoords = new Set();
+    const coordKey = v => v.map(x => Math.round(x * 10) / 10).join(',');
+    for (const vi of usedSet) if (vi < vertices.length) usedCoords.add(coordKey(vertices[vi]));
+    const implicitVerts = [];
+    for (let vi = 0; vi < vertices.length; vi++) {
+      if (usedSet.has(vi)) continue;
+      const k = coordKey(vertices[vi]);
+      if (usedCoords.has(k)) continue;
+      usedCoords.add(k);
+      implicitVerts.push(vi);
+    }
+    // Build c_vertex_order: implicit[0], refs_sorted[0], implicit[1], refs_sorted[1:]
+    const refsSorted = [...preTopoVerts, ...postTopoVerts].sort((a, b) => a - b);
+    const cVertexOrder = [];
+    let cii = 0, cri = 0;
+    if (implicitVerts.length) cVertexOrder.push(implicitVerts[cii++]);
+    if (cri < refsSorted.length) cVertexOrder.push(refsSorted[cri++]);
+    if (cii < implicitVerts.length) cVertexOrder.push(implicitVerts[cii++]);
+    while (cri < refsSorted.length) cVertexOrder.push(refsSorted[cri++]);
+    while (cii < implicitVerts.length) cVertexOrder.push(implicitVerts[cii++]);
+    let cvIdx = 0;
+
     faces.push(initTri.slice());
     let bnd = initTri.slice();
     // Plane-form leading 40:xx header puts the gate at edge V0-V_data[0]
@@ -710,7 +764,17 @@ function parseOOT(arrayBuffer) {
     let lastOp = null;
     const debugTrace = [];
 
-    function ebC() { const n=bnd.length; if(n<3)return; const li=gate%n; const v=nv++; faces.push([bnd[li],bnd[(gate+1)%n],v]); bnd.splice(li+1,0,v); gate=li+1; }
+    function nextCVert() {
+      if (cvIdx < cVertexOrder.length) return cVertexOrder[cvIdx++];
+      return -1;
+    }
+    function ebC() {
+      const n=bnd.length; if(n<3)return;
+      const li=gate%n;
+      let v = nextCVert();
+      if (v < 0) v = nv++;
+      faces.push([bnd[li],bnd[(gate+1)%n],v]); bnd.splice(li+1,0,v); gate=li+1;
+    }
     function ebR() { const n=bnd.length; if(n<4)return; const ri=(gate+1)%n; faces.push([bnd[gate%n],bnd[ri],bnd[(gate+2)%n]]); bnd.splice(ri,1); if(gate>=bnd.length)gate%=bnd.length; }
     function ebL() { const n=bnd.length; if(n<4)return; const li=gate%n; const fl=bnd[((gate-1)%n+n)%n]; faces.push([fl,bnd[li],bnd[(gate+1)%n]]); bnd.splice(li,1); gate=((li-1)%bnd.length+bnd.length)%bnd.length; }
     function ebE() { const n=bnd.length; if(n===3){faces.push([bnd[0],bnd[1],bnd[2]]);bnd=[];} else if(n>=4){const li=gate%n;const fl=bnd[((gate-1)%n+n)%n];faces.push([fl,bnd[li],bnd[(gate+1)%n]]);bnd.splice(li,1);gate=((li-1)%bnd.length+bnd.length)%bnd.length;} }

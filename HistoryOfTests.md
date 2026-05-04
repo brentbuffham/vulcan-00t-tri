@@ -431,3 +431,16 @@
   - Fan: unchanged — `80:1f` appears post-FULL-run but `full_bytes_history` is empty there (FULL-run path doesn't populate it).
 - **Remaining:** Prism's DXF V1=`(150, 1000, 5500)` is still missing. We have `(150, 1000, 5000)` (Z wrong) but no `(150, 1000, 5500)` primary. This is the next focus.
 - **Conclusion:** The `80:1f` tag is the discriminator that lets us locally reroute prism's troublesome DELTA without touching cube. Prism vertex match jumps 2/4 → 3/4. JS parser synced.
+
+---
+
+### TEST-030: 80:1f Also Emits Y-Reverted Primary on Same Group
+- **Status:** Successful — Prism 3/4 → 4/4 vertex match
+- **Description:** After TEST-029, prism still missed DXF V1=(150, 1000, 5500). The bytes for V1 are `running_X=150` × `Y=base[Y]=1000` × `Z=running=5500`. The carrying tag is the same `80:1f` on G6 (the 5500 Z value).
+- **Process:** When `80:1f` appears on the current group's tag list (and `forced_axis` doesn't already apply), emit an EXTRA primary `[running_X, base[Y], running_Z]` in addition to the standard `[running...]` primary. This is in `build_vertex_table`, before the existing `lo=F` branch.
+- **Findings:**
+  - Prism: 3/4 → 4/4 vertex match. V4=(150, 1000, 5500) ✓ DXF V1.
+  - Triangle/Plane/Linear/Cube: unchanged (no 80:1f).
+  - 4-Prism: unchanged.
+- **Remaining for prism:** 4/4 verts ✓; faces produce F0=(0,1,2), F1=(0,1,3), F2=(3,1,4) but with 9 OOT vertices (5 phantoms), face renumber doesn't yet collapse to DXF face_sets {(0,1,2), (0,3,1)}. Next: dedup phantom primaries / face-traversal renumber.
+- **Conclusion:** 80:1f is a "vertex-emitter" tag (in addition to the DELTA-prev override). Both emissions key off the same tag, on the same group.

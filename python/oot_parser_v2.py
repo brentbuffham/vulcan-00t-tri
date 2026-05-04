@@ -36,6 +36,7 @@ class CoordElement:
     value: float = 0.0
     kind: str = ''  # 'FULL' or 'DELTA'
     n_bytes: int = 0
+    forced_axis: int = -1  # -1 = let assign_axes decide, 0/1/2 = pinned
     # TAG fields
     cls: str = ''
     byte2: int = 0
@@ -58,7 +59,14 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
     pos = 0
     # Dynamic IDELTA threshold: after seeing first 3 FULL values, set to 3× max
     full_values = []
+    full_bytes_history: List[List[int]] = []  # 8-byte arrays for the first 3 FULLs (base X/Y/Z)
     idelta_threshold = 10000  # default until we have base values
+    # Prism: TAG 80:1f immediately preceding a 1-byte DELTA signals that the
+    # next coord uses base[Y] (the 2nd FULL) as prev, not the running prev.
+    # Without this, prism's `80 1f c0 17 00 7f` decodes to 503.75 with prev
+    # carrying byte-2 0x7c from 5500; with base[Y]=1000=`40 8f 40 00..` it
+    # correctly decodes to 500.0.
+    use_base_y_for_next_delta = False
 
     # FULL-run mode (Fan, NonRound): if the first byte isn't a count (0-6),
     # isn't 0x07 in new format, and isn't a standard tag class, treat it as
@@ -88,6 +96,7 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
         if b <= 0x06 or (new_format and b == 0x07):
             nb = b + 1
             raw_nb = nb  # preserve original byte count for position advancement
+            forced_axis_for_this = -1
             if pos + 1 + nb > len(region):
                 break
             stored = list(region[pos + 1:pos + 1 + nb])
@@ -115,13 +124,27 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
                     full_values.append(abs(fv))
                     if len(full_values) == 3:
                         idelta_threshold = max(full_values) * 3
+                if len(full_bytes_history) < 3:
+                    full_bytes_history.append((r + [0] * 8)[:8])
+                use_base_y_for_next_delta = False
             else:
+                # Determine prev to use: by default running prev,
+                # but use base[Y] (2nd FULL) if the preceding 80:1f flag is set.
+                base_for_delta = prev
+                forced_axis_for_this = -1
+                if (use_base_y_for_next_delta
+                        and nb == 1
+                        and len(full_bytes_history) >= 2
+                        and not new_format):
+                    base_for_delta = full_bytes_history[1]
+                    forced_axis_for_this = 1  # axis Y
                 if new_format:
                     # New format: zero out trailing bytes
-                    r = [prev[0]] + stored + [0] * (8 - nb - 1)
+                    r = [base_for_delta[0]] + stored + [0] * (8 - nb - 1)
                 else:
                     # Old format: keep trailing bytes from previous value
-                    r = [prev[0]] + stored + list(prev[nb + 1:8])
+                    r = [base_for_delta[0]] + stored + list(base_for_delta[nb + 1:8])
+                use_base_y_for_next_delta = False
                 kind = 'DELTA'
                 if new_format and kind == 'DELTA':
                     # Check if standard DELTA produced an unreasonable value.
@@ -141,8 +164,10 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
             r = (r + [0] * 8)[:8]
             val = read_be_double(bytes(r))
             prev = r
+            fa = forced_axis_for_this if kind == 'DELTA' else -1
             elements.append(CoordElement(
-                etype='COORD', offset=pos, value=val, kind=kind, n_bytes=nb
+                etype='COORD', offset=pos, value=val, kind=kind, n_bytes=nb,
+                forced_axis=fa,
             ))
             pos += 1 + raw_nb  # advance by original byte count, not stripped
         elif is_separator(b):
@@ -175,6 +200,9 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
                 etype='TAG', offset=pos, cls=cls, byte2=b2,
                 lo_nib=b2 & 0x0F, hi_nib=(b2 >> 4) & 0x0F,
             ))
+            # Prism flag: 80:1f arms next 1-byte DELTA to use base[Y].
+            if cls == '80' and b2 == 0x1f:
+                use_base_y_for_next_delta = True
             pos += 2
         else:
             break
@@ -192,6 +220,7 @@ class CoordGroup:
     seps: List[int] = field(default_factory=list)
     # Derived
     axis: int = -1  # 0=X, 1=Y, 2=Z
+    forced_axis: int = -1  # tag-driven override; assign_axes honors when ≥0
     c0_assignments: List[Tuple[int, int]] = field(default_factory=list)  # (vertex_idx, lo_nib)
 
 
@@ -203,7 +232,10 @@ def group_coord_elements(elements: List[CoordElement]) -> List[CoordGroup]:
         if el.etype == 'COORD':
             if current is not None:
                 groups.append(current)
-            current = CoordGroup(value=el.value, kind=el.kind, n_bytes=el.n_bytes)
+            current = CoordGroup(
+                value=el.value, kind=el.kind, n_bytes=el.n_bytes,
+                forced_axis=el.forced_axis,
+            )
         elif current is not None:
             if el.etype == 'TAG':
                 current.tags.append(el)
@@ -235,9 +267,12 @@ def assign_axes(groups: List[CoordGroup]) -> None:
     current = [groups[0].value, groups[1].value, groups[2].value]
 
     for g in groups[3:]:
-        # Closest-delta: assign to axis with nearest current value
-        deltas = [abs(g.value - current[ax]) for ax in range(3)]
-        best_ax = deltas.index(min(deltas))
+        if g.forced_axis >= 0:
+            best_ax = g.forced_axis
+        else:
+            # Closest-delta: assign to axis with nearest current value
+            deltas = [abs(g.value - current[ax]) for ax in range(3)]
+            best_ax = deltas.index(min(deltas))
         g.axis = best_ax
         current[best_ax] = g.value
 
@@ -436,7 +471,15 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
                     ft = t
                     break
 
-            if ft and ft.lo_nib == 0xF:
+            if g.forced_axis >= 0:
+                # Tag-driven axis (e.g. prism 80:1f → Y): emit two primaries,
+                # one at base_Z and one at alt_Z (mirrors the lo=F+Z-prev path).
+                # The forced-axis DELTA is conceptually a "second pole" coord so
+                # both Z variants are valid candidate vertices.
+                primaries.append([running[0], running[1], base_z])
+                if alt_z != base_z:
+                    primaries.append([running[0], running[1], alt_z])
+            elif ft and ft.lo_nib == 0xF:
                 # lo=F: create TWO primaries.
                 prev_ax = groups[i - 1].axis if i > 0 and 0 <= groups[i - 1].axis <= 2 else -1
                 if prev_ax == 2 and len(z_values) >= 2:

@@ -394,3 +394,40 @@
   - NonRound: parses 4 FULL doubles correctly (matching DXF V0 + V1.X), but vertex builder produces wrong combinations from the subsequent groups. Coord-decode partially fixed; vertex assembly still needs work.
   - All other files: unchanged (the rule only fires when first byte fits the pattern).
 - **Conclusion:** Mystery C partially solved. Marker byte semantics (why 0x12 vs 0x1f) still unclear but doesn't matter for parsing — the consecutive-FULL-until-non-indicator rule handles both. Remaining Fan vertices are encoded via DELTAs in the bytes after the FULL run, which need additional decoding work.
+
+---
+
+### TEST-028: Prism / 4-Prism DELTA Trailing-Byte Investigation
+- **Status:** Investigated — no fix landed; current parser unchanged
+- **Goal:** Understand why prism Y=503.75 should be 500, and 4-prism apex Y=72 should be 75.
+- **Findings (Prism, OLD format vlen=8):**
+  - Coord region bytes around Y_apex: `01 b5 7c 80 1f c0 17 00 7f e0 06`
+  - DELTA `01 b5 7c` correctly gives 5500.0 (Z, prev unused since 2 bytes specified)
+  - DELTA `00 7f` (1 byte) with running prev = 5500=`40 b5 7c 00..` keeps trailing byte 2=0x7c → result `40 7f 7c` = **503.75**
+  - For 500 = `40 7f 40 00..` we'd need byte 2=0x40 — which equals base[Y]=1000=`40 8f 40 00..` byte 2.
+  - So **rule that works for prism**: TAG `C0:17` immediately preceding 1-byte DELTA → use base[axis_Y] as prev (gives byte 2=0x40 trailing).
+  - **But this breaks cube**: cube has same `C0:17` pattern before `00 72` for X=300 and currently gets correct 300 from running prev=600=`40 82 c0..` (byte 2=0xc0). If we used base[X]=100=`40 59 00..` instead, byte 2=0x00 → result `40 72 00` = 288 ✗.
+- **Findings (4-Prism, NEW format vlen=15):**
+  - Coord region bytes around apex: `01 91 30 20 55 20 57 00 52 a0 7f 01 b5 7c`
+  - DELTA `00 52` gives 72.0 with new-format zero-trailing. Old-format keep-trailing from prev=1100=`40 91 30..` would give `40 52 30..` = 72.75. Neither equals 75.
+  - The IEEE bytes `40 52 c0` (= 75.0) **do not appear anywhere in the 4-prism file**. The apex Y=75 cannot be derived from a single DELTA on running prev.
+  - Note: 75 = (50 + 100)/2 = mean of base Y values. Possibly Vulcan computes the apex Y as the centroid of base corners rather than encoding it explicitly. Cannot be confirmed from bytes alone.
+- **Axis-overlap secondary issue:** prism's `503.75` (or `500`) gets assigned to axis X by the closest-delta heuristic since |503.75 − 150| < |503.75 − 1500|. Even if we fixed the value, axis assignment would still be wrong without a tag-driven axis hint.
+- **Conclusion:** The DELTA byte rule that fixes prism breaks cube — they have identical tag-pattern context (`C0:17` before 1-byte DELTA) but require different prev. No purely byte-local rule found that fixes prism without regressing cube. 4-Prism apex Y=75 is not stored explicitly and may be a derived/centroid value.
+
+---
+
+### TEST-029: Prism `80:1f` Tag Disambiguates "Use base[Y]"
+- **Status:** Successful — Prism 2/4 → 3/4 vertex match, no regression on Triangle/Plane/Linear/Cube
+- **Description:** Survey of `80:1f` (cls=80, hi_nib=1, lo_nib=F) shows it appears ONLY in prism's coord region (and one occurrence in fan, but fan doesn't fire because its FULLs come from FULL-run mode and don't populate `full_bytes_history`). Cube has `80:0f` (hi_nib=0) which is different. So `80:1f` is the missing context bit that distinguishes prism's `00 7f` DELTA (wants base[Y] as prev) from cube's `00 72` DELTA (wants running prev).
+- **Process:**
+  1. In `parse_coord_elements`: track `full_bytes_history` (8-byte snapshots of first 3 FULL count-byte values = base X/Y/Z). Set flag `use_base_y_for_next_delta` when 80:1f tag is parsed; on the very next 1-byte DELTA in old format, use `full_bytes_history[1]` (= base Y bytes) as prev for keep-trailing decode. Stamp `forced_axis=1` on that COORD element.
+  2. Propagate `forced_axis` through `CoordElement → CoordGroup`. In `assign_axes`, honor `forced_axis ≥ 0` instead of running closest-delta.
+  3. In `build_vertex_table`, when a group has `forced_axis ≥ 0`, emit TWO primaries (mirroring the lo=F + Z-prev path): `[running_X, running_Y, base_Z]` and `[running_X, running_Y, alt_Z]`. This places `(150, 500, 5000)` (= DXF prism V2) and `(150, 500, 6000)` (extra) into the vertex list.
+- **Findings:**
+  - Prism: `coord_values[7]` 503.75 → 500.0 ✓; axis assigned Y not X ✓; vertex `(150, 500, 5000)` now present and matches DXF V2.
+  - Triangle/Plane/Linear/Cube: unchanged — none of those files contain `80:1f`.
+  - 4-Prism: unchanged — the `00 52` DELTA doesn't have `80:1f` preceding it (the apex Y=75 issue lies elsewhere).
+  - Fan: unchanged — `80:1f` appears post-FULL-run but `full_bytes_history` is empty there (FULL-run path doesn't populate it).
+- **Remaining:** Prism's DXF V1=`(150, 1000, 5500)` is still missing. We have `(150, 1000, 5000)` (Z wrong) but no `(150, 1000, 5500)` primary. This is the next focus.
+- **Conclusion:** The `80:1f` tag is the discriminator that lets us locally reroute prism's troublesome DELTA without touching cube. Prism vertex match jumps 2/4 → 3/4. JS parser synced.

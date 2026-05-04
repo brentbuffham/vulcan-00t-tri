@@ -265,7 +265,11 @@ function parseOOT(arrayBuffer) {
   const elements = [];
   // Dynamic IDELTA threshold: after first 3 FULL values, set to 3× max
   const fullValues = [];
+  /** @type {number[][]} 8-byte arrays for the first 3 FULLs (base X/Y/Z). */
+  const fullBytesHistory = [];
   let ideltaThreshold = 10000;
+  // Prism: 80:1f tag immediately preceding a 1-byte DELTA arms a base[Y] override.
+  let useBaseYForNextDelta = false;
 
   // Helper: read uint64 big-endian from 8-byte array
   function readUint64BE(bytes) {
@@ -361,6 +365,7 @@ function parseOOT(arrayBuffer) {
       }
 
       let r, kind;
+      let forcedAxisForThis = -1;
       const isFull = (stored[0] === 0x40 || stored[0] === 0x41 || stored[0] === 0xC0 || stored[0] === 0xC1);
 
       if (isFull) {
@@ -375,16 +380,30 @@ function parseOOT(arrayBuffer) {
             ideltaThreshold = Math.max(...fullValues) * 3;
           }
         }
+        if (fullBytesHistory.length < 3) {
+          const snap = new Uint8Array(8);
+          for (let i = 0; i < 8; i++) snap[i] = r[i];
+          fullBytesHistory.push(snap);
+        }
+        useBaseYForNextDelta = false;
       } else {
+        // Pick prev: by default running prev, but use base[Y] (2nd FULL) when
+        // 80:1f flag was just set and this is a 1-byte DELTA in old format.
+        let baseForDelta = prev;
+        if (useBaseYForNextDelta && nb === 1 && fullBytesHistory.length >= 2 && !isNewFormat) {
+          baseForDelta = fullBytesHistory[1];
+          forcedAxisForThis = 1;
+        }
         r = new Uint8Array(8);
-        r[0] = prev[0];
+        r[0] = baseForDelta[0];
         for (let i = 0; i < nb && i + 1 < 8; i++) r[i + 1] = stored[i];
         if (isNewFormat) {
           // New format: zero out trailing bytes (already zero from Uint8Array init)
         } else {
           // Old format: keep trailing bytes from previous
-          for (let i = nb + 1; i < 8; i++) r[i] = prev[i];
+          for (let i = nb + 1; i < 8; i++) r[i] = baseForDelta[i];
         }
+        useBaseYForNextDelta = false;
         kind = 'DELTA';
 
         // Signed integer delta fallback (new format only)
@@ -405,7 +424,8 @@ function parseOOT(arrayBuffer) {
 
       const val = readBE64(r8);
       for (let i = 0; i < 8; i++) prev[i] = r8[i];
-      elements.push({ etype: 'COORD', value: val, kind: kind, nBytes: nb });
+      const fa = (kind === 'DELTA') ? forcedAxisForThis : -1;
+      elements.push({ etype: 'COORD', value: val, kind: kind, nBytes: nb, forcedAxis: fa });
       pos += 1 + rawNb;
     } else if (isSep(b)) {
       elements.push({ etype: 'SEP', sepByte: b });
@@ -415,6 +435,8 @@ function parseOOT(arrayBuffer) {
       const hiCls = b & 0xE0;
       const cls = {0x20:'20', 0x40:'40', 0x60:'60', 0x80:'80', 0xA0:'A0', 0xC0:'C0', 0xE0:'E0'}[hiCls] || (b.toString(16).padStart(2,'0').toUpperCase());
       elements.push({ etype: 'TAG', cls: cls, byte2: b2, loNib: b2 & 0x0F, hiNib: (b2 >> 4) & 0x0F });
+      // Prism flag: 80:1f arms next 1-byte DELTA to use base[Y].
+      if (cls === '80' && b2 === 0x1f) useBaseYForNextDelta = true;
       pos += 2;
     } else {
       break;
@@ -427,7 +449,7 @@ function parseOOT(arrayBuffer) {
   for (const el of elements) {
     if (el.etype === 'COORD') {
       if (currentGroup !== null) groups.push(currentGroup);
-      currentGroup = { value: el.value, kind: el.kind, nBytes: el.nBytes, tags: [], seps: [], axis: -1, c0Assignments: [] };
+      currentGroup = { value: el.value, kind: el.kind, nBytes: el.nBytes, tags: [], seps: [], axis: -1, forcedAxis: el.forcedAxis !== undefined ? el.forcedAxis : -1, c0Assignments: [] };
     } else if (currentGroup !== null) {
       if (el.etype === 'TAG') {
         currentGroup.tags.push(el);
@@ -446,10 +468,16 @@ function parseOOT(arrayBuffer) {
     const current = [groups[0].value, groups[1].value, groups[2].value];
     for (let i = 3; i < groups.length; i++) {
       const g = groups[i];
-      let bestAx = 0, bestDelta = Math.abs(g.value - current[0]);
-      for (let ax = 1; ax < 3; ax++) {
-        const d = Math.abs(g.value - current[ax]);
-        if (d < bestDelta) { bestDelta = d; bestAx = ax; }
+      let bestAx;
+      if (g.forcedAxis !== undefined && g.forcedAxis >= 0) {
+        bestAx = g.forcedAxis;
+      } else {
+        bestAx = 0;
+        let bestDelta = Math.abs(g.value - current[0]);
+        for (let ax = 1; ax < 3; ax++) {
+          const d = Math.abs(g.value - current[ax]);
+          if (d < bestDelta) { bestDelta = d; bestAx = ax; }
+        }
       }
       g.axis = bestAx;
       current[bestAx] = g.value;
@@ -560,7 +588,11 @@ function parseOOT(arrayBuffer) {
         let ft = null;
         for (const t of g.tags) { if (t.cls !== 'C0') { ft = t; break; } }
 
-        if (ft && ft.loNib === 0xF) {
+        if (g.forcedAxis !== undefined && g.forcedAxis >= 0) {
+          // Tag-driven axis (prism 80:1f → Y): emit two primaries at base_Z and alt_Z.
+          primaries.push([running[0], running[1], baseZ]);
+          if (altZ !== baseZ) primaries.push([running[0], running[1], altZ]);
+        } else if (ft && ft.loNib === 0xF) {
           const prevAx = i > 0 && trimmedGroups[i-1].axis >= 0 ? trimmedGroups[i-1].axis : -1;
           if (prevAx === 2 && zValues.length >= 2) {
             // Cube case: prev axis is Z, 2+ Z variants encountered.

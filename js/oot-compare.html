@@ -327,7 +327,7 @@ function parseOOT(arrayBuffer) {
         const data = new Uint8Array(8);
         for (let i = 0; i < 8; i++) data[i] = coordRegion[pos + i];
         const val = readBE64(data);
-        elements.push({ type: 'COORD', offset: pos, value: val, kind: 'FULL', nBytes: 8 });
+        elements.push({ etype: 'COORD', offset: pos, value: val, kind: 'FULL', nBytes: 8 });
         if (Math.abs(val) > 1) {
           fullValues.push(Math.abs(val));
           if (fullValues.length === 3) ideltaThreshold = Math.max(...fullValues) * 3;

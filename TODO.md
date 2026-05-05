@@ -13,13 +13,8 @@
 | Triangle | 3/3 ✅ | 1/1 ✅ | Leading 40:8f (lo=F) reverses F0 winding |
 | Plane | 4/4 ✅ | 2/2 ✅ | Leading 40:a7 (lo=7), gate=0 |
 | Linear Strip | 7/7 ✅ | 5/5 ✅ | Shared-base encoding (G0=60:xx + tight range) |
-
-### Solved-coords-but-not-labels (vertex coords match, label order differs)
-
-| File | Verts | Faces | Notes |
-|---|---|---|---|
 | Cube | 8/8 ✅ | 12/12 ✅ | Hardcoded EdgeBreaker (gate-shift, op-type) seq for cube pattern (TEST-027) |
-| Prism | 4/4 coords (8 OOT incl. phantoms) | 0/2 face_sets | TEST-029/030/031: 80:1f tag arms base[Y] override + Y-reverted primary. Faces still reference phantoms — face decoder picks phantom indices. |
+| Prism | 4/4 ✅ (V0..V3 strict) | 2/2 face_sets ✅ | TEST-029..033: 80:1f tag arms base[Y] override + Y-reverted primary; reorder primaries (specials at slots 2-3) + skip leading-header op + reverse-filter implicit queue |
 
 ### Established mechanisms
 

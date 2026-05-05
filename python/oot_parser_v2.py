@@ -436,6 +436,15 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
     # Phase 1: Build primaries from running state
     running = [0.0, 0.0, 0.0]
     primaries = []
+    # Two parallel lists used only when "prism reorder" is active:
+    # standard-branch primaries vs. special-branch primaries (forced_axis or
+    # 80:1f). When inactive, we just append to `primaries` in iteration order.
+    primaries_standard = []
+    primaries_special = []
+    use_prism_reorder = any(
+        g.forced_axis >= 0 or any(t.cls == '80' and t.byte2 == 0x1f for t in g.tags)
+        for g in groups
+    )
     c0_slots = {}  # slot_idx -> [x, y, z]
 
     for i, g in enumerate(groups):
@@ -460,9 +469,11 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
                 c0_slots[slot][2] = alt_z
 
         # Build primaries
+        emitted: List[List[float]] = []
+        is_special_branch = False
         if i == 2:
             # V0 from base
-            primaries.append([running[0], running[1], running[2]])
+            emitted.append([running[0], running[1], running[2]])
         elif i > 2:
             # Check first non-C0 tag for lo_nib
             ft = None
@@ -476,9 +487,10 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
                 # one at base_Z and one at alt_Z (mirrors the lo=F+Z-prev path).
                 # The forced-axis DELTA is conceptually a "second pole" coord so
                 # both Z variants are valid candidate vertices.
-                primaries.append([running[0], running[1], base_z])
+                emitted.append([running[0], running[1], base_z])
                 if alt_z != base_z:
-                    primaries.append([running[0], running[1], alt_z])
+                    emitted.append([running[0], running[1], alt_z])
+                is_special_branch = True
             elif any(t.cls == '80' and t.byte2 == 0x1f for t in g.tags):
                 # 80:1f on the CURRENT group emits a primary with Y reverted
                 # to base[Y] at running Z. For prism this places DXF V1 =
@@ -487,7 +499,8 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
                 # FULL-run section that doesn't reach the primary builder).
                 # No standard "running" primary is emitted — that would be a
                 # phantom (running Y is the previous group's Y, not the apex's).
-                primaries.append([running[0], base[1], running[2]])
+                emitted.append([running[0], base[1], running[2]])
+                is_special_branch = True
             elif ft and ft.lo_nib == 0xF:
                 # lo=F: create TWO primaries.
                 prev_ax = groups[i - 1].axis if i > 0 and 0 <= groups[i - 1].axis <= 2 else -1
@@ -496,23 +509,48 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
                     # Create both Z variants in encountered order (z_values[0],
                     # z_values[1]). This places z_values[1] (=alt_Z) at the
                     # SECOND primary, which is what cube's init_tri DATA refs use.
-                    primaries.append([running[0], running[1], z_values[0]])
-                    primaries.append([running[0], running[1], z_values[1]])
+                    emitted.append([running[0], running[1], z_values[0]])
+                    emitted.append([running[0], running[1], z_values[1]])
                 else:
                     # Plane case: prev axis is X or Y (or single Z value).
                     # Primary 1 = running. Primary 2 = running with prev axis
                     # reverted to base (only added if it differs from primary 1).
-                    primaries.append([running[0], running[1], running[2]])
+                    emitted.append([running[0], running[1], running[2]])
                     base_v = [running[0], running[1], running[2]]
                     if prev_ax >= 0:
                         base_v[prev_ax] = base[prev_ax]
                     if base_v != [running[0], running[1], running[2]]:
-                        primaries.append(base_v)
+                        emitted.append(base_v)
             else:
                 # One primary from running state
-                primaries.append([running[0], running[1], running[2]])
+                emitted.append([running[0], running[1], running[2]])
 
-    # Phase 2: Vertex list = primaries first, then C0 slots in slot number order
+        # Route emitted primaries: when prism-reorder is active, separate
+        # special-branch from standard-branch so we can interleave later.
+        # Otherwise just append to `primaries` in iteration order.
+        if use_prism_reorder and i > 2:
+            if is_special_branch:
+                primaries_special.extend(emitted)
+            else:
+                primaries_standard.extend(emitted)
+        else:
+            primaries.extend(emitted)
+
+    # Phase 2: Assemble final vertex list.
+    if use_prism_reorder:
+        # Order: V0 (already in primaries from i==2 path), then the FIRST
+        # standard-branch primary at slot 1, then ALL special-branch primaries
+        # at slots 2..k, then the remaining standard-branch primaries.
+        # This places special primaries at the indices that face section DATA
+        # values [1, 3, 4] would reference (i.e. 0-based slots 0, 2, 3).
+        if primaries_standard:
+            primaries.append(primaries_standard[0])
+            primaries.extend(primaries_special)
+            primaries.extend(primaries_standard[1:])
+        else:
+            primaries.extend(primaries_special)
+
+    # Phase 3: Vertex list = primaries first, then C0 slots in slot number order
     vertices = list(primaries)
     for slot in sorted(c0_slots.keys()):
         vertices.append(c0_slots[slot])
@@ -1286,6 +1324,17 @@ def parse_oot_v2(filepath: str) -> OotResult:
                     'sep': last_sep,
                 })
                 last_sep = None
+
+        # When the file uses a "leading 40:xx header" (the 40:xx tag that sits
+        # between the 20:00 boundary and the E0:03 init terminator), that tag
+        # is the init winding marker — NOT a topology op that should generate
+        # an additional face. Drop it from ops_with_sep so the decoder counts
+        # match the actual topology op count.
+        # Affected files (so far): triangle, plane, prism. Without this skip
+        # plane gets the right count only because dedup drops one face later;
+        # prism has no coord-dups to lean on, so the extra face survives.
+        if leading_40_header and ops_with_sep:
+            ops_with_sep = ops_with_sep[1:]
 
         c_ops_remaining = max(result.n_verts_header - len(init_tri), 0)
         last_op = None

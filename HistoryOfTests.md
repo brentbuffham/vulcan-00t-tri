@@ -454,3 +454,18 @@
 - **Findings:** Prism: 9v → 8v (V5 phantom `(150, 1500, 5500)` dropped). Still 4/4 DXF vertex match, still 3 faces (face decoder unchanged). Triangle/Plane/Linear/Cube unchanged. Hexhole drops from 10v/10f to 9v/9f but still 4/12 — not in scope.
 - **Remaining for prism:** still 4 phantoms (V1, V3, V6, V7) + extra c0_slot. Faces still don't match DXF face_sets — they reference the phantoms. Need either (a) phantom suppression at primary build, or (b) face-index remap that collapses phantoms onto valid neighbors.
 - **Conclusion:** Conservative drop — 80:1f's running primary was net-zero useful and net-positive noise.
+
+---
+
+### TEST-032: Prism Reorder + Skip Leading-Header Op
+- **Status:** Successful — Prism face_set match 0/2 → **2/2**, 4-Prism face_set 0/6 → **3/6**
+- **Description:** Two coupled fixes:
+  1. **Primary reorder.** When any group has `forced_axis ≥ 0` or carries `80:1f`, treat it as the "prism reorder" pattern. Split emitted primaries into `standard` (else-branch and lo=F variants) and `special` (forced_axis and 80:1f). Final list = `[V0, standards[0], specials..., standards[1:]]`. This places the special primaries at indices 2 and 3, exactly where face section DATA refs `[1, 3, 4]` will pick them up — yielding `init_tri = (V0, DXF V1, DXF V2) = DXF F0`.
+  2. **Skip leading-header topology op.** When `leading_40_header == True`, drop the first entry of `ops_with_sep`. The leading `40:xx` tag (e.g. prism `40:a7`) sits between the `20:00` boundary and the `E0:03` init terminator — it's the init winding marker, NOT a topology op that should generate a face. Without skipping, prism produced 3 faces (init + 2 C ops) instead of 2.
+- **Findings:**
+  - Prism: 4/4 DXF vertex match retained; faces (0,1,2) + (0,1,3) ⇒ **2/2 DXF face_set match**.
+  - 4-Prism: faces drop from 5 to 4; matches DXF face_sets {0,1,2}, {0,1,3}, {1,2,4} ⇒ **3/6 face_set match** (was 0/6).
+  - Triangle/Plane/Linear/Cube: unchanged — Triangle has only 1 op (40:8f) which is the leading header and produced 0 faces from ops anyway; Plane previously relied on dedup to drop the extra face, now gets the same result via skip; Linear uses shared-base path; Cube has no leading header.
+- **Remaining for prism:** Strict per-vertex match (V_i = DXF V_i) requires dropping 4 phantom primaries (G3 standard, G4 standard, G7 alt_Z, c0_slot extras) — currently OOT vertex list has 8 entries with 4 DXF matches. The face_set numerical comparison passes because vertex labels coincide; coordinate-strict comparison doesn't yet.
+- **Remaining for 4-prism:** apex Y=75 still not in bytes; 3 face_sets matched (3/6 from initial random alignment). Need vertex coords correct first.
+- **Conclusion:** Reorder + leading-header-skip together unlock prism's face structure. The reorder is the key insight — without it, DATA `[1,3,4]` references the wrong primaries.

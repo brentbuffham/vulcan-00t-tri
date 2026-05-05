@@ -701,6 +701,18 @@ def parse_face_section(face_region: bytes, n_verts_header: int):
     while pos < len(face_region):
         b = face_region[pos]
         if b <= 0x06:
+            # Misalignment guard: when count=0 (1-byte DATA) AND the data
+            # byte is a TAG class indicator (0x40/0x41/0x60/0x80/0xA0/0xC0/
+            # 0xE0/0xE1) AND the byte AFTER would NOT be a separator, the
+            # encoder likely placed a stray 0x00 before a real TAG. Skip
+            # the count byte so the next iteration parses the TAG correctly.
+            # 4-Prism: `00 40 13 41 0b` becomes TAG 40:13 + TAG 40:0b.
+            # Prism: `00 40 17` keeps DATA 64 + SEP 17 because 0x17 IS a sep.
+            if (b == 0 and pos + 2 < len(face_region)
+                    and face_region[pos + 1] in (0x40, 0x41, 0x60, 0x80, 0xA0, 0xC0, 0xE0, 0xE1)
+                    and not is_separator(face_region[pos + 2])):
+                pos += 1
+                continue
             nb = b + 1
             if pos + 1 + nb > len(face_region):
                 break
@@ -1292,6 +1304,16 @@ def parse_oot_v2(filepath: str) -> OotResult:
         while fpos < len(face_region):
             fb = face_region[fpos]
             if fb <= 0x06:
+                # Same misalignment guard as parse_face_section: when count=0
+                # (1-byte DATA) AND data byte is a TAG class indicator AND
+                # next byte isn't a separator, skip the count byte so the
+                # next iteration parses as a TAG. Recovers 4-Prism's ops
+                # 40:13 and 40:0b that were being eaten by `00 40 13 41 0b`.
+                if (fb == 0 and fpos + 2 < len(face_region)
+                        and face_region[fpos + 1] in (0x40, 0x41, 0x60, 0x80, 0xA0, 0xC0, 0xE0, 0xE1)
+                        and not is_separator(face_region[fpos + 2])):
+                    fpos += 1
+                    continue
                 fnb = fb + 1
                 if fpos + 1 + fnb > len(face_region):
                     break

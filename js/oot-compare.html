@@ -989,6 +989,11 @@ function parseOOT(arrayBuffer) {
     validFaces = validFaces.filter(f => f[0] !== f[1] && f[1] !== f[2] && f[0] !== f[2]);
     // Step 3: build final vertex list: keep unique vertices (dupRemap[i]===i)
     // OR referenced duplicates. Drop unreferenced duplicates only.
+    // For prism-pattern files, ALSO drop unreferenced unique phantoms.
+    const prismPatternPost = trimmedGroups.some(g =>
+      (g.forcedAxis !== undefined && g.forcedAxis >= 0) ||
+      g.tags.some(t => t.cls === '80' && t.byte2 === 0x1f)
+    );
     const referenced = new Set();
     for (const f of validFaces) for (const i of f) referenced.add(i);
     const finalRemap = {};
@@ -996,6 +1001,7 @@ function parseOOT(arrayBuffer) {
     for (let i = 0; i < vertices.length; i++) {
       const isDup = dupRemap[i] !== i;
       if (isDup && !referenced.has(i)) continue;  // drop unreferenced duplicate
+      if (prismPatternPost && !referenced.has(i) && !isDup) continue;  // drop phantom uniques (prism only)
       finalRemap[i] = newVerts.length;
       newVerts.push(vertices[i]);
     }

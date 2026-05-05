@@ -1528,7 +1528,15 @@ def parse_oot_v2(filepath: str) -> OotResult:
         remapped_faces = [f for f in remapped_faces
                           if f[0] != f[1] and f[1] != f[2] and f[0] != f[2]]
 
-        # Step 3: keep uniques and referenced duplicates; drop unreferenced dups
+        # Step 3: keep uniques and referenced duplicates; drop unreferenced dups.
+        # When prism-pattern is active, ALSO drop unreferenced uniques —
+        # those are phantom primaries from intermediate axis updates that the
+        # face decoder never visits, and the user wants the OOT vertex list
+        # to match DXF exactly (4 verts for prism, not 8).
+        prism_pattern_post = any(
+            g.forced_axis >= 0 or any(t.cls == '80' and t.byte2 == 0x1f for t in g.tags)
+            for g in groups
+        )
         referenced = set()
         for f in remapped_faces:
             for idx in f:
@@ -1539,6 +1547,8 @@ def parse_oot_v2(filepath: str) -> OotResult:
             is_dup = dup_remap[i] != i
             if is_dup and i not in referenced:
                 continue
+            if prism_pattern_post and i not in referenced and not is_dup:
+                continue  # drop unreferenced phantom uniques (prism only)
             final_remap[i] = len(new_verts)
             new_verts.append(v)
 

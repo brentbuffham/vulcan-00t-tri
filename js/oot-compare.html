@@ -559,6 +559,21 @@ function parseOOT(arrayBuffer) {
     }
     const baseZ = zValues[0] || base[2], altZ = zValues.length > 1 ? zValues[1] : baseZ;
 
+    // 4-Prism apex Y synthesis: when a Y-axis group carries A0:7f, replace
+    // its value with the centroid of the previously-seen Y values. The
+    // DELTA bytes alone don't yield 75; the encoder relies on this synthesis.
+    const apexYSynth = {};
+    for (let i = 0; i < trimmedGroups.length; i++) {
+      const g = trimmedGroups[i];
+      if (g.axis === 1 && g.tags.some(t => t.cls === 'A0' && t.byte2 === 0x7f)) {
+        const ySeen = [];
+        for (let j = 0; j < i; j++) {
+          if (trimmedGroups[j].axis === 1 && Math.abs(trimmedGroups[j].value) > 0.1) ySeen.push(trimmedGroups[j].value);
+        }
+        if (ySeen.length >= 2) apexYSynth[i] = (ySeen[0] + ySeen[1]) / 2;
+      }
+    }
+
     const running = [0, 0, 0];
     const primaries = [];
     const primariesStandard = [];
@@ -573,7 +588,7 @@ function parseOOT(arrayBuffer) {
       const g = trimmedGroups[i];
       const ax = g.axis;
       if (ax < 0 || ax > 2) continue;
-      running[ax] = g.value;
+      running[ax] = (i in apexYSynth) ? apexYSynth[i] : g.value;
 
       // Collect C0 slot assignments (all assigner classes with hi>0)
       const assignerClasses = new Set(['C0','40','80','60','A0','20']);

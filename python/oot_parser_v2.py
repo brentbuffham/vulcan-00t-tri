@@ -433,6 +433,20 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
     base_z = z_values[0] if z_values else base[2]
     alt_z = z_values[1] if len(z_values) > 1 else base_z
 
+    # 4-Prism apex Y override: when a Y-axis group carries A0:7f, the
+    # encoder is signaling that this group's Y is the centroid of the
+    # previously-seen Y values. The DELTA bytes alone don't carry this
+    # info — for 4-prism `00 52` decodes to 72, but the file expects 75
+    # = (100 + 50) / 2 = mean of base Y and first Y delta. Patch the
+    # group's value so primaries built from running state have Y=75.
+    apex_y_synth = {}  # group_index -> synthesized value
+    for i, g in enumerate(groups):
+        if g.axis == 1 and any(t.cls == 'A0' and t.byte2 == 0x7f for t in g.tags):
+            y_seen = [gg.value for j, gg in enumerate(groups) if j < i and gg.axis == 1 and abs(gg.value) > 0.1]
+            if len(y_seen) >= 2:
+                centroid = sum(y_seen[:2]) / 2.0
+                apex_y_synth[i] = centroid
+
     # Phase 1: Build primaries from running state
     running = [0.0, 0.0, 0.0]
     primaries = []
@@ -451,7 +465,8 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
         ax = g.axis
         if ax < 0 or ax > 2:
             continue
-        running[ax] = g.value
+        # Apply apex-Y synthesis if this group is the 4-prism A0:7f Y group.
+        running[ax] = apex_y_synth.get(i, g.value)
 
         # Collect slot assignments from assigner tag classes
         # C0 is primary, 40/80/60/A0/20 with hi_nib>0 also assign
@@ -1529,10 +1544,10 @@ def parse_oot_v2(filepath: str) -> OotResult:
                           if f[0] != f[1] and f[1] != f[2] and f[0] != f[2]]
 
         # Step 3: keep uniques and referenced duplicates; drop unreferenced dups.
-        # When prism-pattern is active, ALSO drop unreferenced uniques —
-        # those are phantom primaries from intermediate axis updates that the
-        # face decoder never visits, and the user wants the OOT vertex list
-        # to match DXF exactly (4 verts for prism, not 8).
+        # When prism-pattern is active (80:1f), ALSO drop unreferenced uniques.
+        # Note: A0:7f (4-prism's similar tag) is NOT included here because
+        # 4-prism's c0_slot[4] = DXF V0 is a valid unreferenced unique that
+        # we must keep — the face decoder needs to still pick it up.
         prism_pattern_post = any(
             g.forced_axis >= 0 or any(t.cls == '80' and t.byte2 == 0x1f for t in g.tags)
             for g in groups

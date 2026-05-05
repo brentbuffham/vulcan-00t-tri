@@ -499,3 +499,17 @@
   - Triggering the post-drop kills c0_slot[4]; triggering the queue reverse muddles vertex order.
 - **Hypothesis for next iterations:** 4-prism's apex Y=75 may not be in bytes (TEST-028 confirmed `40 52 c0` doesn't appear). Try synthesizing apex Y as midpoint of base Y values when the running-prev decode produces a value between known Y values. Or: drop midpoint phantoms via a different filter (not by tag, but by coord-being-midpoint-of-other-coords).
 - **Conclusion:** Tag-extension recipe doesn't generalize. Need a different approach for 4-prism.
+
+---
+
+### TEST-035: 4-Prism Apex Y Synthesis from Y-Centroid (A0:7f Trigger)
+- **Status:** Successful — 4-Prism vertex match 4/5 → **5/5**
+- **Description:** TEST-028 confirmed `40 52 c0` (= 75.0 IEEE) does not appear anywhere in 4-prism's bytes. The user's hint "midpoint vertices in the triangulation" + the DXF apex Y=75 = (50 + 100)/2 = mean of base Y values led to this rule: when a Y-axis group carries the `A0:7f` tag (which 4-prism's G6 has), synthesize that group's value as the centroid of the previously-seen Y values rather than using the byte-decoded value (72).
+- **Process:** In `build_vertex_table`, before the primary loop, scan groups for `axis==1 AND tag A0:7f`; if 2+ prior Y values exist, compute centroid `(y[0] + y[1]) / 2` and override the group's running-state value at that point. The override only affects `running[1]` (which propagates to subsequent primaries built from that running state); `g.value` itself is left intact so c0_slot logic and other downstream uses still see the raw decoded value.
+- **Findings:**
+  - 4-prism: V2 = (1100, 75, 5500) = DXF V1 (apex). All 5 DXF vertices now match. Vertex count still 10 (5 phantoms remain) but all DXF verts are present.
+  - Faces: still 4 OOT faces (DXF wants 6). Face_set numerical match: 3/6.
+  - Triangle/Plane/Linear/Cube: unchanged (none have `axis==1 + A0:7f`).
+  - Prism: unchanged (no A0:7f).
+- **Remaining for 4-prism:** Need 2 more faces (currently 4, DXF 6). The face section likely has 5 real topology ops (currently we extract 3 + finalizer + leading-skip) — the 41:0b byte sequence after the finalizer is being parsed as a non-standard TAG ('13':0x41, '0B':0xe0) and excluded from `topology_ops`. Next iteration: investigate whether 41:0b should count as an E1-class op.
+- **Conclusion:** The "axis-Y centroid" rule applies when `A0:7f` is on a Y group. This is the missing piece for 4-prism's apex coord — the format encodes apex Y as a synthesized centroid, not a stored DELTA value.

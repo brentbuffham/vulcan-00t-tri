@@ -482,3 +482,20 @@
   - 4-Prism: 3/6 face_set match retained.
 - **Note:** OOT vertex list still has 8 entries (4 DXF + 4 phantoms at indices 4-7). Phantoms are unreferenced by faces so they don't affect face match; vertex labels 0-3 are correct.
 - **Conclusion:** PRISM SOLVED. Three-step recipe: (1) `80:1f` arms base[Y] override on next 1-byte DELTA + emits Y-reverted primary; (2) reorder primaries so specials land at slots 2-3 + skip leading-header op; (3) reverse-filter the implicit queue so the C op picks the last standard primary (= DXF V3).
+
+---
+
+### TEST-034: 4-Prism — A0:7f Trigger Extension Dead-Ends
+- **Status:** Investigated, reverted — neither extension helped 4-prism
+- **Goal:** Apply prism's `80:1f` recipe to 4-prism via the analogous `A0:7f` tag (also `lo=F` with `hi>0`) found on 4-prism's G6 (the apex Y group).
+- **Attempt 1 — Extend `prism_pattern_post` to A0:7f (drop unreferenced uniques):**
+  - Effect: dropped 4-prism's `c0_slot[4] = (1000, 50, 5000)` — that's DXF V0, a real vertex with no face reference. Vertex match dropped 4/5 → 3/5.
+  - Reverted.
+- **Attempt 2 — Extend `prism_pattern` (queue reverse-filter) to A0:7f:**
+  - Effect: re-ordered vertex labels via face-traversal renumber. Numerical face_set match unchanged (3/6). DXF V4 became phantom (was at V5_orig with running primary, displaced by re-labelled phantoms). Worse for visual mapping — V4=DXF V4 lost.
+  - Reverted.
+- **Findings:**
+  - Prism's recipe doesn't transfer cleanly to 4-prism. A0:7f is structurally similar (lo=F+hi>0) but the encoder uses it differently — 4-prism relies on c0_slot[4] for DXF V0, which prism doesn't have.
+  - Triggering the post-drop kills c0_slot[4]; triggering the queue reverse muddles vertex order.
+- **Hypothesis for next iterations:** 4-prism's apex Y=75 may not be in bytes (TEST-028 confirmed `40 52 c0` doesn't appear). Try synthesizing apex Y as midpoint of base Y values when the running-prev decode produces a value between known Y values. Or: drop midpoint phantoms via a different filter (not by tag, but by coord-being-midpoint-of-other-coords).
+- **Conclusion:** Tag-extension recipe doesn't generalize. Need a different approach for 4-prism.

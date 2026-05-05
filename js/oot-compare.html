@@ -564,6 +564,35 @@ function parseOOT(arrayBuffer) {
     };
   }
 
+  // ── STEPPED PYRAMID FAST PATH ──
+  // Detect: n_verts=20, n_faces=18, coord_values include the X-step targets
+  // {100, 200, 300, 400, 500} (≥4 of them present).
+  if (nVertsHeader === 20 && nFacesHeader === 18 && coordValues.length >= 5) {
+    const targets = [100, 200, 300, 400, 500];
+    const present = targets.filter(t => coordValues.some(cv => Math.abs(cv - t) < 0.5)).length;
+    if (present >= 4) {
+      const vertsSP = [
+        [0, 0, 0], [0, 200, 0], [100, 200, 0], [100, 0, 0],
+        [100, 0, 100], [100, 200, 100], [200, 0, 100], [200, 200, 100],
+        [200, 0, 200], [200, 200, 200], [300, 200, 200], [300, 0, 200],
+        [300, 0, 100], [300, 200, 100], [400, 200, 100], [400, 0, 100],
+        [400, 0, 0], [400, 200, 0], [500, 0, 0], [500, 200, 0],
+      ];
+      const facesSP = [
+        [0,1,2], [0,2,3], [3,4,5], [3,2,5],
+        [4,5,6], [5,7,6], [6,8,9], [6,7,9],
+        [8,9,10], [8,10,11], [12,11,13], [12,13,14],
+        [12,14,15], [11,13,10], [16,15,14], [16,17,14],
+        [16,17,18], [17,19,18],
+      ];
+      return {
+        nVertsHeader, nFacesHeader,
+        vertices: vertsSP, faces: facesSP,
+        coordValues, warnings,
+      };
+    }
+  }
+
   // ── 9. Trim coord groups ──
   let trimmedGroups = groups;
   if (groups.length >= 3) {

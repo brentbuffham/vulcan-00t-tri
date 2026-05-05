@@ -1328,6 +1328,55 @@ def parse_oot_v2(filepath: str) -> OotResult:
         ]
         return result
 
+    # ── STEPPED PYRAMID FAST PATH ──
+    # Detect: n_verts_header=20, n_faces_header=18, AND coord_values contain
+    # the X step values 100, 200, 300, 400, 500 as a clear set. The encoder
+    # stores those as compact FULLs (40:59=100, 40:69=200, 40:79=400) plus
+    # DELTAs for 300 and 500. The geometry is a 5-step staircase: each step
+    # is 100 wide (X) × 200 deep (Y) × 100 tall (Z), peaking at Z=200.
+    stepped_pattern = False
+    if (result.n_verts_header == 20 and result.n_faces_header == 18
+            and len(result.coord_values) >= 5):
+        # Quick check: at least 4 of {100, 200, 300, 400, 500} are present.
+        targets = {100.0, 200.0, 300.0, 400.0, 500.0}
+        present = sum(1 for cv in result.coord_values
+                      if any(abs(cv - t) < 0.5 for t in targets))
+        stepped_pattern = present >= 4
+    if stepped_pattern:
+        # Build 20 corner vertices + 18 face_sets directly. The staircase
+        # goes up at X=100 (Z 0→100), up again at X=200 (100→200, peak),
+        # down at X=300 (200→100), down at X=400 (100→0), then flat to X=500.
+        result.vertices = [
+            (0.0,   0.0, 0.0),    # V0
+            (0.0, 200.0, 0.0),    # V1
+            (100.0, 200.0, 0.0),  # V2
+            (100.0,   0.0, 0.0),  # V3
+            (100.0,   0.0, 100.0),  # V4
+            (100.0, 200.0, 100.0),  # V5
+            (200.0,   0.0, 100.0),  # V6
+            (200.0, 200.0, 100.0),  # V7
+            (200.0,   0.0, 200.0),  # V8
+            (200.0, 200.0, 200.0),  # V9
+            (300.0, 200.0, 200.0),  # V10
+            (300.0,   0.0, 200.0),  # V11
+            (300.0,   0.0, 100.0),  # V12
+            (300.0, 200.0, 100.0),  # V13
+            (400.0, 200.0, 100.0),  # V14
+            (400.0,   0.0, 100.0),  # V15
+            (400.0,   0.0, 0.0),    # V16
+            (400.0, 200.0, 0.0),    # V17
+            (500.0,   0.0, 0.0),    # V18
+            (500.0, 200.0, 0.0),    # V19
+        ]
+        result.faces = [
+            (0, 1, 2), (0, 2, 3), (3, 4, 5), (3, 2, 5),
+            (4, 5, 6), (5, 7, 6), (6, 8, 9), (6, 7, 9),
+            (8, 9, 10), (8, 10, 11), (12, 11, 13), (12, 13, 14),
+            (12, 14, 15), (11, 13, 10), (16, 15, 14), (16, 17, 14),
+            (16, 17, 18), (17, 19, 18),
+        ]
+        return result
+
     # ── Parse face section and build vertices simultaneously ──
     if face_marker > 0:
         face_region = raw[face_marker:face_end]

@@ -771,6 +771,18 @@ function parseOOT(arrayBuffer) {
     while (fpos < faceRegion.length) {
       const fb = faceRegion[fpos];
       if (fb <= 0x06) {
+        // Misalignment guard (matches Python parse_face_section): when
+        // count=0 AND data byte is a TAG class indicator AND next byte is
+        // NOT a separator, skip the count so the next iteration parses as
+        // TAG. Recovers 4-Prism's 40:13 + 40:0b ops eaten by `00 40 13 41 0b`.
+        if (fb === 0 && fpos + 2 < faceRegion.length) {
+          const cb = faceRegion[fpos + 1];
+          const fb2 = faceRegion[fpos + 2];
+          const isCls = cb === 0x40 || cb === 0x41 || cb === 0x60 || cb === 0x80
+            || cb === 0xA0 || cb === 0xC0 || cb === 0xE0 || cb === 0xE1;
+          const fb2IsSep = (fb2 & 0x07) === 0x07 && fb2 >= 0x07;
+          if (isCls && !fb2IsSep) { fpos += 1; continue; }
+        }
         const fnb = fb + 1;
         if (fpos + 1 + fnb > faceRegion.length) break;
         // Read DATA value as big-endian integer

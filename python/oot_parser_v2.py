@@ -95,7 +95,14 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
 
     while pos < len(region):
         b = region[pos]
-        if b <= 0x06 or (new_format and b == 0x07):
+        # New-format count=0x07 (8-byte FULL) is ambiguous because 0x07 is also
+        # is_separator(). Only accept it as count when the next byte looks like
+        # an IEEE byte 0 (0x40/0x41/0xC0/0xC1). Stepped Pyramid has many 0x07
+        # SEP bytes interleaved with TAGs that would otherwise be misread.
+        is_count_07 = (new_format and b == 0x07
+                       and pos + 1 < len(region)
+                       and region[pos + 1] in (0x40, 0x41, 0xC0, 0xC1))
+        if b <= 0x06 or is_count_07:
             nb = b + 1
             raw_nb = nb  # preserve original byte count for position advancement
             forced_axis_for_this = -1

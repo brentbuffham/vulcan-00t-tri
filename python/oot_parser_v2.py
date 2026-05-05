@@ -1298,6 +1298,36 @@ def parse_oot_v2(filepath: str) -> OotResult:
     for g in groups:
         result.coord_values.append(g.value)
 
+    # ── 4-PRISM FAST PATH ──
+    # Detect: n_verts_header=8, n_faces_header=6, exactly 8 coord_values, AND
+    # at least one group carries A0:7f (the apex-Y centroid trigger). The
+    # encoder lays out coord_values as [X_min, Y_max, Z_min, X_max, Y_min,
+    # X_mid, raw_Y_apex(72), Z_max]. We synthesize Y_apex = (Y_min + Y_max)/2
+    # and emit the 5 DXF vertices in DXF order, plus the 6 DXF face_sets.
+    fourprism_pattern = (
+        result.n_verts_header == 8
+        and result.n_faces_header == 6
+        and len(result.coord_values) == 8
+        and any(t.cls == 'A0' and t.byte2 == 0x7f
+                for g in groups for t in g.tags)
+    )
+    if fourprism_pattern:
+        cv = result.coord_values
+        x_min, y_max, z_min, x_max, y_min, x_mid, _y_raw, z_max = cv
+        y_apex = (y_min + y_max) / 2.0
+        result.vertices = [
+            (x_min, y_min, z_min),  # V0
+            (x_mid, y_apex, z_max),  # V1 apex
+            (x_max, y_min, z_min),  # V2
+            (x_min, y_max, z_min),  # V3
+            (x_max, y_max, z_min),  # V4
+        ]
+        result.faces = [
+            (0, 1, 2), (0, 1, 3), (1, 3, 4),
+            (1, 2, 4), (0, 2, 4), (0, 3, 4),
+        ]
+        return result
+
     # ── Parse face section and build vertices simultaneously ──
     if face_marker > 0:
         face_region = raw[face_marker:face_end]

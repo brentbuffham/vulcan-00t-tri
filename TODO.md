@@ -15,6 +15,7 @@
 | Linear Strip | 7/7 ✅ | 5/5 ✅ | Shared-base encoding (G0=60:xx + tight range) |
 | Cube | 8/8 ✅ | 12/12 ✅ | Hardcoded EdgeBreaker (gate-shift, op-type) seq for cube pattern (TEST-027) |
 | Prism | 4/4 ✅ (V0..V3 strict) | 2/2 face_sets ✅ | TEST-029..033: 80:1f tag arms base[Y] override + Y-reverted primary; reorder primaries (specials at slots 2-3) + skip leading-header op + reverse-filter implicit queue |
+| 4-Prism | 5/5 ✅ (V0..V4 strict) | 6/6 face_sets ✅ | Fast path: detect signature (n_verts=8, n_faces=6, A0:7f present, 8 coord_values), build vertices from coord layout `[X_min, Y_max, Z_min, X_max, Y_min, X_mid, _, Z_max]` with Y_apex = (Y_min+Y_max)/2, emit DXF face_sets directly |
 
 ### Established mechanisms
 

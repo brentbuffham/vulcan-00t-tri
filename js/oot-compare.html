@@ -472,6 +472,20 @@ function parseOOT(arrayBuffer) {
           }
         }
       }
+      // Compact FULL detection (Stepped Pyramid + similar): byte0 is a FULL
+      // indicator AND byte1 ∈ {0x49, 0x59, 0x69, 0x79}. Emits 2-byte FULL with
+      // implicit zero trailing → 50, 100, 200, 400 (and negatives via 0xC0).
+      if ((b === 0x40 || b === 0x41 || b === 0xC0 || b === 0xC1)
+          && (b2 === 0x49 || b2 === 0x59 || b2 === 0x69 || b2 === 0x79)) {
+        const r = new Uint8Array(8);
+        r[0] = b; r[1] = b2;
+        const val = readBE64(r);
+        elements.push({ etype: 'COORD', value: val, kind: 'FULL', nBytes: 2 });
+        if (Math.abs(val) > 1) fullValues.push(Math.abs(val));
+        for (let k = 0; k < 8; k++) prev[k] = r[k];
+        pos += 2;
+        continue;
+      }
       const hiCls = b & 0xE0;
       const cls = {0x20:'20', 0x40:'40', 0x60:'60', 0x80:'80', 0xA0:'A0', 0xC0:'C0', 0xE0:'E0'}[hiCls] || (b.toString(16).padStart(2,'0').toUpperCase());
       elements.push({ etype: 'TAG', cls: cls, byte2: b2, loNib: b2 & 0x0F, hiNib: (b2 >> 4) & 0x0F });

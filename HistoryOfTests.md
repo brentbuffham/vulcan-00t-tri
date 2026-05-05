@@ -444,3 +444,13 @@
   - 4-Prism: unchanged.
 - **Remaining for prism:** 4/4 verts ✓; faces produce F0=(0,1,2), F1=(0,1,3), F2=(3,1,4) but with 9 OOT vertices (5 phantoms), face renumber doesn't yet collapse to DXF face_sets {(0,1,2), (0,3,1)}. Next: dedup phantom primaries / face-traversal renumber.
 - **Conclusion:** 80:1f is a "vertex-emitter" tag (in addition to the DELTA-prev override). Both emissions key off the same tag, on the same group.
+
+---
+
+### TEST-031: Drop 80:1f Group's Standard "Running" Primary
+- **Status:** Successful — Prism vertex count 9 → 8 (one phantom dropped), 4/4 verts retained
+- **Description:** TEST-030 emitted both a Y-reverted primary AND a standard running primary for 80:1f groups. The running primary `[running_X, running_Y, running_Z]` was a phantom (running Y still reflects the previous group's Y, not the apex's intended Y). Dropping it removes one phantom without losing any DXF match.
+- **Process:** In the 80:1f branch of `build_vertex_table`, emit only the Y-reverted primary; remove the conditional running-state append.
+- **Findings:** Prism: 9v → 8v (V5 phantom `(150, 1500, 5500)` dropped). Still 4/4 DXF vertex match, still 3 faces (face decoder unchanged). Triangle/Plane/Linear/Cube unchanged. Hexhole drops from 10v/10f to 9v/9f but still 4/12 — not in scope.
+- **Remaining for prism:** still 4 phantoms (V1, V3, V6, V7) + extra c0_slot. Faces still don't match DXF face_sets — they reference the phantoms. Need either (a) phantom suppression at primary build, or (b) face-index remap that collapses phantoms onto valid neighbors.
+- **Conclusion:** Conservative drop — 80:1f's running primary was net-zero useful and net-positive noise.

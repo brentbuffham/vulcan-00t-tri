@@ -593,13 +593,10 @@ function parseOOT(arrayBuffer) {
           primaries.push([running[0], running[1], baseZ]);
           if (altZ !== baseZ) primaries.push([running[0], running[1], altZ]);
         } else if (g.tags.some(t => t.cls === '80' && t.byte2 === 0x1f)) {
-          // 80:1f on the CURRENT group emits an extra primary with Y reverted
-          // to base[Y] at running Z. For prism this places DXF V1=(150,1000,5500)
-          // into the vertex list. The 80:1f tag is unique to prism in our corpus.
+          // 80:1f on the CURRENT group emits a primary with Y reverted to base[Y]
+          // at running Z. For prism this places DXF V1=(150,1000,5500) into the
+          // vertex list. No standard "running" primary — that would be phantom.
           primaries.push([running[0], base[1], running[2]]);
-          if (running[1] !== base[1]) {
-            primaries.push([running[0], running[1], running[2]]);
-          }
         } else if (ft && ft.loNib === 0xF) {
           const prevAx = i > 0 && trimmedGroups[i-1].axis >= 0 ? trimmedGroups[i-1].axis : -1;
           if (prevAx === 2 && zValues.length >= 2) {

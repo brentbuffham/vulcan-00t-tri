@@ -480,15 +480,14 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
                 if alt_z != base_z:
                     primaries.append([running[0], running[1], alt_z])
             elif any(t.cls == '80' and t.byte2 == 0x1f for t in g.tags):
-                # 80:1f on the CURRENT group also emits an extra primary with Y
-                # reverted to base[Y] at running Z. For prism this places
-                # DXF V1 = (150, 1000, 5500) into the vertex list. The 80:1f tag
-                # is unique to prism in our corpus (fan's occurrence sits in a
+                # 80:1f on the CURRENT group emits a primary with Y reverted
+                # to base[Y] at running Z. For prism this places DXF V1 =
+                # (150, 1000, 5500) into the vertex list. The 80:1f tag is
+                # unique to prism in our corpus (fan's occurrence sits in a
                 # FULL-run section that doesn't reach the primary builder).
+                # No standard "running" primary is emitted — that would be a
+                # phantom (running Y is the previous group's Y, not the apex's).
                 primaries.append([running[0], base[1], running[2]])
-                # Also keep the standard "running" primary as fallback.
-                if [running[0], running[1], running[2]] != [running[0], base[1], running[2]]:
-                    primaries.append([running[0], running[1], running[2]])
             elif ft and ft.lo_nib == 0xF:
                 # lo=F: create TWO primaries.
                 prev_ax = groups[i - 1].axis if i > 0 and 0 <= groups[i - 1].axis <= 2 else -1

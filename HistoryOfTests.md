@@ -513,3 +513,20 @@
   - Prism: unchanged (no A0:7f).
 - **Remaining for 4-prism:** Need 2 more faces (currently 4, DXF 6). The face section likely has 5 real topology ops (currently we extract 3 + finalizer + leading-skip) — the 41:0b byte sequence after the finalizer is being parsed as a non-standard TAG ('13':0x41, '0B':0xe0) and excluded from `topology_ops`. Next iteration: investigate whether 41:0b should count as an E1-class op.
 - **Conclusion:** The "axis-Y centroid" rule applies when `A0:7f` is on a Y group. This is the missing piece for 4-prism's apex coord — the format encodes apex Y as a synthesized centroid, not a stored DELTA value.
+
+---
+
+### TEST-036: Fan Extended FULL Detection (Gated on FULL-Run Active)
+- **Status:** Successful — Fan 5v/4f → 7v/6f, face_set 0/6 → 4/6, vertex match 3/6 stable, no regressions
+- **Description:** Fan's coord region encodes most non-base vertex coordinates as 8-byte IEEE doubles, but they're scattered through standard parsing — not all consumed by the initial FULL-run. Two related encodings:
+  1. **Direct 0x40-prefixed FULLs:** `40 7f e8 1e 0a f4 ec ac` = 510.51 (DXF V0.Y) sits in standard parsing; the parser was reading `40 7f` as TAG cls=40 byte2=0x7f.
+  2. **Long-FULL markers:** byte ∈ [0x08..0x0e] (excluding separators 0x07/0x0f) where byte 0 of the IEEE is implied as `0x40` and the next 7 bytes provide IEEE bytes 1-7. Fan uses 0x09, 0x0a, 0x0e markers for 202.34, 170.86, 510.51-ish values.
+- **Process — both gated on `full_run_active = True`** (i.e., only fires when this region started with the FULL-run marker byte 0x12 / 0x1f / etc.). For other files (Triangle/Plane/Linear/Cube/Prism/4-Prism) the gate is False and behavior is unchanged.
+  1. After standard parsing finds a 0x40-prefixed pair NOT matching compact-FULL byte2 set, attempt to read 8 bytes as IEEE. If `10 < val < 1e6`, emit as FULL and advance 8.
+  2. Else if byte ∈ [0x08..0x0e], attempt to read 7 bytes after marker, prepend 0x40, decode IEEE. If `10 < val < 1e6`, emit as FULL and advance 8.
+- **Findings:**
+  - Fan: coord_values 6 → 11 (captured 202.34, 500.03, 170.86, 510.51, 467.40, 476.34, 300.02, 600.05). Vertex output 7v / 6 faces. Face_set numerical match {0,1,2}, {1,2,3}, {2,3,4}, plus partial = 4/6.
+  - Triangle/Plane/Linear/Cube/Prism/4-Prism: all unchanged (none have FULL-run start marker).
+  - Hexhole/SPHERE: unchanged (different format).
+- **Remaining for fan:** Vertex match still 3/6 (V0, V2, V3 found in unique vertex list). Missing DXF V1=(300, 600), V4=(300, 467.40), V5=(273.24, 476.34). The X=300 values get conflated with our 300.02 (V1.X-like), and X=273.24 isn't yet captured (it lives in the "rolling" overlap at the FULL-run/standard boundary). Vertex builder also emits phantom (X, Y) combinations because closest-delta axis assignment doesn't pair X-Y per vertex.
+- **Conclusion:** Fan's extended FULL/marker encoding is now decoded. The next step for fan is a different vertex-assembly approach (pair X-Y values per vertex rather than emit running-state primaries) since fan has all-Z=900 (flat) topology where corners are independent (X, Y) pairs.

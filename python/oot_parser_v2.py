@@ -75,8 +75,10 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
     # 0xC0/0xC1). After the run, resume standard parsing.
     TAG_CLASSES = (0x20, 0x40, 0x60, 0x80, 0xA0, 0xC0, 0xE0)
     FULL_INDICATORS = (0x40, 0x41, 0xC0, 0xC1)
+    full_run_active = False  # set when this region starts with the FULL-run marker
     if (len(region) > 0 and region[0] > 0x07 and not is_separator(region[0])
             and (region[0] & 0xE0) not in TAG_CLASSES):
+        full_run_active = True
         pos = 1  # skip the run-start marker
         while pos + 8 <= len(region) and region[pos] in FULL_INDICATORS:
             data = list(region[pos:pos + 8])
@@ -181,6 +183,36 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
             # range (specific values that decode to clean integer-ish coords).
             # 40:49=50, 40:59=100, 40:69=200, 40:79=400 (and negatives via C0).
             COMPACT_FULL_BYTE2 = {0x49, 0x59, 0x69, 0x79}
+            # Fan-only extension: if FULL-run was active in this region,
+            # also detect 8-byte 0x40-prefixed FULLs in standard parsing
+            # (consumes the FULL so embedded bytes don't get misread), and
+            # detect long-FULL markers (byte ∈ [0x08..0x0e] with byte 0
+            # implied as 0x40). Both gated on `full_run_active` so files
+            # without the FULL-run marker (i.e. all solved files except
+            # Fan/NonRound) are unaffected.
+            if full_run_active and pos + 8 <= len(region):
+                if b in FULL_INDICATORS and b2 not in COMPACT_FULL_BYTE2:
+                    cand = list(region[pos:pos + 8])
+                    cval = read_be_double(bytes(cand))
+                    if cval == cval and 10.0 < cval < 1e6:
+                        elements.append(CoordElement(
+                            etype='COORD', offset=pos, value=cval, kind='FULL', n_bytes=8,
+                        ))
+                        full_values.append(abs(cval))
+                        prev = cand
+                        pos += 8
+                        continue
+                if b in (0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e):
+                    ieee = [0x40] + list(region[pos + 1:pos + 8])
+                    lval = read_be_double(bytes(ieee))
+                    if lval == lval and 10.0 < lval < 1e6:
+                        elements.append(CoordElement(
+                            etype='COORD', offset=pos, value=lval, kind='FULL', n_bytes=8,
+                        ))
+                        full_values.append(abs(lval))
+                        prev = ieee
+                        pos += 8
+                        continue
             if b in (0x40, 0x41, 0xC0, 0xC1) and b2 in COMPACT_FULL_BYTE2:
                 r = [b, b2, 0, 0, 0, 0, 0, 0]
                 val = read_be_double(bytes(r))

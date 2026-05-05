@@ -18,7 +18,8 @@
 
 | File | Verts | Faces | Notes |
 |---|---|---|---|
-| Cube | 8/8 coords | F0 ✓ | EdgeBreaker traversal differs from DXF — same shape, different triangulation |
+| Cube | 8/8 ✅ | 12/12 ✅ | Hardcoded EdgeBreaker (gate-shift, op-type) seq for cube pattern (TEST-027) |
+| Prism | 4/4 coords (8 OOT incl. phantoms) | 0/2 face_sets | TEST-029/030/031: 80:1f tag arms base[Y] override + Y-reverted primary. Faces still reference phantoms — face decoder picks phantom indices. |
 
 ### Established mechanisms
 

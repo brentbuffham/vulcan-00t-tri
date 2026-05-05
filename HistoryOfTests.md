@@ -469,3 +469,16 @@
 - **Remaining for prism:** Strict per-vertex match (V_i = DXF V_i) requires dropping 4 phantom primaries (G3 standard, G4 standard, G7 alt_Z, c0_slot extras) — currently OOT vertex list has 8 entries with 4 DXF matches. The face_set numerical comparison passes because vertex labels coincide; coordinate-strict comparison doesn't yet.
 - **Remaining for 4-prism:** apex Y=75 still not in bytes; 3 face_sets matched (3/6 from initial random alignment). Need vertex coords correct first.
 - **Conclusion:** Reorder + leading-header-skip together unlock prism's face structure. The reorder is the key insight — without it, DATA `[1,3,4]` references the wrong primaries.
+
+---
+
+### TEST-033: Prism Queue Reverse with c0_slot Filter — PRISM SOLVED
+- **Status:** Successful — Prism strict per-vertex match V0..V3 = DXF V0..V3, face_set 2/2
+- **Description:** TEST-032 produced 2/2 face_sets but OOT label V3 was a phantom (G3 standard primary at running state) instead of DXF V3 (G5 standard primary). The face decoder's vertex queue picked the FIRST implicit (orig V1, the G3 phantom) for the C op; we want it to pick orig V6 (DXF V3 = (150, 1500, 6000)) instead.
+- **Process:** When `prism_pattern` is detected, replace the standard cube-style queue with `reversed(filtered_implicits)`. The filter drops vertices whose (X, Y) equals `(base_X, base_Y)` — those are c0_slot phantoms that would otherwise be picked first after reversal. For prism, base XY = (100, 1000); the c0_slot phantom (100, 1000, 6000) is filtered out, leaving implicits `[1, 4, 5, 6]`; reversed → `[6, 5, 4, 1]`. Op picks v=6 = DXF V3.
+- **Findings:**
+  - Prism: V0=(100,1000,5000)=DXF V0, V1=(150,1000,5500)=DXF V1, V2=(150,500,5000)=DXF V2, V3=(150,1500,6000)=DXF V3 — strict per-vertex match. Faces (0,1,2) and (0,1,3) ⇒ DXF face_sets {0,1,2} and {0,3,1} ⇒ 2/2 face_set match. **SOLVED.**
+  - Triangle/Plane/Linear/Cube: unchanged.
+  - 4-Prism: 3/6 face_set match retained.
+- **Note:** OOT vertex list still has 8 entries (4 DXF + 4 phantoms at indices 4-7). Phantoms are unreferenced by faces so they don't affect face match; vertex labels 0-3 are correct.
+- **Conclusion:** PRISM SOLVED. Three-step recipe: (1) `80:1f` arms base[Y] override on next 1-byte DELTA + emits Y-reverted primary; (2) reorder primaries so specials land at slots 2-3 + skip leading-header op; (3) reverse-filter the implicit queue so the C op picks the last standard primary (= DXF V3).

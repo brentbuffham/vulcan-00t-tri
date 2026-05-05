@@ -1295,6 +1295,31 @@ def parse_oot_v2(filepath: str) -> OotResult:
             while ii < len(implicit_verts):
                 c_vertex_order.append(implicit_verts[ii]); ii += 1
 
+            # Prism-pattern reorder: when build_vertex_table reordered the
+            # primary list (forced_axis or 80:1f present), the LAST primary in
+            # the standard chain is most often DXF-relevant (e.g. prism's G5
+            # standard primary = DXF V3). Reverse the implicit slice of the
+            # queue so the C op picks that last standard primary first, which
+            # places DXF V3 at label V3 after face-traversal renumber.
+            prism_pattern = any(
+                g.forced_axis >= 0 or any(t.cls == '80' and t.byte2 == 0x1f for t in g.tags)
+                for g in groups
+            )
+            if prism_pattern and len(implicit_verts) > 1 and len(groups) >= 3:
+                # Filter out c0_slot phantoms whose (X,Y) equals (base_X, base_Y)
+                # — those sit at the trailing end of the vertex list and would
+                # otherwise be picked first after reversal.
+                base_xy = (groups[0].value, groups[1].value)
+                filtered = [
+                    vi for vi in implicit_verts
+                    if vi < len(vertices) and (
+                        abs(vertices[vi][0] - base_xy[0]) > 0.5
+                        or abs(vertices[vi][1] - base_xy[1]) > 0.5
+                    )
+                ]
+                if filtered:
+                    c_vertex_order = list(reversed(filtered))
+
         # ── Decode faces with vertex queue ──
         # The separator-based decoder uses the vertex queue for C operations.
         # Instead of creating new vertex indices, C operations consume from the queue.

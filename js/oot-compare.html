@@ -840,6 +840,25 @@ function parseOOT(arrayBuffer) {
       if (cii < implicitVerts.length) cVertexOrder.push(implicitVerts[cii++]);
       while (cri < refsSorted.length) cVertexOrder.push(refsSorted[cri++]);
       while (cii < implicitVerts.length) cVertexOrder.push(implicitVerts[cii++]);
+
+      // Prism-pattern: filter c0_slot phantoms (vertices whose (X,Y) equal
+      // base XY) from implicits and reverse, so the C op picks the LAST
+      // standard primary first (= DXF V3 for prism).
+      const prismPattern = trimmedGroups.some(g =>
+        (g.forcedAxis !== undefined && g.forcedAxis >= 0) ||
+        g.tags.some(t => t.cls === '80' && t.byte2 === 0x1f)
+      );
+      if (prismPattern && implicitVerts.length > 1 && trimmedGroups.length >= 3) {
+        const baseX = trimmedGroups[0].value;
+        const baseY = trimmedGroups[1].value;
+        const filtered = implicitVerts.filter(vi =>
+          vi < vertices.length && (
+            Math.abs(vertices[vi][0] - baseX) > 0.5 ||
+            Math.abs(vertices[vi][1] - baseY) > 0.5
+          )
+        );
+        if (filtered.length > 0) cVertexOrder = filtered.reverse();
+      }
     }
     let cvIdx = 0;
 

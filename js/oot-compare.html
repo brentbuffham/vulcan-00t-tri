@@ -606,6 +606,68 @@ function parseOOT(arrayBuffer) {
       }
     }
 
+    // Fan/NonRound flat-mesh detection: all Z values equal, ≥4 Y values,
+    // standard axis order in first 3 groups. Build legacy running-state
+    // primaries (face refs are authored against this layout) but OVERWRITE
+    // the slot AFTER each (X, Y) pair with the clean (X, Y) vertex so
+    // rendering shows DXF coords. Y-only updates pair with first_pair_x.
+    let fanPatternHandled = false;
+    {
+      const zVals = trimmedGroups.filter(g => g.axis === 2 && Math.abs(g.value) > 1).map(g => g.value);
+      const yCount = trimmedGroups.filter(g => g.axis === 1).length;
+      const fanPattern = (
+        trimmedGroups.length >= 5 && zVals.length >= 1 && yCount >= 4 &&
+        zVals.every(z => Math.abs(z - zVals[0]) < 0.5) &&
+        trimmedGroups[0].axis === 0 && trimmedGroups[1].axis === 1 && trimmedGroups[2].axis === 2
+      );
+      if (fanPattern) {
+        const baseZ_fan = zVals[0];
+        const verts = [[trimmedGroups[0].value, trimmedGroups[1].value, baseZ_fan]];
+        const running_fan = [trimmedGroups[0].value, trimmedGroups[1].value, baseZ_fan];
+        for (let k = 3; k < trimmedGroups.length; k++) {
+          const gk = trimmedGroups[k];
+          if (gk.axis >= 0 && gk.axis <= 2) running_fan[gk.axis] = gk.value;
+          verts.push([...running_fan]);
+        }
+        let firstPairX = null;
+        let slot = 1;
+        let i2 = 3;
+        while (i2 < trimmedGroups.length) {
+          const gi = trimmedGroups[i2];
+          if (i2 + 1 < trimmedGroups.length && gi.axis === 0 && trimmedGroups[i2 + 1].axis === 1) {
+            const xv = gi.value, yv = trimmedGroups[i2 + 1].value;
+            if (slot + 1 < verts.length) verts[slot + 1] = [xv, yv, baseZ_fan];
+            if (firstPairX === null) firstPairX = xv;
+            slot += 2; i2 += 2;
+          } else if (gi.axis === 1) {
+            if (firstPairX !== null && slot < verts.length) verts[slot] = [firstPairX, gi.value, baseZ_fan];
+            slot += 1; i2 += 1;
+          } else { slot += 1; i2 += 1; }
+        }
+        // Append c0_slots so face section refs to high indices land valid.
+        const fanC0 = {};
+        const baseFan = [trimmedGroups[0].value, trimmedGroups[1].value, baseZ_fan];
+        const assignerCls = new Set(['C0','40','80','60','A0','20']);
+        for (const g of trimmedGroups) {
+          const ax = g.axis;
+          if (ax < 0 || ax > 2) continue;
+          for (const t of g.tags) {
+            if (assignerCls.has(t.cls) && t.hiNib > 0) {
+              const sl = t.hiNib;
+              if (!fanC0[sl]) fanC0[sl] = [...baseFan];
+              fanC0[sl][ax] = g.value;
+              if (t.loNib === 0x7 || t.loNib === 0xF) fanC0[sl][2] = baseZ_fan;
+            }
+          }
+        }
+        const slotKeys = Object.keys(fanC0).map(Number).sort((a,b) => a-b);
+        for (const sl of slotKeys) verts.push(fanC0[sl]);
+        for (const v of verts) vertices.push(v);
+        fanPatternHandled = true;
+      }
+    }
+
+    if (!fanPatternHandled) {
     const running = [0, 0, 0];
     const primaries = [];
     const primariesStandard = [];
@@ -694,6 +756,7 @@ function parseOOT(arrayBuffer) {
     for (const p of primaries) vertices.push(p);
     const slotNums = Object.keys(c0Slots).map(Number).sort((a,b) => a-b);
     for (const slot of slotNums) vertices.push(c0Slots[slot]);
+    } // end if (!fanPatternHandled)
   }
 
   // ── 11. Face decoder (EdgeBreaker) ──

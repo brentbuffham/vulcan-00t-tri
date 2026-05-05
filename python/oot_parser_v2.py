@@ -435,6 +435,88 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
     # Trim face section data
     groups = trim_coord_groups(groups)
 
+    # ── Fan/NonRound encoding detection ──
+    # Fan stores per-vertex (X, Y) pairs after the base XYZ triple. When a
+    # group has axis=0 (X) immediately followed by a group with axis=1 (Y),
+    # those two values together form one vertex with Z = base_Z. Standalone
+    # axis=1 groups (no preceding X partner) are "Y-only" updates that
+    # reuse the X of the FIRST (X, Y) pair (the apex vertex of a fan).
+    # Triggered when groups have all axis=2 values equal (flat in Z) AND
+    # there are at least 4 groups with axis=1 (lots of Y values, typical
+    # of a fan or NonRound).
+    z_vals = [g.value for g in groups if g.axis == 2 and abs(g.value) > 1]
+    y_count = sum(1 for g in groups if g.axis == 1)
+    fan_pattern = (
+        len(groups) >= 5
+        and len(z_vals) >= 1
+        and all(abs(z - z_vals[0]) < 0.5 for z in z_vals)  # all Z equal
+        and y_count >= 4
+        and groups[0].axis == 0 and groups[1].axis == 1 and groups[2].axis == 2
+    )
+    if fan_pattern:
+        base_z = z_vals[0]
+        # Build legacy running-state primaries (one per non-base group) so
+        # face section DATA refs — authored against this layout — still land
+        # at valid indices. Then OVERWRITE specific slots with clean (X, Y)
+        # pair vertices so the rendered positions match DXF.
+        verts = [[groups[0].value, groups[1].value, base_z]]
+        running = [groups[0].value, groups[1].value, base_z]
+        for g in groups[3:]:
+            if 0 <= g.axis <= 2:
+                running[g.axis] = g.value
+            verts.append(list(running))
+
+        # Walk groups again and pair (X, Y) values per vertex. The Y member
+        # of each (X, Y) pair lands at slot+1 (since after X update we have
+        # phantom slot, then after Y the clean vertex). For Y-only groups,
+        # X is reused from the FIRST pair (apex of fan).
+        first_pair_x = None
+        slot = 1  # verts[0] is V_base; first non-base primary is at verts[1]
+        i = 3
+        while i < len(groups):
+            g = groups[i]
+            if (i + 1 < len(groups) and g.axis == 0 and groups[i + 1].axis == 1):
+                x_val = g.value
+                y_val = groups[i + 1].value
+                if slot + 1 < len(verts):
+                    verts[slot + 1] = [x_val, y_val, base_z]
+                if first_pair_x is None:
+                    first_pair_x = x_val
+                slot += 2
+                i += 2
+            elif g.axis == 1:
+                if first_pair_x is not None and slot < len(verts):
+                    verts[slot] = [first_pair_x, g.value, base_z]
+                slot += 1
+                i += 1
+            else:
+                slot += 1
+                i += 1
+
+        # Append c0_slots so face section DATA refs to high indices land on
+        # actual vertices (the legacy builder does this after primaries).
+        c0_slots_local = {}
+        base_xyz = [groups[0].value, groups[1].value, base_z]
+        running2 = list(base_xyz)
+        assigner_classes = {'C0', '40', '80', '60', 'A0', '20'}
+        for g in groups:
+            ax = g.axis
+            if 0 <= ax <= 2:
+                running2[ax] = g.value
+            for t in g.tags:
+                if t.cls in assigner_classes and t.hi_nib > 0 and 0 <= ax <= 2:
+                    sl = t.hi_nib
+                    if sl not in c0_slots_local:
+                        c0_slots_local[sl] = list(base_xyz)
+                    c0_slots_local[sl][ax] = g.value
+                    if t.lo_nib == 0x7:
+                        c0_slots_local[sl][2] = base_z
+                    elif t.lo_nib == 0xF:
+                        c0_slots_local[sl][2] = base_z  # fan has only one Z
+        for sl in sorted(c0_slots_local.keys()):
+            verts.append(c0_slots_local[sl])
+        return verts
+
     # ── Shared-base encoding detection (TEST-019) ──
     # Linear strip has all coord values in a tight range (1000-1300) and
     # G0 leads with class 60 (Y class). All 3 axes start at G0.value;

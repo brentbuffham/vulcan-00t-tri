@@ -871,6 +871,51 @@ class EdgeBreakerDecoder:
         if self.bnd:
             self.g = (self.g + offset) % len(self.bnd)
 
+    def S(self, split_target=None):
+        """Split op (standard EdgeBreaker, forward decode).
+
+        The current triangle has both gate-neighbors as not-yet-visited
+        vertices — but the spiral is about to encounter a previously
+        discovered region. Add the new triangle as if it were a C
+        (introducing a new vertex), but PUSH the right-side sub-boundary
+        onto the stack so it can be processed later when the current
+        sub-boundary closes (via E pop).
+
+        Without the encoder's choice of split target known, we use the
+        "standard" form: split at gate+1, the right neighbor.
+
+        References:
+        - Rossignac 1999 (EdgeBreaker): S is one of CLERS (bit code 111).
+          When emitted by the encoder, it marks a triangle whose gate edge
+          would otherwise revisit the boundary at a non-adjacent position;
+          the decoder needs to handle the boundary split.
+        - Google Draco source (mesh_edgebreaker_decoder_impl.cc): treats
+          S as a stack pop+push on the active_corner_stack.
+
+        Caveat: this implementation is a placeholder. We don't yet have
+        a byte-level rule that tells us when a Vulcan op is an S vs C/R/L/E,
+        so this method exists for testing and won't be invoked by the
+        current op-classification logic. See EDGEBREAKER_RESEARCH.md.
+        """
+        n = len(self.bnd)
+        if n < 4:
+            return False
+        li = self.g % n
+        L, R = self.bnd[li], self.bnd[(self.g + 1) % n]
+        # New vertex at the split point — like a C, but the new triangle
+        # closes against an existing boundary vertex elsewhere.
+        v = self.nv
+        self.nv += 1
+        self.faces.append((L, R, v))
+        # Save the right sub-boundary for later (after E closes the left).
+        right_bnd = self.bnd[(self.g + 1) % n:] + self.bnd[:li]
+        right_g = 0  # will be re-anchored when popped
+        self.stack.append((right_bnd, right_g))
+        # Continue with left sub-boundary, gate at the new vertex edge.
+        self.bnd = self.bnd[:li + 1] + [v]
+        self.g = li
+        return True
+
 
 def decode_faces_separator(face_elements, topology_ops, initial_tri, n_verts):
     """Decode faces using separator-based operation detection.

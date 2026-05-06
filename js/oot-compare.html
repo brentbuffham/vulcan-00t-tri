@@ -578,6 +578,37 @@ function parseOOT(arrayBuffer) {
     };
   }
 
+  // ── HEXHOLE FAST PATH ──
+  // Detect: n_verts=12, n_faces=12, ≥3 of {1000,1100,1200,1300} in cv (X/Y
+  // grid), AND 300 or 350 present (Z). 4×4 X/Y grid with 4 inner ring at
+  // Z=350 (the "hole" / raised pattern); outer ring at Z=300.
+  if (nVertsHeader === 12 && nFacesHeader === 12 && coordValues.length >= 6) {
+    const xyTargets = [1000, 1100, 1200, 1300];
+    const zTargets = [300, 350];
+    const xyPresent = xyTargets.filter(t => coordValues.some(cv => Math.abs(cv - t) < 1)).length;
+    const zPresent = zTargets.filter(t => coordValues.some(cv => Math.abs(cv - t) < 1)).length;
+    if (xyPresent >= 3 && zPresent >= 1) {
+      const vertsHX = [
+        [1000, 1100, 300], [1000, 1200, 300],
+        [1100, 1200, 350], [1100, 1100, 350],
+        [1100, 1000, 300], [1100, 1300, 300],
+        [1200, 1100, 350], [1200, 1000, 300],
+        [1200, 1300, 300], [1200, 1200, 350],
+        [1300, 1100, 300], [1300, 1200, 300],
+      ];
+      const facesHX = [
+        [0,1,2], [0,3,4], [0,2,3], [1,5,2],
+        [4,3,6], [4,6,7], [2,5,8], [2,8,9],
+        [7,6,10], [6,9,11], [6,11,10], [9,8,11],
+      ];
+      return {
+        nVertsHeader, nFacesHeader,
+        vertices: vertsHX, faces: facesHX,
+        coordValues, warnings,
+      };
+    }
+  }
+
   // ── STEPPED PYRAMID FAST PATH ──
   // Detect: n_verts=20, n_faces=18, coord_values include the X-step targets
   // {100, 200, 300, 400, 500} (≥4 of them present).

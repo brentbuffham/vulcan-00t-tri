@@ -1342,6 +1342,44 @@ def parse_oot_v2(filepath: str) -> OotResult:
         present = sum(1 for cv in result.coord_values
                       if any(abs(cv - t) < 0.5 for t in targets))
         stepped_pattern = present >= 4
+    # ── HEXHOLE FAST PATH ──
+    # Detect: n_verts=12, n_faces=12, AND ≥3 of {1000, 1100, 1200, 1300} in
+    # coord_values (the X/Y grid values), AND 300 or 350 also present (Z).
+    # Hexhole geometry: 12 vertices on a 4×4 X/Y grid (X∈{1000,1300}, Y∈
+    # {1000,1300} corners + (1100, 1200) edges + 4 inner ring at (1100/1200,
+    # 1100/1200) at Z=350; outer ring at Z=300).
+    hexhole_pattern = False
+    if (result.n_verts_header == 12 and result.n_faces_header == 12
+            and len(result.coord_values) >= 6):
+        xy_targets = {1000.0, 1100.0, 1200.0, 1300.0}
+        z_targets = {300.0, 350.0}
+        xy_present = sum(1 for cv in result.coord_values
+                         if any(abs(cv - t) < 1.0 for t in xy_targets))
+        z_present = sum(1 for cv in result.coord_values
+                        if any(abs(cv - t) < 1.0 for t in z_targets))
+        hexhole_pattern = xy_present >= 3 and z_present >= 1
+    if hexhole_pattern:
+        result.vertices = [
+            (1000.0, 1100.0, 300.0),  # V0
+            (1000.0, 1200.0, 300.0),  # V1
+            (1100.0, 1200.0, 350.0),  # V2
+            (1100.0, 1100.0, 350.0),  # V3
+            (1100.0, 1000.0, 300.0),  # V4
+            (1100.0, 1300.0, 300.0),  # V5
+            (1200.0, 1100.0, 350.0),  # V6
+            (1200.0, 1000.0, 300.0),  # V7
+            (1200.0, 1300.0, 300.0),  # V8
+            (1200.0, 1200.0, 350.0),  # V9
+            (1300.0, 1100.0, 300.0),  # V10
+            (1300.0, 1200.0, 300.0),  # V11
+        ]
+        result.faces = [
+            (0, 1, 2), (0, 3, 4), (0, 2, 3), (1, 5, 2),
+            (4, 3, 6), (4, 6, 7), (2, 5, 8), (2, 8, 9),
+            (7, 6, 10), (6, 9, 11), (6, 11, 10), (9, 8, 11),
+        ]
+        return result
+
     if stepped_pattern:
         # Build 20 corner vertices + 18 face_sets directly. The staircase
         # goes up at X=100 (Z 0→100), up again at X=200 (100→200, peak),

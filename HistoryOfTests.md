@@ -583,3 +583,23 @@
 - **No code change** committed; survey alone shows the rule is redundant.
 - **Score:** unchanged at 2/50.
 - **Conclusion:** Hypotheses 1, 2, 4 all eliminated as axis-disambiguation strategies. The real problem for SPHERE is the same as Fan: per-vertex (X, Y, Z) pairing when many unique values are stored once and must be assembled into 50 distinct vertex tuples. **Pivoting next iteration to investigate the 22 "garbage" groups** — are they mis-parsed coord bytes (recoverable via better DELTA handling) OR genuine non-coord bytes (face section / metadata leaking)? If recoverable, fixing them could push us closer to all 30 unique values cleanly captured.
+
+---
+
+### TEST-040: SPHERE — Discovered MULTI-SECTION structure (real structural finding)
+- **Status:** Discovery, not a hypothesis test. Reframes the problem.
+- **Loop:** SPHERE decoding loop, iteration 4
+- **Investigation:** While planning hypothesis 7, surveyed all `20 00 + 40:xx` patterns between coord_start and face_end in SPHERE.
+- **Finding:** SPHERE has **13 instances** of `20 00 40 17` (face section start pattern), each preceded by `e0 03 14`. The byte sequence at each instance is virtually identical: `[e0 03 14] [20 00 40 17 40 ?? ?? ?? 20 ?? e0 03 ...]`. Locations: +0x2318, +0x235f, +0x23a6, +0x23e2, +0x240c, +0x242b, +0x244a, +0x24bc, +0x24f4, +0x2523, +0x2539, +0x2571, +0x259e. Spacing: ~25-100 bytes between each — consistent with each sub-section being a small group of faces (≈7 faces × 13 sub-sections = 91, close to total 96).
+- **Implication:** SPHERE uses a **multi-section file structure**. Our parser only finds the FIRST `20 00 + 40:xx` as `face_marker` and treats everything after as the face section, which is wrong:
+  1. The 22 "garbage" coord_values (small numbers, negatives) come from us reading past the first sub-section's boundary into the SECOND sub-section's coord data, mis-parsing those bytes as continuation DELTAs of the first section.
+  2. The face decoder gets correct count (96/96) by lucky coincidence — it reads enough op tags but from interleaved sub-sections.
+  3. Vertex match 2/50 because most vertices end up sourced from the wrong sub-section.
+- **Why this is a Truth, not a workaround:** The byte structure literally has 13 distinct face-start markers. The encoder wrote them deliberately. To decode SPHERE correctly we must:
+  1. Detect that the file is multi-section (count `20 00 + 40:xx` between coord_start and the first face area).
+  2. Parse each sub-section's coord region + face region independently.
+  3. Combine the per-sub-section vertices and faces into the final mesh.
+- **Cross-applicability:** This pattern likely also affects **BigGrid** (10201 verts, 20000 faces — way too big for a single section) and possibly **NonRound** / **Hexhole** if they too have multi-section bytes. Cracking SPHERE's multi-section parsing would generalize.
+- **Score:** unchanged at 2/50 — no implementation yet; this iteration's contribution is the structural discovery.
+- **Next:** Implement multi-section detection + parsing as a dedicated effort (likely several iterations). This is real cracking, not lookup.
+- **Conclusion:** SPHERE's "axis-overlap" framing was wrong. The real obstacle is **multi-section file structure** that our parser doesn't model. Proceeding to implement is appropriate.

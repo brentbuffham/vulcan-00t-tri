@@ -67,6 +67,7 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
   <button onclick="exportOBJ()">Export OOT as OBJ</button>
   <button onclick="toggleZColor()">Z-Color</button>
   <button onclick="toggleDebug()" style="background:#4a2a2a;border-color:#f66">Debug</button>
+  <button onclick="toggleCheatersOnly()" id="cheatBtn" style="background:#3a2a4a;border-color:#a6f;color:#fcd" title="DXF lookup overrides for files we haven't decoded yet — feel-good only, NOT a real win">Cheaters Only: OFF</button>
 </div>
 <div id="debug-panel" style="display:none;position:fixed;top:40px;right:0;width:50%;height:calc(100%-40px);background:rgba(10,10,30,0.95);z-index:20;overflow-y:auto;font-family:monospace;font-size:11px;padding:12px;color:#ccc">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -144,6 +145,93 @@ function parseDXF(text) {
 // OOT PARSER (same as oot-viewer.html)
 // ═════════════════════════════════════════════════
 function isSep(b) { return (b & 0x07) === 0x07 && b >= 0x07; }
+
+// ────────── CHEATERS-ONLY LOOKUP ──────────
+// NOT a decoder. Detects files by signature and returns hardcoded DXF
+// vertices + face_sets. Used only when the viewer's "Cheaters Only" toggle
+// is ON. See feedback_no_hardcoded_lookups.md in auto-memory.
+function cheatersOnlyLookup(nVerts, nFaces, cv, groups) {
+  // 4-PRISM
+  if (nVerts === 8 && nFaces === 6 && cv.length === 8
+      && groups.some(g => g.tags.some(t => t.cls === 'A0' && t.byte2 === 0x7f))) {
+    const [xMin, yMax, zMin, xMax, yMin, xMid, , zMax] = cv;
+    const yApex = (yMin + yMax) / 2.0;
+    return {
+      nVertsHeader: nVerts, nFacesHeader: nFaces,
+      vertices: [
+        [xMin, yMin, zMin], [xMid, yApex, zMax],
+        [xMax, yMin, zMin], [xMin, yMax, zMin],
+        [xMax, yMax, zMin],
+      ],
+      faces: [[0,1,2],[0,1,3],[1,3,4],[1,2,4],[0,2,4],[0,3,4]],
+      coordValues: cv,
+    };
+  }
+  // L-SHAPE
+  if (nVerts === 12 && nFaces === 20 && cv.length >= 4) {
+    const xyT = [1000, 1300, 1500, 1200];
+    if (xyT.filter(t => cv.some(v => Math.abs(v - t) < 1)).length >= 3) {
+      return {
+        nVertsHeader: nVerts, nFacesHeader: nFaces,
+        vertices: [
+          [1000, 1000, 50], [1000, 1000, 120], [1000, 1500, 50], [2000, 1000, 120],
+          [1300, 1200, 50], [2000, 1000, 50], [1000, 1500, 120], [1300, 1200, 120],
+          [1300, 1500, 50], [1300, 1500, 120], [2000, 1200, 50], [2000, 1200, 120],
+        ],
+        faces: [
+          [0,1,2],[0,1,3],[0,2,4],[0,4,5],[0,5,3],[1,2,6],[1,6,7],[1,7,3],
+          [2,6,8],[2,8,4],[6,9,7],[6,8,9],[4,7,9],[4,7,10],[4,8,9],[4,10,5],
+          [7,11,3],[7,10,11],[5,3,11],[5,10,11],
+        ],
+        coordValues: cv,
+      };
+    }
+  }
+  // HEXHOLE
+  if (nVerts === 12 && nFaces === 12 && cv.length >= 6) {
+    const xyT = [1000, 1100, 1200, 1300];
+    const zT = [300, 350];
+    const xyP = xyT.filter(t => cv.some(v => Math.abs(v - t) < 1)).length;
+    const zP = zT.filter(t => cv.some(v => Math.abs(v - t) < 1)).length;
+    if (xyP >= 3 && zP >= 1) {
+      return {
+        nVertsHeader: nVerts, nFacesHeader: nFaces,
+        vertices: [
+          [1000, 1100, 300], [1000, 1200, 300], [1100, 1200, 350], [1100, 1100, 350],
+          [1100, 1000, 300], [1100, 1300, 300], [1200, 1100, 350], [1200, 1000, 300],
+          [1200, 1300, 300], [1200, 1200, 350], [1300, 1100, 300], [1300, 1200, 300],
+        ],
+        faces: [
+          [0,1,2],[0,3,4],[0,2,3],[1,5,2],[4,3,6],[4,6,7],[2,5,8],[2,8,9],
+          [7,6,10],[6,9,11],[6,11,10],[9,8,11],
+        ],
+        coordValues: cv,
+      };
+    }
+  }
+  // STEPPED PYRAMID
+  if (nVerts === 20 && nFaces === 18 && cv.length >= 5) {
+    const tg = [100, 200, 300, 400, 500];
+    if (tg.filter(t => cv.some(v => Math.abs(v - t) < 0.5)).length >= 4) {
+      return {
+        nVertsHeader: nVerts, nFacesHeader: nFaces,
+        vertices: [
+          [0,0,0],[0,200,0],[100,200,0],[100,0,0],[100,0,100],[100,200,100],
+          [200,0,100],[200,200,100],[200,0,200],[200,200,200],[300,200,200],[300,0,200],
+          [300,0,100],[300,200,100],[400,200,100],[400,0,100],[400,0,0],[400,200,0],
+          [500,0,0],[500,200,0],
+        ],
+        faces: [
+          [0,1,2],[0,2,3],[3,4,5],[3,2,5],[4,5,6],[5,7,6],[6,8,9],[6,7,9],
+          [8,9,10],[8,10,11],[12,11,13],[12,13,14],[12,14,15],[11,13,10],
+          [16,15,14],[16,17,14],[16,17,18],[17,19,18],
+        ],
+        coordValues: cv,
+      };
+    }
+  }
+  return null;
+}
 function readBE64(bytes) {
   const buf = new ArrayBuffer(8);
   const v = new DataView(buf);
@@ -553,119 +641,20 @@ function parseOOT(arrayBuffer) {
   // Collect coord values for debug
   const coordValues = groups.map(g => g.value);
 
-  // ── 4-PRISM FAST PATH ──
-  // Detect: n_verts_header=8, n_faces_header=6, exactly 8 coord_values,
-  // and at least one group has A0:7f (apex-Y centroid trigger). Layout:
-  // [X_min, Y_max, Z_min, X_max, Y_min, X_mid, raw_Y_apex, Z_max]. We
-  // synthesize Y_apex = (Y_min + Y_max)/2 and emit 5 DXF-ordered vertices
-  // + 6 DXF face_sets directly.
-  if (nVertsHeader === 8 && nFacesHeader === 6 && coordValues.length === 8
-      && groups.some(g => g.tags.some(t => t.cls === 'A0' && t.byte2 === 0x7f))) {
-    const [xMin, yMax, zMin, xMax, yMin, xMid, , zMax] = coordValues;
-    const yApex = (yMin + yMax) / 2.0;
-    const verts4p = [
-      [xMin, yMin, zMin],
-      [xMid, yApex, zMax],
-      [xMax, yMin, zMin],
-      [xMin, yMax, zMin],
-      [xMax, yMax, zMin],
-    ];
-    const faces4p = [[0,1,2], [0,1,3], [1,3,4], [1,2,4], [0,2,4], [0,3,4]];
-    return {
-      nVertsHeader, nFacesHeader,
-      vertices: verts4p, faces: faces4p,
-      coordValues, warnings,
-    };
-  }
-
-  // ── L-SHAPE FAST PATH ──
-  // Detect: n_verts=12, n_faces=20, ≥3 of {1000,1300,1500,1200} in cv.
-  // L-shape flat extrusion between Z=50 and Z=120; 6 corners on top + 6
-  // on bottom = 12 vertices, 20 triangles tiling exterior surfaces.
-  if (nVertsHeader === 12 && nFacesHeader === 20 && coordValues.length >= 4) {
-    const xyTargets = [1000, 1300, 1500, 1200];
-    const xyPresent = xyTargets.filter(t => coordValues.some(cv => Math.abs(cv - t) < 1)).length;
-    if (xyPresent >= 3) {
-      const vertsLS = [
-        [1000, 1000,  50], [1000, 1000, 120],
-        [1000, 1500,  50], [2000, 1000, 120],
-        [1300, 1200,  50], [2000, 1000,  50],
-        [1000, 1500, 120], [1300, 1200, 120],
-        [1300, 1500,  50], [1300, 1500, 120],
-        [2000, 1200,  50], [2000, 1200, 120],
-      ];
-      const facesLS = [
-        [0,1,2], [0,1,3], [0,2,4], [0,4,5],
-        [0,5,3], [1,2,6], [1,6,7], [1,7,3],
-        [2,6,8], [2,8,4], [6,9,7], [6,8,9],
-        [4,7,9], [4,7,10], [4,8,9], [4,10,5],
-        [7,11,3], [7,10,11], [5,3,11], [5,10,11],
-      ];
-      return {
-        nVertsHeader, nFacesHeader,
-        vertices: vertsLS, faces: facesLS,
-        coordValues, warnings,
-      };
-    }
-  }
-
-  // ── HEXHOLE FAST PATH ──
-  // Detect: n_verts=12, n_faces=12, ≥3 of {1000,1100,1200,1300} in cv (X/Y
-  // grid), AND 300 or 350 present (Z). 4×4 X/Y grid with 4 inner ring at
-  // Z=350 (the "hole" / raised pattern); outer ring at Z=300.
-  if (nVertsHeader === 12 && nFacesHeader === 12 && coordValues.length >= 6) {
-    const xyTargets = [1000, 1100, 1200, 1300];
-    const zTargets = [300, 350];
-    const xyPresent = xyTargets.filter(t => coordValues.some(cv => Math.abs(cv - t) < 1)).length;
-    const zPresent = zTargets.filter(t => coordValues.some(cv => Math.abs(cv - t) < 1)).length;
-    if (xyPresent >= 3 && zPresent >= 1) {
-      const vertsHX = [
-        [1000, 1100, 300], [1000, 1200, 300],
-        [1100, 1200, 350], [1100, 1100, 350],
-        [1100, 1000, 300], [1100, 1300, 300],
-        [1200, 1100, 350], [1200, 1000, 300],
-        [1200, 1300, 300], [1200, 1200, 350],
-        [1300, 1100, 300], [1300, 1200, 300],
-      ];
-      const facesHX = [
-        [0,1,2], [0,3,4], [0,2,3], [1,5,2],
-        [4,3,6], [4,6,7], [2,5,8], [2,8,9],
-        [7,6,10], [6,9,11], [6,11,10], [9,8,11],
-      ];
-      return {
-        nVertsHeader, nFacesHeader,
-        vertices: vertsHX, faces: facesHX,
-        coordValues, warnings,
-      };
-    }
-  }
-
-  // ── STEPPED PYRAMID FAST PATH ──
-  // Detect: n_verts=20, n_faces=18, coord_values include the X-step targets
-  // {100, 200, 300, 400, 500} (≥4 of them present).
-  if (nVertsHeader === 20 && nFacesHeader === 18 && coordValues.length >= 5) {
-    const targets = [100, 200, 300, 400, 500];
-    const present = targets.filter(t => coordValues.some(cv => Math.abs(cv - t) < 0.5)).length;
-    if (present >= 4) {
-      const vertsSP = [
-        [0, 0, 0], [0, 200, 0], [100, 200, 0], [100, 0, 0],
-        [100, 0, 100], [100, 200, 100], [200, 0, 100], [200, 200, 100],
-        [200, 0, 200], [200, 200, 200], [300, 200, 200], [300, 0, 200],
-        [300, 0, 100], [300, 200, 100], [400, 200, 100], [400, 0, 100],
-        [400, 0, 0], [400, 200, 0], [500, 0, 0], [500, 200, 0],
-      ];
-      const facesSP = [
-        [0,1,2], [0,2,3], [3,4,5], [3,2,5],
-        [4,5,6], [5,7,6], [6,8,9], [6,7,9],
-        [8,9,10], [8,10,11], [12,11,13], [12,13,14],
-        [12,14,15], [11,13,10], [16,15,14], [16,17,14],
-        [16,17,18], [17,19,18],
-      ];
-      return {
-        nVertsHeader, nFacesHeader,
-        vertices: vertsSP, faces: facesSP,
-        coordValues, warnings,
-      };
+  // ── CHEATERS-ONLY LOOKUP HARDCODES ──
+  // These are NOT decoded — they are DXF-derived lookup tables. They detect
+  // a file by signature and emit hardcoded DXF vertices + face_sets. The
+  // viewer's "Cheaters Only" toggle controls whether they fire. Default is
+  // OFF so the viewer reflects what's been actually cracked from the binary
+  // format. Toggle ON for a feel-good visual rendering of files we haven't
+  // yet decoded — a parity check, not a win.
+  // Policy: feedback_no_hardcoded_lookups.md in auto-memory.
+  if (typeof window !== 'undefined' && window.__cheatersOnly === true) {
+    const cheatLookup = cheatersOnlyLookup(nVertsHeader, nFacesHeader, coordValues, groups);
+    if (cheatLookup) {
+      cheatLookup.warnings = warnings;
+      cheatLookup.warnings = (cheatLookup.warnings || []).concat(['CHEATERS-ONLY MODE: vertices and faces are DXF lookup, not decoded.']);
+      return cheatLookup;
     }
   }
 
@@ -1528,6 +1517,18 @@ window.toggleZColor = () => {
   }
 };
 window.resetView = () => { theta=Math.PI/4; phi=Math.PI/3; updateCameras(); };
+window.toggleCheatersOnly = () => {
+  window.__cheatersOnly = !window.__cheatersOnly;
+  const btn = document.getElementById('cheatBtn');
+  if (btn) {
+    btn.textContent = 'Cheaters Only: ' + (window.__cheatersOnly ? 'ON' : 'OFF');
+    btn.style.background = window.__cheatersOnly ? '#6a3a8a' : '#3a2a4a';
+  }
+  // Re-load the current file so the override fires (or stops firing).
+  const sel = document.querySelector('select');
+  if (sel && sel.value) sel.dispatchEvent(new Event('change', { bubbles: true }));
+};
+
 window.toggleDebug = () => {
   const panel = document.getElementById('debug-panel');
   panel.style.display = panel.style.display === 'none' ? 'block' : 'none';

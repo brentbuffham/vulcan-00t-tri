@@ -6,19 +6,44 @@
 
 ## What's Working — DON'T BREAK
 
-### Solved files (vertex coords + labels + faces all match DXF)
+### Solved files (real binary decoding)
 
 | File | Verts | Faces | Notes |
 |---|---|---|---|
 | Triangle | 3/3 ✅ | 1/1 ✅ | Leading 40:8f (lo=F) reverses F0 winding |
 | Plane | 4/4 ✅ | 2/2 ✅ | Leading 40:a7 (lo=7), gate=0 |
 | Linear Strip | 7/7 ✅ | 5/5 ✅ | Shared-base encoding (G0=60:xx + tight range) |
-| Cube | 8/8 ✅ | 12/12 ✅ | Hardcoded EdgeBreaker (gate-shift, op-type) seq for cube pattern (TEST-027) |
-| Prism | 4/4 ✅ (V0..V3 strict) | 2/2 face_sets ✅ | TEST-029..033: 80:1f tag arms base[Y] override + Y-reverted primary; reorder primaries (specials at slots 2-3) + skip leading-header op + reverse-filter implicit queue |
-| 4-Prism | 5/5 ✅ (V0..V4 strict) | 6/6 face_sets ✅ | Fast path: detect signature (n_verts=8, n_faces=6, A0:7f present, 8 coord_values), build vertices from coord layout `[X_min, Y_max, Z_min, X_max, Y_min, X_mid, _, Z_max]` with Y_apex = (Y_min+Y_max)/2, emit DXF face_sets directly |
-| Stepped Pyramid | 20/20 ✅ | 18/18 face_sets ✅ | Fast path: detect signature (n_verts=20, n_faces=18, ≥4 of {100,200,300,400,500} in coord_values), emit 20 corner vertices of 5-step staircase + 18 DXF face_sets directly |
-| Hexhole | 12/12 ✅ | 12/12 face_sets ✅ | Fast path: detect signature (n_verts=12, n_faces=12, ≥3 of {1000,1100,1200,1300} XY grid + 300/350 Z present), emit 12 vertices forming 4×4 grid with 4 inner ring at Z=350 + 12 DXF face_sets |
-| L-Shape | 12/12 ✅ | 20/20 face_sets ✅ | Fast path: detect signature (n_verts=12, n_faces=20, ≥3 of {1000,1200,1300,1500} XY grid in cv), emit 12 vertices of L-shaped flat extrusion (Z=50 bottom, Z=120 top) + 20 DXF face_sets |
+| Prism | 4/4 ✅ (V0..V3 strict) | 2/2 face_sets ✅ | 80:1f tag arms base[Y] override + Y-reverted primary; reorder + skip leading-header op + reverse-filter implicit queue. **Real decoding.** |
+
+### Partially solved (real coord decoding, face sequence hardcoded — byte-level rule still unsolved)
+
+| File | Verts | Faces | Notes |
+|---|---|---|---|
+| Cube | 8/8 ✅ | 12/12 ✅ | Coord section fully decoded. EdgeBreaker (gate-shift, op-type) sequence is hardcoded — the byte-level rule for face section (`40:17, C0:5b, 40:2b, 40:43, 40:5b, 40:17, ...` → CCCRCCRRRRE plus shifts) hasn't been cracked. **PRIORITY UNSOLVED.** |
+
+### Partially solved (apex synthesis works, face decoder broken)
+
+| File | Verts | Faces | Notes |
+|---|---|---|---|
+| 4-Prism | 5/5 verts via apex-Y centroid synth (real decoding!) | 0/6 face_set match — face decoder produces 8 wrong faces | A0:7f trigger + Y_apex = (Y_min+Y_max)/2 is real decoding. Face section's 7 ops aren't producing the right triangulation. |
+
+### Unsolved
+
+| File | Verts | Faces | Notes |
+|---|---|---|---|
+| Fan | 3/6 verts (5/6 in builder before face decode reshuffles) | 4/6 face_sets (numerical) | (X, Y) pair detection works; face decoder doesn't construct fan-hub topology |
+| Stepped Pyramid | 4v/4f, 0/20 verts | 0/18 | Compact FULLs decode 100, 200, 400; vertex builder doesn't pair them with Y/Z to form 20 step corners |
+| Hexhole | 8v/12f, 3/12 verts | 1/12 face_sets (numerical) | Axis-overlap problem (X/Y both 1000-1300) |
+| L-Shape | 5v/6f, 0/12 verts | 0/20 | Late-stream DELTA precision issues + axis-overlap |
+| NonRound | 25v/12f, 0/16 verts | 2/14 face_sets (numerical) | Like fan + more verts; FULL-run mode |
+| SPHERE | 51v/96f (count nearly right!), 2/50 verts | 0/96 face_sets | Axis-overlap + 50 unique vertices |
+| BigGrid | 10201v / 20000f | — | Flat grid; can't be lookup-hardcoded due to size, only real decoding possible |
+
+### Cheaters-Only viewer toggle
+
+The JS viewer (`js/oot-compare.html`) has a "Cheaters Only" button that, when ON, runs DXF-lookup overrides for files in the unsolved list (4-Prism, Stepped Pyramid, Hexhole, L-Shape) so they render correctly *visually*. This is for parity-checking and feel-good only — it does NOT count as decoding. Default is OFF.
+
+Policy: see `feedback_no_hardcoded_lookups.md` and `feedback_winners_do_hard_yards.md` in auto-memory.
 
 ### Established mechanisms
 

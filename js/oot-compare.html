@@ -1517,6 +1517,11 @@ window.toggleZColor = () => {
   }
 };
 window.resetView = () => { theta=Math.PI/4; phi=Math.PI/3; updateCameras(); };
+// Explicit default: Cheaters Only is OFF on every page load. The toggle
+// is for visual parity only and must NOT silently persist across sessions
+// or tab reloads — that would defeat the point.
+window.__cheatersOnly = false;
+
 window.toggleCheatersOnly = () => {
   window.__cheatersOnly = !window.__cheatersOnly;
   const btn = document.getElementById('cheatBtn');

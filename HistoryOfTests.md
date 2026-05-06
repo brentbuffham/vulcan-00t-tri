@@ -552,3 +552,19 @@
 - **No code change.** Survey alone is sufficient to rule out the hypothesis.
 - **Score:** unchanged at baseline 2/50 (no implementation attempted).
 - **Conclusion:** Class→axis is too coarse-grained. Move to hypothesis 2 (tag hi_nib mod 3) or hypothesis 4 (Z-range filter, since Z 150-450 is cleanly separable from X/Y 1000-1300) next iteration.
+
+---
+
+### TEST-038: SPHERE Hypothesis 2 — Tag hi_nib mod 3 → axis (FAIL)
+- **Status:** FAIL — survey rules out the rule; signal is too weak
+- **Loop:** SPHERE decoding loop, iteration 2, baseline 2/50 vertex match
+- **Hypothesis:** Each coord group's first tag has byte2.hi_nib whose value mod 3 = axis index (0=X, 1=Y, 2=Z). Test: predicted axis vs actual axis (Z if 150 ≤ value ≤ 450, X-or-Y if 900 ≤ value ≤ 1400).
+- **Byte evidence (survey):** 65 SPHERE coord groups. First-tag hi_nib mod 3 vs value range:
+  - 9 matches (predicted Z and value in Z range)
+  - 12 ambiguous (predicted X or Y, value in X-or-Y range — can't tell from this alone)
+  - 43 mismatches (predicted axis disagrees with value range)
+  - 1 group has no tags
+- **Why FAIL:** The dominant tag across SPHERE coord groups is `E0:00` (hi_nib=0, mod3=0 → predicts X). E0:00 appears whether the group's value is 300 (Z), 1100 (X/Y), or 53.59 (other). The tag carries no axis discriminator. The few groups with non-E0 tags split: G7 (225, tag 20:2f, hi=2 → Z ✓), G19 (275, tag 40:2f, hi=2 → Z ✓), G12 (1099.75, tag 20:ee, hi=14 mod3=2 → Z ✗), G18 (517.08, tag 20:df, hi=13 mod3=1 → Y ✗ since value is in the gap).
+- **No code change.** Survey is conclusive.
+- **Score:** unchanged at baseline 2/50.
+- **Conclusion:** Tag hi_nib doesn't predict axis. Most coord groups have E0:00 (uninformative). Hypothesis 3 (E0 tag pattern delimits axis cycles) is unlikely to help for the same reason — E0 tags are uniform. **Jumping to hypothesis 4 (Z-range filter)** next iteration since Z values (150-450) are cleanly separable from X/Y (1000-1300) — that's a high-confidence partial win for at least the Z axis.

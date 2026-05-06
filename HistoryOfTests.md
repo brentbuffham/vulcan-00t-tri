@@ -568,3 +568,18 @@
 - **No code change.** Survey is conclusive.
 - **Score:** unchanged at baseline 2/50.
 - **Conclusion:** Tag hi_nib doesn't predict axis. Most coord groups have E0:00 (uninformative). Hypothesis 3 (E0 tag pattern delimits axis cycles) is unlikely to help for the same reason — E0 tags are uniform. **Jumping to hypothesis 4 (Z-range filter)** next iteration since Z values (150-450) are cleanly separable from X/Y (1000-1300) — that's a high-confidence partial win for at least the Z axis.
+
+---
+
+### TEST-039: SPHERE Hypothesis 4 — Z-range filter (NEUTRAL — already correct)
+- **Status:** NEUTRAL — survey shows the closest-delta heuristic ALREADY correctly assigns Z to every Z-range group. The proposed rule is a no-op.
+- **Loop:** SPHERE decoding loop, iteration 3, baseline 2/50 vertex match
+- **Hypothesis:** Force `axis = 2` (Z) for any coord group whose value falls in [150, 450]. Z values in DXF SPHERE are cleanly separable from X/Y (1000-1300); a range-based filter would correctly assign Z even when closest-delta fails.
+- **Byte evidence (survey):** 65 SPHERE coord groups split as:
+  - 30 groups with value in Z-range [150, 450] — **all 30 already assigned axis=2** by closest-delta.
+  - 13 groups with value in X/Y-range [900, 1400] — all 13 assigned axis 0 or 1 (X or Y; ambiguous which).
+  - 22 groups with "other" values — small numbers (2.0, 2.38, 2.71), negatives (-2.0, -2.62), spurious 10.0 — these are GARBAGE from late-stream byte mis-parsing (likely face-section bytes leaking into coord region OR DELTA decoding without valid prev-state).
+- **Why NEUTRAL:** Closest-delta does the Z separation correctly because Z range doesn't overlap X/Y. The 50-DXF unique values (13 X + 4 Y + 13 Z = 30 unique) are mostly captured (43 in-range groups). The bottleneck is **PAIRING** — knowing which X goes with which Y and Z to form a vertex — not axis assignment.
+- **No code change** committed; survey alone shows the rule is redundant.
+- **Score:** unchanged at 2/50.
+- **Conclusion:** Hypotheses 1, 2, 4 all eliminated as axis-disambiguation strategies. The real problem for SPHERE is the same as Fan: per-vertex (X, Y, Z) pairing when many unique values are stored once and must be assembled into 50 distinct vertex tuples. **Pivoting next iteration to investigate the 22 "garbage" groups** — are they mis-parsed coord bytes (recoverable via better DELTA handling) OR genuine non-coord bytes (face section / metadata leaking)? If recoverable, fixing them could push us closer to all 30 unique values cleanly captured.

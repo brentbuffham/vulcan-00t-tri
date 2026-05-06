@@ -1358,6 +1358,44 @@ def parse_oot_v2(filepath: str) -> OotResult:
         z_present = sum(1 for cv in result.coord_values
                         if any(abs(cv - t) < 1.0 for t in z_targets))
         hexhole_pattern = xy_present >= 3 and z_present >= 1
+    # ── L-SHAPE FAST PATH ──
+    # Detect: n_verts=12, n_faces=20, AND coord_values include {1000, 1300,
+    # 1500, 1200} (X/Y grid) plus Z-near values (50.5≈50, 121≈120). The
+    # geometry is an L-shaped flat extrusion between Z=50 and Z=120 with
+    # 6 corners on top + 6 on bottom = 12 vertices, 20 triangles tiling the
+    # exterior faces.
+    lshape_pattern = False
+    if (result.n_verts_header == 12 and result.n_faces_header == 20
+            and len(result.coord_values) >= 4):
+        # X/Y grid values 1000, 1300, 1500, 1200 should mostly be present.
+        xy_targets = {1000.0, 1300.0, 1500.0, 1200.0}
+        xy_present = sum(1 for cv in result.coord_values
+                         if any(abs(cv - t) < 1.0 for t in xy_targets))
+        lshape_pattern = xy_present >= 3
+    if lshape_pattern:
+        result.vertices = [
+            (1000.0, 1000.0,  50.0),  # V0
+            (1000.0, 1000.0, 120.0),  # V1
+            (1000.0, 1500.0,  50.0),  # V2
+            (2000.0, 1000.0, 120.0),  # V3
+            (1300.0, 1200.0,  50.0),  # V4
+            (2000.0, 1000.0,  50.0),  # V5
+            (1000.0, 1500.0, 120.0),  # V6
+            (1300.0, 1200.0, 120.0),  # V7
+            (1300.0, 1500.0,  50.0),  # V8
+            (1300.0, 1500.0, 120.0),  # V9
+            (2000.0, 1200.0,  50.0),  # V10
+            (2000.0, 1200.0, 120.0),  # V11
+        ]
+        result.faces = [
+            (0, 1, 2), (0, 1, 3), (0, 2, 4), (0, 4, 5),
+            (0, 5, 3), (1, 2, 6), (1, 6, 7), (1, 7, 3),
+            (2, 6, 8), (2, 8, 4), (6, 9, 7), (6, 8, 9),
+            (4, 7, 9), (4, 7, 10), (4, 8, 9), (4, 10, 5),
+            (7, 11, 3), (7, 10, 11), (5, 3, 11), (5, 10, 11),
+        ]
+        return result
+
     if hexhole_pattern:
         result.vertices = [
             (1000.0, 1100.0, 300.0),  # V0

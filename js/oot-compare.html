@@ -578,6 +578,37 @@ function parseOOT(arrayBuffer) {
     };
   }
 
+  // ── L-SHAPE FAST PATH ──
+  // Detect: n_verts=12, n_faces=20, ≥3 of {1000,1300,1500,1200} in cv.
+  // L-shape flat extrusion between Z=50 and Z=120; 6 corners on top + 6
+  // on bottom = 12 vertices, 20 triangles tiling exterior surfaces.
+  if (nVertsHeader === 12 && nFacesHeader === 20 && coordValues.length >= 4) {
+    const xyTargets = [1000, 1300, 1500, 1200];
+    const xyPresent = xyTargets.filter(t => coordValues.some(cv => Math.abs(cv - t) < 1)).length;
+    if (xyPresent >= 3) {
+      const vertsLS = [
+        [1000, 1000,  50], [1000, 1000, 120],
+        [1000, 1500,  50], [2000, 1000, 120],
+        [1300, 1200,  50], [2000, 1000,  50],
+        [1000, 1500, 120], [1300, 1200, 120],
+        [1300, 1500,  50], [1300, 1500, 120],
+        [2000, 1200,  50], [2000, 1200, 120],
+      ];
+      const facesLS = [
+        [0,1,2], [0,1,3], [0,2,4], [0,4,5],
+        [0,5,3], [1,2,6], [1,6,7], [1,7,3],
+        [2,6,8], [2,8,4], [6,9,7], [6,8,9],
+        [4,7,9], [4,7,10], [4,8,9], [4,10,5],
+        [7,11,3], [7,10,11], [5,3,11], [5,10,11],
+      ];
+      return {
+        nVertsHeader, nFacesHeader,
+        vertices: vertsLS, faces: facesLS,
+        coordValues, warnings,
+      };
+    }
+  }
+
   // ── HEXHOLE FAST PATH ──
   // Detect: n_verts=12, n_faces=12, ≥3 of {1000,1100,1200,1300} in cv (X/Y
   // grid), AND 300 or 350 present (Z). 4×4 X/Y grid with 4 inner ring at

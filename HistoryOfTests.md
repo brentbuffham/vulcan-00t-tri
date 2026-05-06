@@ -530,3 +530,25 @@
   - Hexhole/SPHERE: unchanged (different format).
 - **Remaining for fan:** Vertex match still 3/6 (V0, V2, V3 found in unique vertex list). Missing DXF V1=(300, 600), V4=(300, 467.40), V5=(273.24, 476.34). The X=300 values get conflated with our 300.02 (V1.X-like), and X=273.24 isn't yet captured (it lives in the "rolling" overlap at the FULL-run/standard boundary). Vertex builder also emits phantom (X, Y) combinations because closest-delta axis assignment doesn't pair X-Y per vertex.
 - **Conclusion:** Fan's extended FULL/marker encoding is now decoded. The next step for fan is a different vertex-assembly approach (pair X-Y values per vertex rather than emit running-state primaries) since fan has all-Z=900 (flat) topology where corners are independent (X, Y) pairs.
+
+---
+
+### TEST-037: SPHERE Hypothesis 1 — Tag class → axis (FAIL)
+- **Status:** FAIL — survey rules out the rule before implementation
+- **Loop:** SPHERE decoding loop, iteration 1, baseline 2/50 vertex match
+- **Hypothesis:** Each coord group's first non-C0/E0 tag class (20/40/60/80/A0) maps deterministically to an axis (0/1/2). Test: if class→axis mapping holds, axis-overlap (X/Y both 1000-1300) becomes resolvable.
+- **Byte evidence (survey):** SPHERE has 65 coord groups. First-non-C0/E0 tag class distribution:
+  - `(none)` — 37 groups (only E0/C0 tags or no tags)
+  - `20` — 15 groups
+  - `40` — 10 groups
+  - `60` — 1 group
+  - `A0` — 2 groups
+- **Why FAIL:** Two reasons:
+  1. 37 of 65 groups have NO first-non-C0/E0 tag, so most groups can't be classified by this rule alone.
+  2. The same class spans wildly different value ranges:
+     - `20` class: G0=1000.0, G7=225.0, G12=1099.75 — ranges include both X-like (1000s) and Z-like (200s)
+     - `40` class: similar mixed ranges
+  - A class doesn't reliably predict axis.
+- **No code change.** Survey alone is sufficient to rule out the hypothesis.
+- **Score:** unchanged at baseline 2/50 (no implementation attempted).
+- **Conclusion:** Class→axis is too coarse-grained. Move to hypothesis 2 (tag hi_nib mod 3) or hypothesis 4 (Z-range filter, since Z 150-450 is cleanly separable from X/Y 1000-1300) next iteration.

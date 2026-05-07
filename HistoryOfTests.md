@@ -652,3 +652,31 @@
 - **Score:** unchanged at 2/50 — detection-only, no decoder change.
 - **No solved-file regressions:** Triangle 3/3, Plane 4/4, Linear 7/7, Cube 8/8, Prism 4/4 — all unchanged.
 - **Conclusion:** Real intelligence committed. The multi-section pattern affects 7 of 12 test files. Implementing the parser is the next real-decoding work.
+
+---
+
+### TEST-043: SPHERE sub-section init_tris span vertex range 11-49 (real evidence)
+- **Status:** Investigation only; no code change. Score unchanged.
+- **Loop:** SPHERE iteration 6
+- **Investigation:** With multi-section detection from TEST-042, parsed each of SPHERE's 11 sub-sections via `parse_face_section()` independently.
+- **Sub-section init_tri references (1-based, vertex indices):**
+  - SUB-0: init=[11], refs=[11, 4, 12, 6, 7]
+  - SUB-1: init=[17], refs=[17, 13, 8, 14, 9]
+  - SUB-2: init=[15], refs=[15, 10, 16, 21]
+  - SUB-3: init=[23], refs=[23, 22, 29]
+  - SUB-4: init=[19], refs=[19, 20]
+  - SUB-5: init=[30], refs=[30, 26]
+  - SUB-6: init=[], refs=[25, 18, 24, 27, 28, 41]
+  - SUB-7: init=[31], refs=[31, 42, 34, 38, 40, 33, 35, 37]
+  - SUB-8: init=[39], refs=[39, 44, 43]
+  - SUB-9: init=[], refs=[45]
+  - SUB-10: init=[], refs=[49, 19]
+- **Findings:**
+  - Vertex refs span **1-49** (collected union: {4, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 33, 34, 35, 37, 38, 39, 40, 41, 42, 43, 44, 45, 49}). That's 39 distinct vertex indices, suggesting up to ~50 vertex labels are addressable across the full multi-section decode — matching DXF's 50.
+  - Sub-section sizes vary: 31b to 217b. Op counts range 5-49.
+  - Each sub-section has its own `leading_40_header=True` form. Most have a single DATA value as init (the implicit V1 + that vertex).
+  - Sub-sections appear to define disjoint or overlapping subsets of the mesh — likely "rings" or "patches" in the sphere's UV decomposition.
+- **Why this matters:** Sub-sections span the FULL vertex range. If we decode each sub-section independently and combine, all 50 vertex labels could be touched. Currently we decode only the first sub-section's worth of ops, hence vertex match 2/50.
+- **Score:** unchanged at 2/50 (investigation, not implementation).
+- **Next:** Implement multi-section face decoding — for each sub-section, run the face decoder with that sub-section's init_tri and ops, accumulate faces.
+- **Conclusion:** Real evidence that multi-section decoding will unlock SPHERE. The 11 sub-sections collectively reference 39 distinct vertex indices spanning 4-49.

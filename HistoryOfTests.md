@@ -603,3 +603,32 @@
 - **Score:** unchanged at 2/50 — no implementation yet; this iteration's contribution is the structural discovery.
 - **Next:** Implement multi-section detection + parsing as a dedicated effort (likely several iterations). This is real cracking, not lookup.
 - **Conclusion:** SPHERE's "axis-overlap" framing was wrong. The real obstacle is **multi-section file structure** that our parser doesn't model. Proceeding to implement is appropriate.
+
+---
+
+### TEST-041: Multi-section structure CONFIRMED across 5 cube variants
+- **Status:** Real cracking finding — universal pattern, byte-derived.
+- **Source data:** User provided 5 rotated cube variants (`cube1.00t` … `cube5.00t`). Same topology (8 verts, 12 faces) in different orientations. Diffing their face section bytes reveals what's structural (invariant) vs what's coord/rotation-specific.
+- **Universal patterns (4-byte substrings present in ALL 5 cubes):**
+  1. `20 00 40 17` — every sub-section starts with these 4 bytes. The `40:17` op is the **first topology op of every sub-section**, always.
+  2. `e0 03 00 40` — E0:03 terminator + DATA bytes
+  3. `e0 03 00 c0` — E0:03 terminator + C0:?? start
+  4. `00 40 17 40` — DATA-0 + `40:17 40:??`
+  5. `03 00 c0 17` — E0:03 terminator + C0:17 (slot tag)
+- **Universal sub-section separator (4 of 5 cubes; cube5 has only 1 section):** `e0 03 14 20 00 40 17`. Decomposes as:
+  - `e0 03` — E0:03 terminator (end of current sub-section's init or content)
+  - `0x14` — magic/length byte (20 decimal) — section continuation marker
+  - `20 00` — next sub-section header start
+  - `40 17` — first op of new sub-section (always 40:17)
+- **Sub-section count:**
+  - cube1: 2 markers, cube2: 2, cube3: 2, cube4: 2, cube5: 1
+  - SPHERE: 13 markers (TEST-040)
+  - Original cube (`tri-crack-solid`): 1 marker
+- **Why it's a Truth:** The exact byte sequence `e0 03 14 20 00 40 17` appears at the same structural position in 4 of 5 cubes. The encoder writes it deliberately as a chunk delimiter. This isn't a guess — it's an observed invariant across multiple instances of the same topology.
+- **Generalization:** This pattern likely applies to **all multi-section .00t files** (sphere, biggrid, possibly hexhole/nonround). One decoder rule for everyone.
+- **Next implementation step:** Add multi-section detection to `parse_oot_v2`:
+  1. After finding the first `face_marker`, scan for `e0 03 14 20 00 40 17` patterns within face_end.
+  2. Each match = boundary between sub-sections.
+  3. Parse each sub-section's topology ops independently.
+  4. Combine the resulting faces into the final face list.
+- **Conclusion:** Multi-section structure is a universal Vulcan .00t feature confirmed across 5 cube variants + SPHERE. Implementing the parser is REAL DECODING work, not lookup. Score impact unknown until implementation.

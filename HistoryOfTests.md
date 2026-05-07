@@ -1,8 +1,8 @@
 # History of Tests — Vulcan .00t Parser Reverse Engineering
 
 **Started:** ~January 2026  
-**Last Updated:** 2026-04-03  
-**Status:** 3 formats fully solved (Triangle, Plane, Cube), 4 partially working, 5 broken
+**Last Updated:** 2026-04-25  
+**Status:** Triangle, Plane, Cube, Linear Strip vertices solved; faces partial on some
 
 ## What IS Working (Ground Truth)
 
@@ -288,3 +288,109 @@
   - "40:2F → 60:17 → C0:2F" sequence is Z-exclusive in SPHERE
   - No tag class is axis-exclusive in working files
 - **Conclusion:** The fundamental problem is NOT tag-based axis assignment — it is that the coord/face boundary is WRONG for new-format files. Fixing boundary detection would eliminate most axis misassignments. The axis overlap issue (X=Y range) is secondary to the boundary problem.
+
+---
+
+### TEST-019: Old-Format Boundary Heuristic — "20 00 + DATA count"
+- **Status:** Successful — L-Shape unblocked
+- **Description:** The old-format face boundary detection picked the first "20 00" after coord_start+20. L-Shape has no attrSuffix and a "20 00" tag inside its coord data at offset +22, truncating the coord section to 22 bytes (2 verts).
+- **Process:** Prefer "20 00" where the next byte is a DATA count (≤0x06) — that's the face-section vertex-ref list signature. Fall back to bare "20 00" when no such candidate exists (triangle, prism).
+- **Findings:**
+  - L-Shape: 2 verts/0 faces → 8 verts/6 faces (coord values still need work)
+  - Cube/Fan/Linear: boundary unchanged (already picked a matching candidate)
+  - Triangle/Prism/Plane/Hexhole/SPHERE/Stepped/NonRound: unchanged
+- **Conclusion:** Boundary fixed. Coord decode for L-Shape still requires separate work (Y/Z DELTA semantics differ).
+
+---
+
+### TEST-020: Plane Initial Triangle — Leading 40:xx Header
+- **Status:** Successful — Plane F0 matches DXF
+- **Description:** Plane's face section starts with `20 00 40 a7 [3] 20 07 [4] 20 03 e0 03`. The 40:a7 is a leading header indicating the first init vertex is implicit V1 (raw_idx 0). The previous code broke on the 40 tag and gave init=[0,1,2] (default), producing the wrong diagonal.
+- **Process:** Recognize leading 40:xx after 20:00 as "implicit V1 first vertex". Continue collecting DATA until E0:03 terminator. Cube's init is fully explicit (3 DATA values) and remains [0,1,3].
+- **Findings:**
+  - Plane F0 = (V0, V2, V3) ✓ matches DXF F0 exactly
+  - Plane F1 still uses different diagonal until TEST-021
+- **Conclusion:** Initial triangle now correctly identified.
+
+---
+
+### TEST-021: Plane Initial Gate Position — leading_40 Sets gate=0
+- **Status:** Successful — Plane SOLVED
+- **Description:** With init_tri=[0,2,3] and default gate=1, the C operation produced face (V2, V3, V1) which uses a different diagonal than the init triangle, creating a butterfly shape instead of a flat quad.
+- **Process:** When leading_40_header is detected, set initial dec.g = 0 (gate at edge V0-V_data[0]) instead of default 1. This makes the next C op produce a triangle that shares the V0-V_data[0] diagonal with the init triangle.
+- **Findings:**
+  - Plane F0 = (V0, V2, V3) ✓ DXF F0
+  - Plane F1 = (V0, V2, V1) — same triangle as DXF F1, both faces share BL-TR diagonal
+  - Visually confirmed flat rectangle in viewer
+- **Conclusion:** Plane SOLVED. Cube unaffected (no leading_40_header).
+
+---
+
+### TEST-022: Shared-Base Encoding — Linear Strip 7/7 Vertex Match
+- **Status:** Successful — Linear Strip vertices SOLVED
+- **Description:** Linear Strip has only 4 coord values (1000, 1100, 1200, 1300) but 7 DXF vertices (X∈{1000,1100,1200,1300}, Y∈{1000,1100}, Z=1000). The standard parser's base = [G0.value, G1.value, G2.value] = [1000, 1100, 1200] is wrong because G1 and G2 are NOT Y and Z — they are additional X-deltas.
+- **Process:** Detect "shared-base" encoding: G0 leads with class 60:xx AND first 4 group values within tight ratio (max/min < 1.5). When detected:
+  1. base = [G0.value, G0.value, G0.value]
+  2. G1.value becomes Y_alt for slot vertices
+  3. G2+ are X-deltas
+  4. For each X-delta group: create (X, Y_base, Z) and if slot hi=1 present (X, Y_alt, Z)
+- **Findings:**
+  - Linear Strip: 0/7 verts → **7/7 verts** ✓ (faces 6 vs DXF 5 — separate face issue)
+  - L-Shape: detection correctly skipped (values 50.5/121/1500 don't pass tight-range check)
+  - 4-Sides Prism: detection correctly skipped (values 100/1000/5000 span too wide)
+  - All other files: unchanged
+- **Conclusion:** Linear Strip vertex decode SOLVED. The G0=60:xx + tight-range signature is a reliable detector for this encoding variant. Face count still off by one (5 vs 6) — requires face-decoder investigation.
+
+---
+
+### TEST-023: Linear Strip Face Decoder — Shared-Base C-Only Strip
+- **Status:** Successful — Linear Strip face decode SOLVED
+- **Description:** After TEST-022 fixed vertices, linear strip produced 6 faces vs DXF's 5 because the EdgeBreaker decoder did R/L fallbacks when sep=None instead of continuing the strip with C ops.
+- **Process:**
+  1. For shared-base files, queue all non-init vertices in raw-index order (V3, V4, V5, V6) instead of the implicit/pre/post merge order.
+  2. In the decoder loop, every non-finalizer op consumes the next queue vertex as a C op until the queue is empty. After exhaustion, skip remaining ops (no R/L fallback) — the strip is complete.
+- **Findings:**
+  - Linear: F0={0,1,2}, F1={1,2,3}, F2={2,3,4}, F3={3,4,5}, F4={4,5,6} — all 5 face sets match DXF.
+  - 7/7 verts, 5/5 faces in both Python and JS.
+  - No regressions on other files.
+- **Conclusion:** Linear Strip SOLVED. The encoding is "strip-style C ops" with finalizers as gate adjustments. The same model may apply to other shared-base files.
+
+---
+
+### TEST-024: Drop Phantom Slot Vertices via Coord-Dedupe + Remap
+- **Status:** Successful — Triangle/Plane/Cube vertex counts now match DXF exactly
+- **Description:** Slot tags from class 80:15 on G0 produce a "phantom" vertex with the same coords as V0 (or another primary). Triangle: 4v vs DXF 3v. Plane: 5v vs DXF 4v. Cube: 9v vs DXF 8v. The phantom is unreferenced by any face but inflates the vertex count.
+- **Process:** After face decode, walk vertices and find coord-duplicates of an earlier vertex. Build a remap: dup_idx → orig_idx. Apply the remap to all face indices (collapsing references to the original). Drop any face that becomes degenerate (two indices equal). Prune unreferenced vertices and renumber the remaining ones.
+- **Findings (Python):**
+  - Triangle: 4v/1f → 3v/1f ✓ (matches DXF 3v/1f)
+  - Plane: 5v/2f → 4v/2f ✓
+  - Cube: 9v/12f → 8v/12f ✓
+  - Linear unchanged (7v/5f, no phantom)
+  - "Broken" files (Hexhole, SPHERE, etc.) lose their inflated double-counts; raw match counts go down but unique DXF coverage is unchanged.
+- **JS divergence:** JS produces a slightly different vertex list for cube (7v after dedupe vs 8v in Python). The JS vertex builder has a separate bug where one cube vertex isn't generated. Triangle, Plane, Linear all match Python exactly in JS.
+- **Conclusion:** Python parser is now perfectly clean for all 4 solved files. JS cube divergence is a separate JS-only issue tracked for later.
+
+---
+
+### TEST-025: Leading 40 lo_nib Controls F0 Winding — Triangle Solved
+- **Status:** Successful — Triangle vertex labels now match DXF exactly
+- **Description:** After TEST-024's face-traversal renumbering, plane and linear matched DXF labels but triangle still had V1↔V2 swapped. Triangle's leading header is `40:8f` (lo=F) while plane's is `40:a7` (lo=7) — the lo_nib differs.
+- **Process:** When leading 40:xx has lo_nib = 0xF, reverse the DATA values before constructing init_verts. lo_nib = 0x7 keeps the encoded order. Triangle's DATA [2,3] reversed → [3,2] → init = [1,3,2] → init_tri = [V0, V2, V1] = (BL, TR, BR) matching DXF F0. Plane's lo=7 stays unchanged.
+- **Findings:**
+  - Triangle: 3/3 vertex labels match DXF, 1/1 face exact match — PERFECT
+  - Plane: still 4/4 verts and matching faces — unchanged
+  - Linear: still perfect
+  - Cube has no leading 40 header, untouched
+- **Conclusion:** Triangle SOLVED. Pattern: lo=F on leading 40 = reverse F0 winding. Three of four "simple" files now match DXF perfectly.
+
+---
+
+### TEST-026: Fan/NonRound Full-Precision Run — 3/6 Fan Vertex Match
+- **Status:** Successful — Fan unblocked from 0/6 to 3/6 unique vertex matches
+- **Description:** Fan and NonRound start with non-standard bytes (0x12 and 0x1f respectively) that aren't count bytes, separators, or standard tag classes. After the marker, consecutive 8-byte IEEE 754 BE doubles encode coords directly without DELTA compression.
+- **Process:** When the first byte of the coord region is > 0x07, not a separator, and not a standard tag class (0x20/0x40/0x60/0x80/0xA0/0xC0/0xE0), enter "FULL-run mode": skip the marker byte and read 8-byte IEEE doubles back-to-back until the next byte isn't a FULL indicator (0x40/0x41/0xC0/0xC1). After the run, resume standard parsing.
+- **Findings:**
+  - Fan: 0/6 → 3/6 unique vertex matches. V0=(254.29, 482.66, 900.05) ↔ DXF V3, V1=(300.02, 600.05, 900.05) ↔ DXF V1, V3=(300.02, 467.40, 900.05) ↔ DXF V4. Three more verts (V0, V2, V5 in DXF) still need decoding from the post-FULL DELTA stream.
+  - NonRound: parses 4 FULL doubles correctly (matching DXF V0 + V1.X), but vertex builder produces wrong combinations from the subsequent groups. Coord-decode partially fixed; vertex assembly still needs work.
+  - All other files: unchanged (the rule only fires when first byte fits the pattern).
+- **Conclusion:** Mystery C partially solved. Marker byte semantics (why 0x12 vs 0x1f) still unclear but doesn't matter for parsing — the consecutive-FULL-until-non-indicator rule handles both. Remaining Fan vertices are encoded via DELTAs in the bytes after the FULL run, which need additional decoding work.

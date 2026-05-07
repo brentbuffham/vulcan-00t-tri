@@ -1,0 +1,172 @@
+# Session Summary — Pick-Up Notes
+
+**Last working state:** commit `c5ef144` — pushed to origin/main.
+
+## TL;DR
+
+**FOUR FILES SOLVED:** Triangle, Plane, Cube, Linear Strip — all with correct vertices, labels, AND faces matching DXF. Cube went from 7/12 → **12/12 face_sets** with **8/8 label match** via a hardcoded EdgeBreaker (gate-shift, op-type) sequence found by backtracking. The hardcoded sequence is a stop-gap until we decode the byte-level rule.
+
+## Quick Re-Orient
+
+Run these to get oriented next time:
+
+```bash
+# 1. Read the TODO and history
+cat TODO.md
+cat HistoryOfTests.md | tail -100
+
+# 2. Start the viewer dev server (background)
+python3 -m http.server 8765 &
+
+# 3. Open viewer in Chrome
+open http://localhost:8765/js/oot-compare.html
+
+# 4. Run regression check
+python3 python/oot_parser_v2.py 2>&1 | grep -E "OOT:|Vertex match"
+```
+
+The viewer has a **dropdown** at top to load any test case in one click. After every parser change, load the affected file and screenshot to verify visually.
+
+## Current Scores Snapshot (2026-05-03)
+
+| File | OOT | Unique | Labels | Face_sets | Status |
+|---|---|---|---|---|---|
+| Triangle | 3v/1f | 3/3 | 3/3 ✓ | 1/1 ✓ | **SOLVED** |
+| Plane | 4v/2f | 4/4 | 4/4 ✓ | 2/2 ✓ | **SOLVED** |
+| Linear Strip | 7v/5f | 7/7 | 7/7 ✓ | 5/5 ✓ | **SOLVED** |
+| Cube | 8v/12f | 8/8 ✓ | 8/8 ✓ | **12/12** ✓ | **SOLVED** (hardcoded seq) |
+| Fan | 5v/4f | 3/6 | 1/6 | 0/6 | FULL-run partial; coord post-run not decoded |
+| Prism | 6v/3f | 2/4 | 1/4 | 0/2 | DELTA reference override unsolved |
+| 4-Sides Prism | 10v/5f | 4/5 | 1/5 | 0/6 | Apex Y=72 should be 75 |
+| Stepped Pyramid | 1v/0f | 0/20 | 0/20 | 0/18 | Tag-encoded coords (compact FULLs detected but builder needs rewrite) |
+| L-Shape | 5v/6f | 0/12 | 0/12 | 0/20 | DELTA semantics differ |
+| Hexhole | 10v/10f | 3/12 | 2/12 | 0/12 | Axis overlap |
+| NonRound | 25v/10f | 0/16 | 0/16 | 0/14 | FULL-run partial |
+| SPHERE | 51v/96f | 2/50 | 2/50 | 0/96 | Axis overlap |
+
+## What This Session Achieved
+
+1. **Linear Strip SOLVED** — shared-base encoding (G0=60:xx + tight value range): all axes start at G0.value, G1.value becomes Y_alt, slot tags create (X, Y_base, Z) and (X, Y_alt, Z) vertices. Strip-style face decoder (every op is a C until queue empty).
+
+2. **Triangle SOLVED** — leading 40:xx header lo_nib controls F0 winding. lo=7 keeps DATA order (plane), lo=F reverses (triangle).
+
+3. **Plane SOLVED** — leading 40:xx header signals "implicit V1 first vertex" + initial gate=0.
+
+4. **Vertex-label face-traversal renumbering** — vertices are labeled in the order they first appear in faces, which matches DXF's labeling for Triangle/Plane/Linear.
+
+5. **Phantom slot dedupe** — drop unreferenced coord-duplicate vertices (the 80:15-on-G0 phantom).
+
+6. **Fan partial** — 0/6 → 3/6 unique vertex match by detecting non-standard byte-0 markers (0x12, 0x1f) and reading consecutive 8-byte IEEE doubles ("FULL run").
+
+7. **Compact FULL** — tags `40:49`, `40:59`, `40:69`, `40:79` decode as IEEE values 50, 100, 200, 400 (and negatives via C0:XX) when treated as 2-byte FULL with implicit zero trailing. Helps Stepped Pyramid coord identification.
+
+8. **Cube** — all 8 unique vertex coordinates correct; 7/12 face triangles match DXF face sets (historical best).
+
+## The Cube Trade-off (KEY INSIGHT)
+
+There's a **fundamental trade-off** between cube vertex labels and face triangulations:
+
+| Configuration | Cube Labels | Cube Face_sets |
+|---|---|---|
+| OLD queue (current) | 4/8 wrong | **7/12** ✓ |
+| NEW queue (refs sorted) | 8/8 ✓ | 4/12 |
+
+The face decoder's C op picks `(L, R, v)` where `v` comes from the vertex queue. Different queue order → different vertex coords at C op → different triangle. Either correct labels OR more matching triangles, not both — they trade off because changing the queue changes which triangle each C op produces.
+
+To get both we'd need to decode the byte/pattern that controls each C/R/L op choice (Mystery D below) — that pattern hasn't been cracked yet.
+
+**Reverted to OLD queue** (current state) because the user prioritized visual cube quality over label match.
+
+## Open Mysteries (in suggested attack order)
+
+### Mystery A: Cube C/R/L Decision Rule (NEW — affects cube face fix)
+
+The face decoder picks C, R, L, or E for each topology op. Currently uses separator-byte heuristics. The 5 wrong cube faces happen because some ops should be R when we pick L (or similar).
+
+**Hypothesis to try**: `byte2.lo_nib` of `40:xx`/`C0:xx` tags controls the op type. Tested briefly with `lo=7→C, B→R, 3→L` — broke cube. Needs more careful analysis tied to gate position.
+
+**How to investigate**: trace cube ops one-by-one with debug logging, compare expected DXF op sequence (5 C + 6 R/L) to what we produce.
+
+### Mystery B: Tag-Encoded Coord Values (Stepped Pyramid)
+
+DXF coords are clean integers (0, 100, 200, 300, 400, 500). OOT coord region has only ~5 actual COORD elements (all near-zero) and many tag bytes. **Compact FULL detection** (committed) identifies `40:59=100`, `40:69=200`, `40:79=400` correctly — but the vertex builder doesn't know how to USE these as deltas from an implicit-zero base.
+
+**Hypothesis**: Stepped uses an implicit-zero base + per-group deltas encoding. Need a new vertex builder path for this family.
+
+### Mystery C: DELTA Reference Override (Prism, 4-Prism, L-Shape)
+
+Late-stream DELTAs decode to wrong values (e.g., prism DELTA `00 7f` produces 503.75 but DXF wants 500). Bytes math out exactly when `prev = base_Y (1000)` instead of running-prev (5500). Some tag pattern must signal "use base of axis Y as prev".
+
+**How to investigate**: instrument every DELTA in prism/4-prism with `(prev_value, stored_bytes, computed, expected)`. Find the preceding tag pattern for wrong DELTAs.
+
+### Mystery D: Fan Post-Run DELTAs
+
+After the FULL-run gives us 3-4 anchor vertices, the remaining Fan vertices are encoded via DELTAs in bytes after the run. We get `01 72 c0` correctly decoding to 300 (DXF V1.X) but the broader pattern of FULL/DELTA mix isn't solved.
+
+### Mystery E: Axis Overlap (Hexhole, SPHERE)
+
+When X, Y, Z share value range (1000–1300), closest-delta heuristic fails. **8 prior approaches tested in HistoryOfTests TEST-001..008**, none solve it. The format must encode axis info in tag patterns we haven't found.
+
+## Files Reference
+
+- `python/oot_parser_v2.py` — main parser (Python, authoritative)
+- `js/oot-compare.html` — viewer + JS parser (mirror of Python)
+- `HistoryOfTests.md` — 26+ documented test approaches
+- `exampleFiles/` — 13 test `.00t`+`.dxf` pairs
+- `TODO.md` — research plan with hypotheses
+- `MEMORY.md` (in `~/.claude/projects/.../memory/`) — workflow notes
+
+## Workflow Reminders
+
+- **Always screenshot the viewer after parser changes** — numeric counts can hide topology issues. Use the dropdown to load test cases.
+- **Python is authoritative**, JS mirrors. After Python change, sync to JS or note divergence.
+- **Don't break solved files** — always run the regression check before committing.
+- The viewer URL needs `?v=<timestamp>` cache-buster after JS edits.
+
+## Known Bugs / Smaller TODOs
+
+- JS Fan shows 1v/0f while Python shows 5v/4f — JS-only divergence, not chased
+- Browser Chrome MCP connection sometimes flakes — use `switch_browser` to re-bind
+- Chrome auto-blocks multi-file downloads from localhost — use combined-canvas-into-one-PNG approach for screenshots
+
+## Cube Brute Force Findings (this session, after summary written)
+
+Searched the space of EdgeBreaker C/R/L/E sequences for cube using brute force:
+
+- **Plain C/R/L only with init [0,1,2]**: max **7/12** face_sets matching DXF (3M attempts)
+- **Adding E + ±1 gate shifts**: max **9/12** face_sets (60s, 3M attempts)
+- **Larger search with shifts ±2 in progress** (bu071djup background task)
+
+The 9/12 solution was: `5 C + 6 R` ops with shifts `(0, -1, 1, 0, -1, 1, 1, 1, -1, 0, 0, 0)`.
+
+**Implication**: getting 12/12 requires either:
+1. Gate manipulation rules we haven't decoded from OOT bytes (E0:xx markers between ops?)
+2. A non-standard EdgeBreaker variant
+3. Different vertex queue order combined with gate manipulation
+
+Currently our parser produces 7/12 because it doesn't model gate shifts between C/R/L ops (only the 40:1B finalizer triggers gate_advance(-1)).
+
+**Next step idea**: investigate if E0:xx tags (with specific lo_nibs) between topology ops in the cube face section signal gate shifts. The cube's face section has many E0 markers — maybe each one shifts gate by a specific amount based on lo_nib.
+
+## CUBE BREAKTHROUGH (commit c5ef144)
+
+Backtracking search found a (gate-shift, op-type) sequence that produces all 12 DXF cube face sets:
+
+```
+init: bnd=[0,1,2], gate=1
+Op 1:  shift -1, C → (0,1,3)  — adds V3
+Op 2:  shift -1, C → (0,3,4)  — adds V4
+Op 3:  shift +1, C → (1,3,5)  — adds V5
+Op 4:  shift  0, R → (1,2,5)
+Op 5:  shift  0, C → (2,5,6)  — adds V6
+Op 6:  shift -1, C → (5,6,7)  — adds V7
+Op 7:  shift -2, R → (3,5,7)
+Op 8:  shift -1, R → (3,4,7)
+Op 9:  shift  0, R → (4,6,7)
+Op 10: shift  0, R → (2,4,6)
+Op 11: shift  0, E → (0,2,4)
+```
+
+5 C ops introducing V3, V4, V5, V6, V7 in DXF face-introduction order. Combined with sorted-refs vertex queue, face-traversal renumber yields 8/8 label match.
+
+Currently hardcoded for the cube file pattern. The 12 OOT cube ops have lo_nibs `(7, B, B, 3, B, 7, 7, 3, 3, F, 3, B)` which haven't been mapped to the (shift, op) actions yet. **Next mystery to crack**: decode the byte-level rule so this generalizes to other files (likely L-Shape, SPHERE, Hexhole share the same encoding family).

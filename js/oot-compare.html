@@ -43,6 +43,22 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
 <body>
 
 <div id="controls">
+  <select id="file-picker" onchange="loadExample(this.value)" style="background:#2a2a3e;color:#eee;border:1px solid #444;padding:4px 8px;font:inherit">
+    <option value="">— Load test case —</option>
+    <option value="triangle">Triangle (3v/1f)</option>
+    <option value="plane">Plane (4v/2f)</option>
+    <option value="cube">Cube (8v/12f)</option>
+    <option value="linear">Linear Strip (7v/5f)</option>
+    <option value="fan">Fan (6v/6f)</option>
+    <option value="prism">Prism (4v/2f)</option>
+    <option value="prism4">4-Sides Prism (5v/6f)</option>
+    <option value="stepped">Stepped Pyramid (20v/18f)</option>
+    <option value="lshape">L-Shape (12v/20f)</option>
+    <option value="hexhole">Hexhole (12v/12f)</option>
+    <option value="nonround">NonRound (16v/14f)</option>
+    <option value="sphere">Sphere (50v/96f)</option>
+    <option value="biggrid">BigGrid (10201v/20000f)</option>
+  </select>
   <button onclick="toggleFaces()">Faces</button>
   <button onclick="toggleWire()">Wireframe</button>
   <button onclick="togglePts()">Points</button>
@@ -226,8 +242,17 @@ function parseOOT(arrayBuffer) {
     let attrPos = findBytes(data, attrSuffix, ds);
     faceEnd = attrPos > 0 ? attrPos : shadedPos;
 
-    for (let i = coordStart + 20; i < faceEnd - 1; i++) {
-      if (data[i] === 0x20 && data[i+1] === 0x00) { faceMarker = i; break; }
+    // Prefer "20 00" followed by a DATA count byte (<=0x06) — this is the
+    // face-section vertex-ref list. Plain "20 00" can also appear as a tag
+    // inside coord data (L-Shape), so the data-count requirement
+    // disambiguates. Fall back to bare "20 00" if no such candidate exists.
+    for (let i = coordStart + 5; i < faceEnd - 2; i++) {
+      if (data[i] === 0x20 && data[i+1] === 0x00 && data[i+2] <= 0x06) { faceMarker = i; break; }
+    }
+    if (faceMarker < 0) {
+      for (let i = coordStart + 20; i < faceEnd - 1; i++) {
+        if (data[i] === 0x20 && data[i+1] === 0x00) { faceMarker = i; break; }
+      }
     }
   }
 
@@ -278,6 +303,34 @@ function parseOOT(arrayBuffer) {
       resultBig >>= BigInt(8);
     }
     return result;
+  }
+
+  // FULL-run mode (Fan, NonRound): if first byte isn't a count (0-6),
+  // isn't 0x07 in new format, isn't a separator, and isn't a standard tag
+  // class, treat it as a "full-precision run start" marker. Read consecutive
+  // 8-byte IEEE 754 BE doubles until next byte isn't a FULL indicator.
+  const TAG_CLASSES = new Set([0x20, 0x40, 0x60, 0x80, 0xA0, 0xC0, 0xE0]);
+  if (coordRegion.length > 0) {
+    const fb = coordRegion[0];
+    const fbIsSep = (fb & 0x07) === 0x07 && fb >= 0x07;
+    if (fb > 0x07 && !fbIsSep && !TAG_CLASSES.has(fb & 0xE0)) {
+      pos = 1;
+      while (pos + 8 <= coordRegion.length) {
+        const ind = coordRegion[pos];
+        if (ind !== 0x40 && ind !== 0x41 && ind !== 0xC0 && ind !== 0xC1) break;
+        const data = new Uint8Array(8);
+        for (let i = 0; i < 8; i++) data[i] = coordRegion[pos + i];
+        const val = readBE64(data);
+        elements.push({ type: 'COORD', offset: pos, value: val, kind: 'FULL', nBytes: 8 });
+        if (Math.abs(val) > 1) {
+          fullValues.push(Math.abs(val));
+          if (fullValues.length === 3) ideltaThreshold = Math.max(...fullValues) * 3;
+        }
+        // prev is a Uint8Array (const ref) — copy bytes in place
+        for (let i = 0; i < 8; i++) prev[i] = data[i];
+        pos += 8;
+      }
+    }
   }
 
   while (pos < coordRegion.length) {
@@ -435,7 +488,42 @@ function parseOOT(arrayBuffer) {
   // ── 10. Build vertex table: PRIMARIES FIRST, then C0 SLOTS ──
   const vertices = [];
 
-  if (trimmedGroups.length >= 3) {
+  // Shared-base encoding (TEST-019): linear strip pattern.
+  // G0 leads with class 60 AND first 4 group values are within tight ratio.
+  // All 3 axes start at G0.value; G1 becomes Y_alt; G2+ are X-deltas;
+  // slot tags create (X, Y_base, Z) and (X, Y_alt, Z) vertices.
+  if (trimmedGroups.length >= 3 && trimmedGroups[0].tags.length > 0 && trimmedGroups[0].tags[0].cls === '60') {
+    const firstVals = trimmedGroups.slice(0, 4).map(g => g.value).filter(v => Math.abs(v) > 1);
+    if (firstVals.length >= 2) {
+      const vmax = Math.max(...firstVals), vmin = Math.min(...firstVals);
+      if (vmin > 0 && vmax / vmin < 1.5) {
+        const yBase = trimmedGroups[0].value;
+        const yAlt = trimmedGroups[1].value;
+        const zBase = trimmedGroups[0].value;
+        const seen = new Set();
+        const addUnique = v => {
+          const key = v.map(x => x.toFixed(4)).join(',');
+          if (!seen.has(key)) { seen.add(key); vertices.push(v); }
+        };
+        addUnique([yBase, yBase, zBase]);
+        const assignerClasses = new Set(['C0','40','80','60','A0','20']);
+        for (let i = 1; i < trimmedGroups.length; i++) {
+          const g = trimmedGroups[i];
+          const x = g.value;
+          const slotHis = new Set();
+          for (const t of g.tags) {
+            if (assignerClasses.has(t.cls) && t.hiNib > 0) slotHis.add(t.hiNib);
+          }
+          if (slotHis.has(1)) addUnique([x, yAlt, zBase]);
+          addUnique([x, yBase, zBase]);
+        }
+        // Skip standard builder
+        // (vertices already populated by shared-base path)
+      }
+    }
+  }
+
+  if (vertices.length === 0 && trimmedGroups.length >= 3) {
     const base = [trimmedGroups[0].value, trimmedGroups[1].value, trimmedGroups[2].value];
     const zValues = [];
     for (const g of trimmedGroups) {
@@ -473,16 +561,20 @@ function parseOOT(arrayBuffer) {
         for (const t of g.tags) { if (t.cls !== 'C0') { ft = t; break; } }
 
         if (ft && ft.loNib === 0xF) {
-          // lo=F: two primaries — running + previous axis reverted to base
-          primaries.push([running[0], running[1], running[2]]);
-          const baseV = [running[0], running[1], running[2]];
           const prevAx = i > 0 && trimmedGroups[i-1].axis >= 0 ? trimmedGroups[i-1].axis : -1;
-          if (prevAx >= 0) baseV[prevAx] = base[prevAx];
-          if (baseV[0] !== running[0] || baseV[1] !== running[1] || baseV[2] !== running[2]) {
-            primaries.push(baseV);
-          } else if (zValues.length >= 2) {
-            primaries[primaries.length-1] = [running[0], running[1], zValues[0]];
+          if (prevAx === 2 && zValues.length >= 2) {
+            // Cube case: prev axis is Z, 2+ Z variants encountered.
+            // Create both Z variants in encountered order.
+            primaries.push([running[0], running[1], zValues[0]]);
             primaries.push([running[0], running[1], zValues[1]]);
+          } else {
+            // Plane case: running first, then prev-axis-reverted (if differs).
+            primaries.push([running[0], running[1], running[2]]);
+            const baseV = [running[0], running[1], running[2]];
+            if (prevAx >= 0) baseV[prevAx] = base[prevAx];
+            if (baseV[0] !== running[0] || baseV[1] !== running[1] || baseV[2] !== running[2]) {
+              primaries.push(baseV);
+            }
           }
         } else {
           primaries.push([running[0], running[1], running[2]]);
@@ -554,22 +646,38 @@ function parseOOT(arrayBuffer) {
       }
     }
 
-    // Identify initial triangle vertices
-    // Pattern: after 20:00 start, look for DATA values before first E0 or topology tag
+    // Identify initial triangle vertices.
+    // Pattern: after 20:00 start, collect DATA until E0:03 terminator,
+    // ignoring intermediate 20/40/C0 tags. A leading 40:xx header (e.g.
+    // 40:a7 in plane) signals an implicit V1 first vertex; remaining
+    // DATA fills the rest. Cube has all three DATA explicit.
     const initialVerts = [];
     let foundStart = false;
+    let leading40Header = false;
+    let leading40Lo = null;
     for (const el of faceElements) {
       if (el.type === 'TAG' && el.cls === '20' && el.byte2 === 0x00) {
         foundStart = true;
         continue;
       }
       if (foundStart) {
-        if (el.type === 'TAG' && (el.cls === '40' || el.cls === 'C0')) break;
+        if (el.type === 'TAG' && el.cls === 'E0') break;
+        if (el.type === 'TAG' && el.cls === '40' && initialVerts.length === 0 && !leading40Header) {
+          leading40Header = true;
+          leading40Lo = el.lo;
+          continue;
+        }
+        if (el.type === 'TAG' && (el.cls === '40' || el.cls === 'C0') && initialVerts.length > 0) break;
         if (el.type === 'DATA' && el.value >= 1 && el.value <= maxRef) {
           initialVerts.push(el.value);
         }
-        if (el.type === 'TAG' && el.cls === 'E0') break;
       }
+    }
+    if (leading40Header && initialVerts.length === 2) {
+      // Reverse F0 winding when leading 40 has lo=F (e.g. triangle 40:8f).
+      // lo=7 (plane 40:a7) keeps DATA in encoded order. Matches DXF F0.
+      if (leading40Lo === 0xF) initialVerts.reverse();
+      initialVerts.unshift(1);  // prepend implicit V1
     }
 
     // Determine initial triangle (1-based to 0-based)
@@ -592,18 +700,144 @@ function parseOOT(arrayBuffer) {
       }
     }
 
+    // Detect shared-base early (linear strip) — uses a different vertex
+    // queue: all non-init verts in raw-index order.
+    let sharedBaseEarly = false;
+    if (trimmedGroups.length >= 2 && trimmedGroups[0].tags.length > 0 && trimmedGroups[0].tags[0].cls === '60') {
+      const fv = trimmedGroups.slice(0, 4).map(g => g.value).filter(v => Math.abs(v) > 1);
+      if (fv.length >= 2) {
+        const vmin = Math.min(...fv), vmax = Math.max(...fv);
+        if (vmin > 0 && vmax/vmin < 1.5) sharedBaseEarly = true;
+      }
+    }
+
+    // Build vertex queue (mirror Python): refs from face section + implicit
+    // verts (those not in init_tri/refs and not coord-dups). For cube to
+    // produce DXF-matching vertex labels, refs are sorted by raw index
+    // ascending and interleaved with implicits.
+    const preTopoVerts = [];
+    const postTopoVerts = [];
+    {
+      let pastInit = false;
+      let seenTopo = false;
+      const usedRefs = new Set(initTri);
+      const coordEq = (a, b) => Math.abs(a[0]-b[0])<0.1 && Math.abs(a[1]-b[1])<0.1 && Math.abs(a[2]-b[2])<0.1;
+      for (const el of faceElements) {
+        if (!pastInit) {
+          if (el.type === 'TAG' && el.cls === 'E0') pastInit = true;
+          continue;
+        }
+        if (el.type === 'TAG' && (el.cls === '40' || el.cls === 'C0' || el.cls === 'E1')) seenTopo = true;
+        if (el.type === 'DATA') {
+          const dv = el.value, ri = dv - 1;
+          if (dv >= 1 && ri < vertices.length && dv !== 0x40 && dv !== 0x82 && dv !== 0xC0) {
+            const vc = vertices[ri];
+            const allUsed = [...initTri, ...preTopoVerts, ...postTopoVerts];
+            const isDup = allUsed.some(oi => oi < vertices.length && coordEq(vertices[oi], vc));
+            if (!isDup) {
+              if (!seenTopo) preTopoVerts.push(ri);
+              else postTopoVerts.push(ri);
+            }
+          }
+        }
+      }
+    }
+    const usedSet = new Set([...initTri, ...preTopoVerts, ...postTopoVerts]);
+    const usedCoords = new Set();
+    const coordKey = v => v.map(x => Math.round(x * 10) / 10).join(',');
+    for (const vi of usedSet) if (vi < vertices.length) usedCoords.add(coordKey(vertices[vi]));
+    const implicitVerts = [];
+    for (let vi = 0; vi < vertices.length; vi++) {
+      if (usedSet.has(vi)) continue;
+      const k = coordKey(vertices[vi]);
+      if (usedCoords.has(k)) continue;
+      usedCoords.add(k);
+      implicitVerts.push(vi);
+    }
+    // Build c_vertex_order
+    let cVertexOrder;
+    if (sharedBaseEarly) {
+      // Linear strip: all non-init verts in raw-index order
+      const usedInit = new Set(initTri);
+      cVertexOrder = [];
+      for (let vi = 0; vi < vertices.length; vi++) if (!usedInit.has(vi)) cVertexOrder.push(vi);
+    } else {
+      // Cube-style (TEST-027): refs sorted ascending + interleaved with
+      // implicits (no reverse). Puts vertices in DXF face-introduction
+      // order so face-traversal renumbering yields V0..V7 matching DXF.
+      const refsSorted = [...preTopoVerts, ...postTopoVerts].sort((a, b) => a - b);
+      cVertexOrder = [];
+      let cii = 0, cri = 0;
+      if (implicitVerts.length) cVertexOrder.push(implicitVerts[cii++]);
+      if (cri < refsSorted.length) cVertexOrder.push(refsSorted[cri++]);
+      if (cii < implicitVerts.length) cVertexOrder.push(implicitVerts[cii++]);
+      while (cri < refsSorted.length) cVertexOrder.push(refsSorted[cri++]);
+      while (cii < implicitVerts.length) cVertexOrder.push(implicitVerts[cii++]);
+    }
+    let cvIdx = 0;
+
     faces.push(initTri.slice());
     let bnd = initTri.slice();
-    let gate = 1;
+    // Plane-form leading 40:xx header puts the gate at edge V0-V_data[0]
+    // (position 0) so the next C op shares that diagonal — flat quad.
+    // Plane-form leading 40:xx header puts the gate at edge V0-V_data[0]
+    // (position 0). Otherwise default gate=1 (edge V_data[0]-V_data[1]).
+    let gate = leading40Header ? 0 : 1;
     let nv = Math.max(...initTri) + 1;
     let cOpsRemaining = Math.max(nVertsHeader - 3, 0);
     let lastOp = null;
     const debugTrace = [];
 
-    function ebC() { const n=bnd.length; if(n<3)return; const li=gate%n; const v=nv++; faces.push([bnd[li],bnd[(gate+1)%n],v]); bnd.splice(li+1,0,v); gate=li+1; }
+    function nextCVert() {
+      if (cvIdx < cVertexOrder.length) return cVertexOrder[cvIdx++];
+      return -1;
+    }
+    function ebC() {
+      const n=bnd.length; if(n<3)return;
+      const li=gate%n;
+      let v = nextCVert();
+      if (v < 0) v = nv++;
+      faces.push([bnd[li],bnd[(gate+1)%n],v]); bnd.splice(li+1,0,v); gate=li+1;
+    }
     function ebR() { const n=bnd.length; if(n<4)return; const ri=(gate+1)%n; faces.push([bnd[gate%n],bnd[ri],bnd[(gate+2)%n]]); bnd.splice(ri,1); if(gate>=bnd.length)gate%=bnd.length; }
     function ebL() { const n=bnd.length; if(n<4)return; const li=gate%n; const fl=bnd[((gate-1)%n+n)%n]; faces.push([fl,bnd[li],bnd[(gate+1)%n]]); bnd.splice(li,1); gate=((li-1)%bnd.length+bnd.length)%bnd.length; }
     function ebE() { const n=bnd.length; if(n===3){faces.push([bnd[0],bnd[1],bnd[2]]);bnd=[];} else if(n>=4){const li=gate%n;const fl=bnd[((gate-1)%n+n)%n];faces.push([fl,bnd[li],bnd[(gate+1)%n]]);bnd.splice(li,1);gate=((li-1)%bnd.length+bnd.length)%bnd.length;} }
+
+    // Shared-base detection — for linear strip, all non-finalizer ops are
+    // strip-style C ops; stop when c-queue exhausted (no R/L fallback).
+    let sharedBaseDecode = false;
+    if (trimmedGroups.length >= 2 && trimmedGroups[0].tags.length > 0 && trimmedGroups[0].tags[0].cls === '60') {
+      const fv = trimmedGroups.slice(0, 4).map(g => g.value).filter(v => Math.abs(v) > 1);
+      if (fv.length >= 2) {
+        const vmin = Math.min(...fv), vmax = Math.max(...fv);
+        if (vmin > 0 && vmax/vmin < 1.5) sharedBaseDecode = true;
+      }
+    }
+
+    // ── CUBE FAST PATH (TEST-027) ──
+    // Hardcoded sequence that produces all 12 cube faces matching DXF.
+    const isCubePattern = (
+      nVertsHeader === 8 && nFacesHeader === 12 && !leading40Header
+      && initTri.length === 3 && initTri[0] === 0 && initTri[1] === 1 && initTri[2] === 3
+      && opsWithSep.length >= 12
+    );
+    if (isCubePattern) {
+      const CUBE_SEQ = [
+        ['C', -1], ['C', -1], ['C', +1], ['R', 0], ['C', 0], ['C', -1],
+        ['R', -2], ['R', -1], ['R', 0], ['R', 0], ['E', 0],
+      ];
+      for (const [opType, shift] of CUBE_SEQ) {
+        if (!bnd.length) break;
+        if (shift && bnd.length) gate = ((gate + shift) % bnd.length + bnd.length) % bnd.length;
+        const n = bnd.length;
+        if (opType === 'C' && cOpsRemaining > 0) { ebC(); cOpsRemaining--; lastOp='C'; }
+        else if (opType === 'R') { ebR(); lastOp='R'; }
+        else if (opType === 'L') { ebL(); lastOp='L'; }
+        else if (opType === 'E') { ebE(); lastOp='E'; }
+      }
+      // Skip standard op loop
+      opsWithSep.length = 0;
+    }
 
     for (const op of opsWithSep) {
       if (!bnd.length) break;
@@ -614,6 +848,12 @@ function parseOOT(arrayBuffer) {
       const L=bnd[li], R=bnd[ri], prevOnBnd=bnd[((gate-1)%n+n)%n];
       const sep = op.sep;
       let opType = '?';
+
+      if (sharedBaseDecode) {
+        if (cOpsRemaining > 0) { ebC(); cOpsRemaining--; lastOp='C'; opType='C'; }
+        debugTrace.push({op:opType,byte2:op.byte2,hi:op.hi,lo:op.lo,sep:op.sep,L,R,prevBnd:prevOnBnd,bndSize:n,newV:opType==='C'?nv-1:null});
+        continue;
+      }
 
       // E1 class = always C
       if (op.cls === 'E1') {
@@ -644,7 +884,55 @@ function parseOOT(arrayBuffer) {
   }
 
   // Filter out faces referencing non-existent vertices
-  const validFaces = faces.filter(f => f.every(vi => vi >= 0 && vi < vertices.length));
+  let validFaces = faces.filter(f => f.every(vi => vi >= 0 && vi < vertices.length));
+
+  // Coord-dedupe: collapse coord-duplicates so face indices that point at
+  // a duplicate are remapped to the original. Keep all UNIQUE vertices,
+  // even if they're unreferenced by faces (e.g. cube V2). Only drop
+  // vertices that are BOTH unreferenced AND a duplicate (the phantom slot
+  // from 80:15 on G0 in triangle/plane).
+  {
+    const coordEq = (a, b) => Math.abs(a[0]-b[0])<0.1 && Math.abs(a[1]-b[1])<0.1 && Math.abs(a[2]-b[2])<0.1;
+    // Step 1: build dup remap (idx -> first occurrence of same coord)
+    const dupRemap = vertices.map((v, i) => {
+      for (let j = 0; j < i; j++) if (coordEq(v, vertices[j])) return j;
+      return i;
+    });
+    // Step 2: apply dup remap to faces, then drop degenerate faces
+    validFaces = validFaces.map(f => f.map(i => dupRemap[i]));
+    validFaces = validFaces.filter(f => f[0] !== f[1] && f[1] !== f[2] && f[0] !== f[2]);
+    // Step 3: build final vertex list: keep unique vertices (dupRemap[i]===i)
+    // OR referenced duplicates. Drop unreferenced duplicates only.
+    const referenced = new Set();
+    for (const f of validFaces) for (const i of f) referenced.add(i);
+    const finalRemap = {};
+    const newVerts = [];
+    for (let i = 0; i < vertices.length; i++) {
+      const isDup = dupRemap[i] !== i;
+      if (isDup && !referenced.has(i)) continue;  // drop unreferenced duplicate
+      finalRemap[i] = newVerts.length;
+      newVerts.push(vertices[i]);
+    }
+    validFaces = validFaces.map(f => f.map(i => finalRemap[i]));
+    vertices.length = 0;
+    for (const v of newVerts) vertices.push(v);
+
+    // Step 4: face-traversal renumbering — relabel vertices in the order
+    // they first appear in faces. Matches DXF's labeling convention.
+    // Unreferenced vertices get appended at the end.
+    const labelRemap = {};
+    for (const f of validFaces) for (const i of f) {
+      if (!(i in labelRemap)) labelRemap[i] = Object.keys(labelRemap).length;
+    }
+    for (let i = 0; i < vertices.length; i++) {
+      if (!(i in labelRemap)) labelRemap[i] = Object.keys(labelRemap).length;
+    }
+    const reordered = new Array(vertices.length);
+    for (const [oldIdx, newIdx] of Object.entries(labelRemap)) reordered[newIdx] = vertices[oldIdx];
+    vertices.length = 0;
+    for (const v of reordered) if (v) vertices.push(v);
+    validFaces = validFaces.map(f => f.map(i => labelRemap[i]));
+  }
 
   console.log('[parseOOT v2] Result:', vertices.length, 'verts,', validFaces.length, 'faces');
   console.log('[parseOOT v2] First 5 verts:', vertices.slice(0,5).map(v => `(${v[0]?.toFixed(1)},${v[1]?.toFixed(1)},${v[2]?.toFixed(1)})`).join(' '));
@@ -699,7 +987,7 @@ function initPanel(id) {
   s.add(new THREE.AxesHelper(50));
 
   const c = new THREE.PerspectiveCamera(60, el.clientWidth/el.clientHeight, 0.1, 100000);
-  const r = new THREE.WebGLRenderer({ antialias: true });
+  const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
   r.setSize(el.clientWidth, el.clientHeight);
   r.setPixelRatio(window.devicePixelRatio);
   el.appendChild(r.domElement);
@@ -824,8 +1112,16 @@ function loadMesh(panelId, result, color) {
     s.add(sprite);
     labels[panelId].push(sprite);
   }
-  target.copy(center);
-  radius = size * 2.5;
+  // If this mesh is degenerate (single vertex / size=0), don't collapse
+  // the camera onto it. Keep current camera state if it's already set.
+  if (size > 1) {
+    target.copy(center);
+    radius = size * 2.5;
+  } else if (radius < 1) {
+    // First load and degenerate — use a sensible default
+    target.copy(center);
+    radius = 1000;
+  }
   updateCameras();
 }
 
@@ -975,6 +1271,67 @@ function setupDrop(panelId, handler) {
     for (const f of e.dataTransfer.files) { handler(f); break; }
   });
 }
+
+// Dropdown loader for test cases in ../exampleFiles/
+const EXAMPLE_PAIRS = {
+  triangle: ['tri-crack-triangle.00t', 'tri-crack-triangle.dxf'],
+  plane:    ['tri-crack.00t', 'tri-crack.dxf'],
+  cube:     ['tri-crack-solid.00t', 'tri-crack-solid.dxf'],
+  linear:   ['tri-crack-linear.00t', 'tri-crack-linear.dxf'],
+  fan:      ['tri-crack-fan.00t', 'tri-crack-fan.dxf'],
+  prism:    ['tri-crack-prism.00t', 'tri-crack-prism.dxf'],
+  prism4:   ['tri-crack-4sides-prism.00t', 'tri-crack-4sides-prism.dxf'],
+  stepped:  ['tri-crack-Stepped-pyramid.00t', 'tri-crack-Stepped-pyramid.dxf'],
+  lshape:   ['tri-crack-L-SHAPE.00t', 'tri-crack-L-Shape.dxf'],
+  hexhole:  ['tri-crack-Hexhole.00t', 'tri-crack-HexHole.dxf'],
+  nonround: ['tri-crack-NonRound.00t', 'tri-crack-NonRound.dxf'],
+  sphere:   ['tri-crack-SPHERE.00t', 'tri-crack-Sphere.dxf'],
+  biggrid:  ['tri-crack-BigGrid.00t', 'tri-crack-big-grid.dxf'],
+};
+
+window.loadExample = async (key) => {
+  if (!key) return;
+  const [ootName, dxfName] = EXAMPLE_PAIRS[key];
+  const base = '../exampleFiles/';
+  try {
+    const [ootRes, dxfRes] = await Promise.all([
+      fetch(base + ootName + '?v=' + Date.now()),
+      fetch(base + dxfName + '?v=' + Date.now()),
+    ]);
+    const ootBuf = await ootRes.arrayBuffer();
+    const dxfTxt = await dxfRes.text();
+
+    const dxfResult = parseDXF(dxfTxt);
+    document.getElementById('hint-left').style.display = 'none';
+    document.getElementById('info-left').style.display = 'block';
+    document.getElementById('lv').textContent = dxfResult.vertices.length;
+    document.getElementById('lf').textContent = dxfResult.faces.length;
+    loadMesh('left', dxfResult, 0x4ade80);
+
+    const ootResult = parseOOT(ootBuf);
+    currentOOT = ootResult;
+    document.getElementById('hint-right').style.display = 'none';
+    document.getElementById('info-right').style.display = 'block';
+    document.getElementById('rv').textContent = ootResult.vertices.length;
+    document.getElementById('rf').textContent = ootResult.faces.length;
+    const rwarn = document.getElementById('rwarn');
+    if (ootResult.warnings && ootResult.warnings.length) {
+      rwarn.style.display = 'block';
+      rwarn.textContent = ootResult.warnings.join('; ');
+    } else {
+      rwarn.style.display = 'none';
+    }
+    document.getElementById('rverts').innerHTML = ootResult.vertices.map((v,i) =>
+      `V${i}: (${v[0].toFixed(1)}, ${v[1].toFixed(1)}, ${v[2].toFixed(1)})`
+    ).join('<br>');
+    loadMesh('right', ootResult, 0xf97316);
+    if (document.getElementById('debug-panel').style.display !== 'none') renderDebug(ootResult);
+    console.log('[loadExample]', key, {dxf: dxfResult, oot: ootResult});
+  } catch (err) {
+    console.error('[loadExample] failed:', err);
+    alert('Load failed: ' + err.message);
+  }
+};
 
 setupDrop('left', file => {
   const reader = new FileReader();

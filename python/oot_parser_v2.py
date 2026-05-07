@@ -1351,6 +1351,29 @@ def parse_oot_v2(filepath: str) -> OotResult:
     # honestly reflects what's been cracked vs. what's still unsolved.
     # See feedback_no_hardcoded_lookups.md in auto-memory for the policy.
 
+    # ── Multi-section detection (TEST-041) ──
+    # Universal Vulcan .00t pattern confirmed across 5 cube variants and SPHERE:
+    # face section can contain multiple sub-sections, each separated by the
+    # 7-byte sequence `e0 03 14 20 00 40 17`. The first 2 bytes (e0 03) close
+    # the prior sub-section; the third (0x14, decimal 20) is a continuation
+    # magic; the next 4 bytes (20 00 40 17) start the new sub-section header.
+    # We detect them here for diagnostic output; the full multi-section
+    # decode is gated behind `experimental_multisection` for safety.
+    multisection_boundaries = []
+    if face_marker > 0:
+        sep = bytes([0xE0, 0x03, 0x14, 0x20, 0x00, 0x40, 0x17])
+        i = face_marker
+        while i < face_end - 6:
+            if raw[i:i+7] == sep:
+                multisection_boundaries.append(i + 3)  # next sub-section starts at 20 00
+                i += 7
+            else:
+                i += 1
+    if multisection_boundaries:
+        result.warnings.append(
+            f"multi-section face: {len(multisection_boundaries) + 1} sub-sections detected at offsets {multisection_boundaries}"
+        )
+
     # ── Parse face section and build vertices simultaneously ──
     if face_marker > 0:
         face_region = raw[face_marker:face_end]

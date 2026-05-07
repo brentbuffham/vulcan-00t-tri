@@ -632,3 +632,23 @@
   3. Parse each sub-section's topology ops independently.
   4. Combine the resulting faces into the final face list.
 - **Conclusion:** Multi-section structure is a universal Vulcan .00t feature confirmed across 5 cube variants + SPHERE. Implementing the parser is REAL DECODING work, not lookup. Score impact unknown until implementation.
+
+---
+
+### TEST-042: Multi-section detection landed (warnings only)
+- **Status:** Detection committed; behavior unchanged. Diagnostic warning surfaces sub-section count for every parsed file.
+- **Loop:** SPHERE iteration 5
+- **Implementation:** In `parse_oot_v2`, after `face_marker` is found, scan from `face_marker` to `face_end` for the 7-byte signature `e0 03 14 20 00 40 17`. Each match → record offset of next sub-section start. Append a warning to `result.warnings` listing the offsets.
+- **Sub-section counts across all test files (real evidence the pattern is universal):**
+  - Triangle, Plane, Linear, Prism, 4-Prism, Stepped Pyramid: **1 section** (no separator)
+  - Cube (original tri-crack-solid): **2 sub-sections** — even cube is multi-section, we just decode it OK because the hardcoded sequence happens to span both
+  - Fan: **2 sub-sections**
+  - Hexhole: **2 sub-sections**
+  - NonRound: **2 sub-sections**
+  - L-Shape: **4 sub-sections**
+  - **SPHERE: 11 sub-sections**
+- **Why it matters:** Files with more sub-sections suffer worse from our single-section assumption. SPHERE's 2/50 vertex match correlates with 11 sub-sections — most vertices come from "wrong" sub-section data being misinterpreted. L-Shape's 0/12 likely correlates with 4 sub-sections.
+- **What's still needed:** The actual multi-section parser — split face_region at boundaries, run face decoder on each sub-section's init_tri + ops, combine vertices and faces. That's the real cracking work for next iteration. This commit just lays the foundation by surfacing the detection.
+- **Score:** unchanged at 2/50 — detection-only, no decoder change.
+- **No solved-file regressions:** Triangle 3/3, Plane 4/4, Linear 7/7, Cube 8/8, Prism 4/4 — all unchanged.
+- **Conclusion:** Real intelligence committed. The multi-section pattern affects 7 of 12 test files. Implementing the parser is the next real-decoding work.

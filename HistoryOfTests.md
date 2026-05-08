@@ -1054,3 +1054,27 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
   - TEST-049 (escape stripping for ALL formats, not gated on `new_format`). Reason: the underlying rule "if stored bytes start with `>= 0xFC or 0x00`, strip until you reach a FULL indicator" is a uniform encoder rule. The previous gate was wrong because vlen=8 doesn't reliably distinguish encoding mode. This rule is generic.
 - **Cube1 post-revert state:** 5v / 6f. Vertices: (50, 25, 10), (60, 25, 10), (75, 25, 10), (99, 25, 10), (131040, 25, 10). All values decoded correctly per TEST-049 — the 6 real unique values (50, 25, 10, 60, 75, 99) are produced by parse_coord_elements — but `assign_axes`'s closest-delta heuristic locks all post-base groups onto X axis (60 is closer to running X=50 than to Y=25 or Z=10), and the running state then never updates Y/Z. Build_vertex_table dedups colinear (X, 25, 10) entries to 5.
 - **What needs to happen now:** Reverse-engineer the actual encoder grammar. The byte alignment of cube1 vs cube2 around the Z=10 anchor (40 24) showed identical structural slots (FULL → TAG → E0_TAG → SEP_0x17 → COUNT → DELTA). Map every byte in the coord region to a STRUCTURAL ROLE that's invariant across files. Derive rules like "after a Z FULL, the next TAG's lo_nib encodes axis-cycle-direction" — rules that operate on byte ROLES not byte VALUES.
+
+---
+
+### TEST-056: Misalignment detection via non-standard TAG class — eliminates cube2 55040 artifact (PARTIAL WIN)
+- **Status:** Committed. All solved files unchanged. Cube2 drops from 10v to 9v (one artifact eliminated).
+- **Loop:** Cube focus iter 6
+- **Insight:** The parser's TAG-emission code has a fall-through where bytes whose `hi_cls` isn't in the standard set `{0x20, 0x40, 0x60, 0x80, 0xA0, 0xC0, 0xE0}` get a TAG class formatted as raw hex (e.g., `'1C'`, `'0C'`). When this happens, we're reading bytes that weren't designed as TAGs — i.e., the parser is **misaligned**. While misaligned, the greedy 0x40-prefix-FULL fall-through (at lines 215-225) and long-FULL marker fall-through (lines 226-236) shouldn't fire — they'd amplify the misalignment by emitting bogus FULLs.
+- **Implementation:** `python/oot_parser_v2.py` `parse_coord_elements`:
+  - New flag `misaligned` tracks state
+  - Set to `True` when a TAG has `hi_cls not in TAG_CLASSES`
+  - Reset to `False` on any SEP byte (re-anchors the parser)
+  - Reset to `False` on a standard-class TAG (re-anchors)
+  - Greedy FULL fall-through only fires when `not misaligned`
+  - Synced same logic to `js/oot-compare.html`
+- **Why it works for cube2:** At pos +39 the parser reads bytes `1c 2a` which has `hi_cls = 0x00` (not in standard set) → TAG with cls='1C'. Misalignment triggered. Subsequent greedy FULL detections at pos 41 (would have produced 55040 artifact) and pos 78 (92.14 artifact) are BLOCKED until a SEP/standard-TAG re-anchors. The 55040 artifact at pos 41 is now skipped because misalignment is still True.
+- **Why it doesn't break solved files:** No solved file has the parser entering misalignment territory in its coord region (or the misalignment quickly resolves via SEP/standard-TAG without losing real values).
+- **Results:**
+  | File | Before | After |
+  |---|---|---|
+  | All 12 solved | unchanged | unchanged ✓ |
+  | **cube2** | **10v / 8f, coverage 1/8** | **9v / 8f, coverage 1/8 (one artifact eliminated)** |
+  | cube1, cube3, cube4, cube5 | unchanged | unchanged |
+- **What's still left:** Coverage didn't improve (still 1/8) because the eliminated artifact wasn't displacing a real value. The remaining 8 vertices include real X values 87.09, 16.78, 108.23 but axis-misclassified — these need the axis state machine fix. Cube1 still at 5v colinear (axis-misclassification).
+- **Real cracking progress:** The misalignment-detection rule is a UNIVERSAL byte-derived rule that uses the encoder's invariant (TAG classes are always one of 7 specific values). Any time the parser emits a non-standard TAG class, that's a self-evident encoder violation — meaning the parser is wrong. Same logic applies to all files. NOT a fingerprint check.

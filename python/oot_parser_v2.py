@@ -76,6 +76,13 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
     TAG_CLASSES = (0x20, 0x40, 0x60, 0x80, 0xA0, 0xC0, 0xE0)
     FULL_INDICATORS = (0x40, 0x41, 0xC0, 0xC1)
     full_run_active = False  # set when this region starts with the FULL-run marker
+    # TEST-056: Track whether we've recently emitted a non-standard-class TAG.
+    # When the parser falls back to "{:02X}".format(b) for the cls (because b's
+    # high nibble isn't in TAG_CLASSES), it means we're reading bytes that
+    # weren't designed as TAGs — i.e., we're misaligned. While misaligned,
+    # block the greedy FULL fall-throughs (0x40-prefix and long-FULL marker)
+    # until the next SEP or standard-class TAG re-anchors us.
+    misaligned = False
     # Trigger A: leading byte is non-tag/non-sep/non-count (Fan/NonRound classic case
     #   region[0] is a "FULL-run start marker" of values like 0x12, 0x14, etc.)
     # Trigger B (TEST-048): leading byte IS a separator (cube4 0x17, cube5 0x1f,
@@ -195,6 +202,7 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
             pos += 1 + raw_nb  # advance by original byte count, not stripped
         elif is_separator(b):
             elements.append(CoordElement(etype='SEP', offset=pos, sep_byte=b))
+            misaligned = False  # SEP re-anchors the parser
             pos += 1
         elif pos + 1 < len(region):
             b2 = region[pos + 1]
@@ -211,7 +219,7 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
             # implied as 0x40). Both gated on `full_run_active` so files
             # without the FULL-run marker (i.e. all solved files except
             # Fan/NonRound) are unaffected.
-            if full_run_active and pos + 8 <= len(region):
+            if full_run_active and pos + 8 <= len(region) and not misaligned:
                 if b in FULL_INDICATORS and b2 not in COMPACT_FULL_BYTE2:
                     cand = list(region[pos:pos + 8])
                     cval = read_be_double(bytes(cand))
@@ -249,6 +257,11 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
                 continue
             cls = {0x20: '20', 0x40: '40', 0x60: '60', 0x80: '80',
                    0xA0: 'A0', 0xC0: 'C0', 0xE0: 'E0'}.get(hi_cls, '{:02X}'.format(b))
+            # TEST-056: detect misalignment via non-standard TAG class
+            if hi_cls not in (0x20, 0x40, 0x60, 0x80, 0xA0, 0xC0, 0xE0):
+                misaligned = True
+            else:
+                misaligned = False
             elements.append(CoordElement(
                 etype='TAG', offset=pos, cls=cls, byte2=b2,
                 lo_nib=b2 & 0x0F, hi_nib=(b2 >> 4) & 0x0F,

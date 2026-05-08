@@ -418,6 +418,12 @@ function parseOOT(arrayBuffer) {
   // Both paths skip the leading byte and read consecutive 8-byte FULLs.
   const TAG_CLASSES = new Set([0x20, 0x40, 0x60, 0x80, 0xA0, 0xC0, 0xE0]);
   let fullRunActive = false;
+  // TEST-056: Track misalignment via non-standard TAG class. When the parser
+  // emits a TAG with hi_cls outside the standard set (i.e. cls falls back to
+  // raw hex like '1C' or '0C'), we're reading bytes that weren't designed as
+  // TAGs — i.e., we're misaligned. Block greedy FULL fall-throughs until a
+  // SEP or standard-class TAG re-anchors us.
+  let misaligned = false;
   if (coordRegion.length > 0) {
     const fb = coordRegion[0];
     const fbIsSep = (fb & 0x07) === 0x07 && fb >= 0x07;
@@ -548,12 +554,13 @@ function parseOOT(arrayBuffer) {
       pos += 1 + rawNb;
     } else if (isSep(b)) {
       elements.push({ etype: 'SEP', sepByte: b });
+      misaligned = false;  // SEP re-anchors the parser
       pos += 1;
     } else if (pos + 1 < coordRegion.length) {
       const b2 = coordRegion[pos + 1];
       // Fan-only extended-FULL detection: gated on fullRunActive, only fires
       // when the resulting double has positive magnitude in [10, 1e6].
-      if (fullRunActive && pos + 8 <= coordRegion.length) {
+      if (fullRunActive && pos + 8 <= coordRegion.length && !misaligned) {
         if ((b === 0x40 || b === 0x41 || b === 0xC0 || b === 0xC1)
             && b2 !== 0x49 && b2 !== 0x59 && b2 !== 0x69 && b2 !== 0x79) {
           const cand = new Uint8Array(8);
@@ -597,6 +604,8 @@ function parseOOT(arrayBuffer) {
       }
       const hiCls = b & 0xE0;
       const cls = {0x20:'20', 0x40:'40', 0x60:'60', 0x80:'80', 0xA0:'A0', 0xC0:'C0', 0xE0:'E0'}[hiCls] || (b.toString(16).padStart(2,'0').toUpperCase());
+      // TEST-056: detect misalignment via non-standard TAG class
+      misaligned = !TAG_CLASSES.has(hiCls);
       elements.push({ etype: 'TAG', cls: cls, byte2: b2, loNib: b2 & 0x0F, hiNib: (b2 >> 4) & 0x0F });
       // Prism flag: 80:1f arms next 1-byte DELTA to use base[Y].
       if (cls === '80' && b2 === 0x1f) useBaseYForNextDelta = true;

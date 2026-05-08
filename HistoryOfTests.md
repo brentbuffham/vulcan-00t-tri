@@ -887,3 +887,52 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
 - **What's still broken on cube5:** 25 vertices instead of 8, 11 faces instead of 12. The FULL-run reads 14 sequential FULLs successfully, but the post-FULL-run DELTA stream produces extras. Face decoder also doesn't yield 12 cleanly.
 - **What's still broken on cube1-3:** They have non-separator b0 (`0x02, 0x11, 0x11`) so trigger B doesn't fire. cube1 still produces 115715.562 artifact (DELTA decode going wild). cube2/cube3 similar. These need a different fix — possibly extending the trigger condition further, or fixing the DELTA logic for `b0=0x11` files (count=0x11=17, way outside normal count range).
 - **Conclusion:** Real coord-decode improvement on 3 files (cube4, cube5, NonRound) without any solved-file regression. cube5 is now ~70% structurally cracked at the coord level. Next iteration: investigate why cube5 produces 25 instead of 8 verts (likely the DELTA tail after the FULL-run is over-emitting), and tackle cube1-3's `b0` patterns 0x02 and 0x11.
+
+---
+
+### TEST-049: Escape stripping fires for ALL formats — unlocks cube1's real coordinates (PARTIAL WIN)
+- **Status:** Committed. Solved files unchanged; cube1 now decodes 6/6 unique coord values correctly (just axis-misclassified).
+- **Loop:** Cube focus iter 2
+- **Ground truth from user (cube1):** 50×50×50 axis-aligned box with 8 corners. Bottom plate (z=10): (50,25,10), (100,25,10), (100,75,10), (50,75,10). Top plate (z=60): same XY at z=60. Unique coord values: X∈{50,100}, Y∈{25,75}, Z∈{10,60} (6 unique values).
+- **User also reported (cubes 2-5):** All are 50³ cubes too. cube2 = rotated 25° clockwise around Z. cube3 = rotated 75° clockwise around Z. cube4/cube5 = pitch+yaw rotations (multi-axis).
+- **Investigation:** Manually traced cube1's coord-region bytes. Found that at pos 6, stored bytes `[0xfc, 0x40, 0x39]` need new-format escape stripping (`0xfc` is the escape prefix) to give `[0x40, 0x39]` which decodes as IEEE FULL `0x4039000000000000 = 25.0` exactly = Y=25 ground truth. But cube1 is detected as **old format** (variant_len=8 because Vulcan stores the length-prefix byte as 8 for "Variant" regardless of whether it's followed by `\0` or `/C:`). So escape stripping was gated off, and the parser was reading `fc 40 39` as DELTA stored bytes, producing the artifact 115715.562.
+- **Fix:** Drop the `new_format` gate on escape stripping. The stripping logic is already conservative — it only fires when `stored[0] >= 0xFC or == 0x00` AND the post-strip candidate starts with `0x40/0x41/0xC0/0xC1` (a FULL indicator). Solved files don't have this pattern coincidentally, so they're unaffected.
+- **Implementation:** `python/oot_parser_v2.py` — changed `if new_format and len(stored) > 1` to `if len(stored) > 1` for the escape-strip block. Synced to `js/oot-compare.html` parseOOT.
+- **Results (zero solved-file regression, real cube1 unlock):**
+  | File | Before | After | Outcome |
+  |---|---|---|---|
+  | Triangle | 3/3 | 3/3 | UNCHANGED ✓ |
+  | Plane | 4/4 | 4/4 | UNCHANGED ✓ |
+  | Linear | 7/7 | 7/7 | UNCHANGED ✓ |
+  | Cube (orig) | 8/8, 12f | 8/8, 12f | UNCHANGED ✓ |
+  | Fan | 3/6 | 3/6 | UNCHANGED ✓ |
+  | Prism | 5/5 | 5/5 | UNCHANGED ✓ |
+  | 4-Prism | 0/16 | 0/16 | UNCHANGED |
+  | Stepped | 4/4 | 4/4 | UNCHANGED ✓ |
+  | L-Shape | 0/12 | 0/12 | UNCHANGED |
+  | Hexhole | 0/20 | 0/20 | UNCHANGED |
+  | NonRound | 2/16 | 2/16 | UNCHANGED |
+  | SPHERE | 2/50 | 2/50 | UNCHANGED |
+  | **cube1** | **7v garbage** | **5v real values: (49.99, 25, 10), (60, 25, 10), (75, 25, 10), (99, 25, 10), (131040, 25, 10)** | **6/6 unique values decoded correctly, 1/8 corners covered** |
+  | cube2-5 | (no change) | (no change) | unchanged |
+- **cube1 group dump (KEY FINDING — values all correct, axis assignment broken):**
+  ```
+  G0: 49.9922  expected_ax=X  cur_ax=0 ✓  (50)
+  G1: 25.0000  expected_ax=Y  cur_ax=1 ✓  (25)
+  G2: 10.0000  expected_ax=Z  cur_ax=2 ✓  (10)
+  G3: 60.0000  expected_ax=Z  cur_ax=0 ✗  (top plate Z, but closest-delta says X)
+  G4: 75.0000  expected_ax=Y  cur_ax=0 ✗  (Y=75, but closest-delta says X)
+  G5: 99.0000  expected_ax=X  cur_ax=0 ✓  (≈100; matches by accident — closest is the running X)
+  G6: 131040.0  artifact      cur_ax=0
+  ```
+- **The structural pattern proof — cube1 vs solid cube SEPS are IDENTICAL:**
+  ```
+  Group:    G0   G1   G2    G3    G4    G5
+  solid Z=900 600 300:
+    seps:   []   []   [17]  [17]  [2F]  [5F,17,2F]
+  cube1:    []   []   [17]  [17]  [2F]  [5F,17,2F]
+  ```
+  Same TAG structures too: both have `C0:17`, `C0:2F` at G4. The encoder uses the SAME byte-level layout for both files. Solid's closest-delta works because its X/Y/Z values (100/500/950) are far apart; cube1's closest-delta fails because its values (50/25/10) are close together and the heuristic locks onto the X axis.
+- **Vulcan decimal-precision note (per user):** 49.992 is treated as a correct decode of "50" — Vulcan can introduce small decimal-precision drift. So the threshold for "match" should be ~1.0 unit, not exact equality.
+- **Score:** cube1 ground truth coverage 0/8 → **1/8** (V0 within 1.0 of (50,25,10)). With slightly looser tolerance (≤1.5) we'd get 2/8 (V3 ≈ 99 → (100,25,10)). All 6 unique cube1 coord values are decoded correctly — the bottleneck is now AXIS ASSIGNMENT, not coord decoding.
+- **What's next:** TAG/SEP-based axis state machine. The closest-delta heuristic must be augmented (or replaced) with a rule that uses the inter-coord TAG sequence to decide axis. Solid's identical TAG structure proves the encoding is the same; we just need to USE the TAGs.

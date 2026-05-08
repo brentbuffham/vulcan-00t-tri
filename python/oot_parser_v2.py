@@ -119,7 +119,11 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
             if pos + 1 + nb > len(region):
                 break
             stored = list(region[pos + 1:pos + 1 + nb])
-            if new_format and len(stored) > 1:
+            # TEST-049: FC/00 escape stripping fires for all formats, not just
+            # new-format. cube1-5 are misdetected as old (variant_len=8) but
+            # use new-format escape encoding. Manual byte trace confirmed:
+            # cube1 stored=[0xfc, 0x40, 0x39] strips to [0x40, 0x39] = 25.0 Y✓
+            if len(stored) > 1:
                 # New-format escape stripping: bytes >= 0xFC or 0x00 are escape prefixes.
                 # Strip them until we reach a FULL indicator (0x40, 0x41, 0xC0, 0xC1).
                 stripped = list(stored)

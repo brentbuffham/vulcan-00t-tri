@@ -463,8 +463,10 @@ function parseOOT(arrayBuffer) {
 
       let stored = Array.from(coordRegion.slice(pos + 1, pos + 1 + nb));
 
-      // Escape stripping (new format only)
-      if (isNewFormat && stored.length > 1) {
+      // TEST-049: Escape stripping fires for all formats. cube1-5 are
+      // misdetected as old (variantLen=8) but use new-format encoding;
+      // cube1's stored=[0xfc,0x40,0x39] strips to [0x40,0x39] = 25.0 (Y).
+      if (stored.length > 1) {
         let stripped = stored.slice();
         while (stripped.length > 1 && (stripped[0] >= 0xFC || stripped[0] === 0x00)) {
           const candidate = stripped.slice(1);

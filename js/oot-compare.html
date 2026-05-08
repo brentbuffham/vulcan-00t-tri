@@ -45,24 +45,28 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
 <div id="controls">
   <select id="file-picker" onchange="loadExample(this.value)" style="background:#2a2a3e;color:#eee;border:1px solid #444;padding:4px 8px;font:inherit">
     <option value="">— Load test case —</option>
-    <option value="triangle">Triangle (3v/1f)</option>
-    <option value="plane">Plane (4v/2f)</option>
-    <option value="cube">Cube (8v/12f)</option>
-    <option value="linear">Linear Strip (7v/5f)</option>
-    <option value="fan">Fan (6v/6f)</option>
-    <option value="prism">Prism (4v/2f)</option>
-    <option value="prism4">4-Sides Prism (5v/6f)</option>
-    <option value="stepped">Stepped Pyramid (20v/18f)</option>
-    <option value="lshape">L-Shape (12v/20f)</option>
-    <option value="hexhole">Hexhole (12v/12f)</option>
-    <option value="nonround">NonRound (16v/14f)</option>
-    <option value="sphere">Sphere (50v/96f)</option>
-    <option value="biggrid">BigGrid (10201v/20000f)</option>
-    <option value="cube1">Cube1 (no DXF yet)</option>
-    <option value="cube2">Cube2 (no DXF yet)</option>
-    <option value="cube3">Cube3 (no DXF yet)</option>
-    <option value="cube4">Cube4 (no DXF yet)</option>
-    <option value="cube5">Cube5 (no DXF yet)</option>
+    <optgroup label="Solved / DXF available">
+      <option value="triangle">Triangle (3v/1f)</option>
+      <option value="plane">Plane (4v/2f)</option>
+      <option value="cube">Cube (8v/12f)</option>
+      <option value="linear">Linear Strip (7v/5f)</option>
+      <option value="fan">Fan (6v/6f)</option>
+      <option value="prism">Prism (4v/2f)</option>
+      <option value="prism4">4-Sides Prism (5v/6f)</option>
+      <option value="stepped">Stepped Pyramid (20v/18f)</option>
+      <option value="lshape">L-Shape (12v/20f)</option>
+      <option value="hexhole">Hexhole (12v/12f)</option>
+      <option value="nonround">NonRound (16v/14f)</option>
+      <option value="sphere">Sphere (50v/96f)</option>
+      <option value="biggrid">BigGrid (10201v/20000f)</option>
+    </optgroup>
+    <optgroup label="Cube variants — no DXF yet">
+      <option value="cube1">Cube1 (rotated, 8v/12f)</option>
+      <option value="cube2">Cube2 (rotated, 8v/12f)</option>
+      <option value="cube3">Cube3 (rotated, 8v/12f)</option>
+      <option value="cube4">Cube4 (rotated, 8v/12f)</option>
+      <option value="cube5">Cube5 (rotated, 8v/12f)</option>
+    </optgroup>
   </select>
   <button onclick="toggleFaces()">Faces</button>
   <button onclick="toggleWire()">Wireframe</button>

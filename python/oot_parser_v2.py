@@ -391,7 +391,10 @@ def trim_coord_groups(groups: List[CoordGroup]) -> List[CoordGroup]:
         return groups  # can't use sign-based trimming
 
     # Cube-signature trim (must run BEFORE the negative-value scan so the
-    # artifact group's huge-positive value doesn't survive)
+    # artifact group's huge-positive value doesn't survive). Merge tags from
+    # any post-G5 groups into G5 — those tags carry slot-assignment info
+    # (C0:8F etc.) that the artifact group's bogus value shouldn't drag with
+    # it. In solid cube these tags live on G5; in cube1 they live on G6.
     if len(groups) >= 7:
         closing_trio = [0x5F, 0x17, 0x2F]
         cube_sig = (
@@ -401,6 +404,14 @@ def trim_coord_groups(groups: List[CoordGroup]) -> List[CoordGroup]:
             and any(g.seps == closing_trio for g in groups[5:])
         )
         if cube_sig:
+            # Merge tags + seps + c0_assignments from groups[6:] into groups[5]
+            # so the slot assigners (C0:* etc.) survive the trim. In solid
+            # these tags already live on G5; in cube1 they live on G6 because
+            # of an extra (bogus) coord-decode.
+            for g_extra in groups[6:]:
+                groups[5].tags.extend(g_extra.tags)
+                groups[5].seps.extend(g_extra.seps)
+                groups[5].c0_assignments.extend(g_extra.c0_assignments)
             return groups[:6]
 
     for i in range(3, len(groups)):
@@ -599,6 +610,19 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
                 base = [groups[0].value, groups[0].value, groups[0].value]
                 return _build_vertex_table_shared_base(groups, base)
 
+    # TEST-052: Cube layout detection — same signature as trim_coord_groups
+    # uses, so any group at index ≥4 with lo=F somewhere should emit dual-Z
+    # primaries. cube1's G4 has 60:10 as first non-C0 tag (lo=0), but its
+    # C0:2F tag (lo=F) carries the same dual-Z meaning that solid's 80:0F
+    # carries on G4. Detect the signature once and use it below.
+    cube_layout_sig = (
+        len(groups) >= 6
+        and groups[2].seps == [0x17]
+        and groups[3].seps == [0x17]
+        and groups[4].seps == [0x2F]
+        and any(g.seps == [0x5F, 0x17, 0x2F] for g in groups[5:])
+    )
+
     # Base values (standard: each axis from its own group)
     base = [groups[0].value, groups[1].value, groups[2].value]
 
@@ -694,8 +718,14 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
                 # phantom (running Y is the previous group's Y, not the apex's).
                 emitted.append([running[0], base[1], running[2]])
                 is_special_branch = True
-            elif ft and ft.lo_nib == 0xF:
+            elif (ft and ft.lo_nib == 0xF) or (
+                cube_layout_sig and i == 4
+                and any(t.lo_nib == 0xF for t in g.tags)
+            ):
                 # lo=F: create TWO primaries.
+                # TEST-052: For cube_layout_sig files, also fire when ANY tag on
+                # G4 has lo=F (cube1's G4 has C0:2F = lo=F but the first non-C0
+                # tag 60:10 has lo=0). The dual-Z emit is the structural signal.
                 prev_ax = groups[i - 1].axis if i > 0 and 0 <= groups[i - 1].axis <= 2 else -1
                 if prev_ax == 2 and len(z_values) >= 2:
                     # Cube case: prev axis is Z and 2+ Z variants encountered.

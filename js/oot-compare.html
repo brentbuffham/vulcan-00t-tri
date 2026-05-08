@@ -719,6 +719,16 @@ function parseOOT(arrayBuffer) {
         && groups.slice(5).some(g => arrEq(g.seps, [0x5F, 0x17, 0x2F]))
       );
       if (cubeSig) {
+        // TEST-052: Merge tags + seps + c0Assignments from groups[6:] into
+        // groups[5] so slot-assignment TAGs (C0:8F etc) survive the trim.
+        for (let i = 6; i < groups.length; i++) {
+          groups[5].tags.push(...groups[i].tags);
+          groups[5].seps.push(...groups[i].seps);
+          if (groups[i].c0Assignments) {
+            if (!groups[5].c0Assignments) groups[5].c0Assignments = [];
+            groups[5].c0Assignments.push(...groups[i].c0Assignments);
+          }
+        }
         trimmedGroups = groups.slice(0, 6);
       } else {
         for (let i = 3; i < groups.length; i++) {
@@ -771,6 +781,17 @@ function parseOOT(arrayBuffer) {
 
   if (vertices.length === 0 && trimmedGroups.length >= 3) {
     const base = [trimmedGroups[0].value, trimmedGroups[1].value, trimmedGroups[2].value];
+
+    // TEST-052: Cube layout signature — also detected upstream in trim. Enables
+    // dual-Z primary emit at G4 even when G4's first non-C0 tag has lo!=F.
+    const _arrEq = (a, b) => a.length === b.length && a.every((v, idx) => v === b[idx]);
+    const cubeLayoutSig = (
+      trimmedGroups.length >= 6
+      && _arrEq(trimmedGroups[2].seps, [0x17])
+      && _arrEq(trimmedGroups[3].seps, [0x17])
+      && _arrEq(trimmedGroups[4].seps, [0x2F])
+    );
+
     const zValues = [];
     for (const g of trimmedGroups) {
       if (g.axis === 2 && Math.abs(g.value) > 1 && !zValues.includes(g.value)) zValues.push(g.value);
@@ -898,7 +919,11 @@ function parseOOT(arrayBuffer) {
         } else if (g.tags.some(t => t.cls === '80' && t.byte2 === 0x1f)) {
           emitted.push([running[0], base[1], running[2]]);
           isSpecialBranch = true;
-        } else if (ft && ft.loNib === 0xF) {
+        } else if ((ft && ft.loNib === 0xF) || (
+          cubeLayoutSig && i === 4 && g.tags.some(t => t.loNib === 0xF)
+        )) {
+          // TEST-052: For cube_layout_sig files, fire when ANY tag on G4 has
+          // lo=F (cube1 G4 has C0:2F = lo=F but first non-C0 tag 60:10 = lo=0).
           const prevAx = i > 0 && trimmedGroups[i-1].axis >= 0 ? trimmedGroups[i-1].axis : -1;
           if (prevAx === 2 && zValues.length >= 2) {
             emitted.push([running[0], running[1], zValues[0]]);

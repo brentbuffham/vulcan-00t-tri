@@ -1436,6 +1436,43 @@ function loadMesh(panelId, result, color) {
   const center = new THREE.Vector3(); box.getCenter(center);
   const size = box.getSize(new THREE.Vector3()).length();
 
+  // Robust bounding box for camera fit: ignore extreme outliers caused by
+  // decoder artifacts (e.g. cube1's V4 at (131040, 25, 10) — a single bad
+  // DELTA decode would otherwise make the real geometry invisibly tiny).
+  // Use median ± k*MAD per axis (works with as few as 3 verts).
+  let robustCenter = center.clone();
+  let robustSize = size;
+  let outlierCount = 0;
+  if (result.vertices.length >= 3) {
+    const sortedAxis = (axIdx) => {
+      const a = [];
+      for (const v of result.vertices) if (isFinite(v[axIdx])) a.push(v[axIdx]);
+      return a.sort((p,q)=>p-q);
+    };
+    const median = (a) => a.length ? a[Math.floor(a.length/2)] : 0;
+    const mad = (a, m) => {
+      const d = a.map(x => Math.abs(x - m)).sort((p,q)=>p-q);
+      return d.length ? d[Math.floor(d.length/2)] : 0;
+    };
+    const xs = sortedAxis(0), ys = sortedAxis(1), zs = sortedAxis(2);
+    const xMed = median(xs), yMed = median(ys), zMed = median(zs);
+    const xMad = mad(xs, xMed), yMad = mad(ys, yMed), zMad = mad(zs, zMed);
+    // Tolerance: median ± k*MAD with floor (so flat-axis cases stay sensible)
+    const k = 6;
+    const xTol = Math.max(xMad * k, Math.abs(xMed) * 0.5, 1);
+    const yTol = Math.max(yMad * k, Math.abs(yMed) * 0.5, 1);
+    const zTol = Math.max(zMad * k, Math.abs(zMed) * 0.5, 1);
+    const xLo = xMed - xTol, xHi = xMed + xTol;
+    const yLo = yMed - yTol, yHi = yMed + yTol;
+    const zLo = zMed - zTol, zHi = zMed + zTol;
+    // Three.js convention: pos = (px, pz, -py)
+    robustCenter.set(xMed, zMed, -yMed);
+    robustSize = Math.sqrt((xHi-xLo)**2 + (yHi-yLo)**2 + (zHi-zLo)**2);
+    for (const [x,y,z] of result.vertices) {
+      if (x < xLo || x > xHi || y < yLo || y > yHi || z < zLo || z > zHi) outlierCount++;
+    }
+  }
+
   // Build per-vertex colors: color by Z value (blue=low, red=high)
   const colors = new Float32Array(result.vertices.length * 3);
   let zMin = Infinity, zMax = -Infinity;
@@ -1476,15 +1513,23 @@ function loadMesh(panelId, result, color) {
   }
   // If this mesh is degenerate (single vertex / size=0), don't collapse
   // the camera onto it. Keep current camera state if it's already set.
-  if (size > 1) {
+  // Use robust center/size so outlier vertices (decode artifacts) don't
+  // make the real geometry invisibly small.
+  if (robustSize > 1) {
+    target.copy(robustCenter);
+    radius = robustSize * 2.5;
+  } else if (size > 1) {
     target.copy(center);
     radius = size * 2.5;
   } else if (radius < 1) {
-    // First load and degenerate — use a sensible default
     target.copy(center);
     radius = 1000;
   }
   updateCameras();
+
+  // Surface outlier count to caller via a return value (read by loadExample
+  // / drop handlers to add a viewer warning).
+  return { outlierCount, robustSize, vertexCount: result.vertices.length };
 }
 
 // Mouse controls (synced between panels)
@@ -1717,7 +1762,15 @@ window.loadExample = async (key) => {
     document.getElementById('rverts').innerHTML = ootResult.vertices.map((v,i) =>
       `V${i}: (${v[0].toFixed(1)}, ${v[1].toFixed(1)}, ${v[2].toFixed(1)})`
     ).join('<br>');
-    loadMesh('right', ootResult, 0xf97316);
+    const meshInfo = loadMesh('right', ootResult, 0xf97316);
+    // Show outlier warning if decode produced extreme values (e.g. cube1's
+    // 131040 artifact). Append to the existing rwarn pane.
+    if (meshInfo && meshInfo.outlierCount > 0) {
+      const rwarn = document.getElementById('rwarn');
+      const outlierMsg = `${meshInfo.outlierCount} of ${meshInfo.vertexCount} vertices are outliers (decode artifacts) — camera fit ignores them`;
+      rwarn.style.display = 'block';
+      rwarn.textContent = (rwarn.textContent ? rwarn.textContent + ' | ' : '') + outlierMsg;
+    }
     if (document.getElementById('debug-panel').style.display !== 'none') renderDebug(ootResult);
     console.log('[loadExample]', key, {dxf: dxfResult, oot: ootResult});
   } catch (err) {

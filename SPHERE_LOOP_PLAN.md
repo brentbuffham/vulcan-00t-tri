@@ -1,5 +1,9 @@
 # SPHERE Decoding Loop — Plan
 
+> **Status (2026-05-08): PAUSED.** User requested pivot to a focused effort on
+> cube1.00t–cube5.00t. See `CUBE_LOOP_PLAN.md`. Cron job 4f18b0f4 cancelled.
+> Last iter: 9. Last score: 2/50. Resume by reinstating the cron with this plan.
+
 ## Target
 `exampleFiles/tri-crack-SPHERE.00t` — 50 DXF vertices, 96 faces.
 

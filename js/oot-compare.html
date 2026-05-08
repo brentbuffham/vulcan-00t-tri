@@ -58,6 +58,11 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
     <option value="nonround">NonRound (16v/14f)</option>
     <option value="sphere">Sphere (50v/96f)</option>
     <option value="biggrid">BigGrid (10201v/20000f)</option>
+    <option value="cube1">Cube1 (no DXF yet)</option>
+    <option value="cube2">Cube2 (no DXF yet)</option>
+    <option value="cube3">Cube3 (no DXF yet)</option>
+    <option value="cube4">Cube4 (no DXF yet)</option>
+    <option value="cube5">Cube5 (no DXF yet)</option>
   </select>
   <button onclick="toggleFaces()">Faces</button>
   <button onclick="toggleWire()">Wireframe</button>
@@ -80,6 +85,10 @@ body { background: #1a1a2e; color: #e0e0e0; font-family: 'Segoe UI', sans-serif;
 <div id="left" class="panel">
   <div class="label">DXF (Ground Truth)</div>
   <div class="drop-hint" id="hint-left"><h2>Drop .dxf here</h2><p>3DFACE DXF file</p></div>
+  <div class="no-dxf" id="no-dxf" style="display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;color:#fa3;font-family:sans-serif;pointer-events:none">
+    <h2 style="margin:0 0 8px 0">No DXF available</h2>
+    <p style="margin:0;color:#888">OOT panel still rendered →</p>
+  </div>
   <div class="info" id="info-left" style="display:none">
     <div>Verts: <b id="lv">0</b> | Faces: <b id="lf">0</b></div>
   </div>
@@ -1645,6 +1654,13 @@ const EXAMPLE_PAIRS = {
   nonround: ['tri-crack-NonRound.00t', 'tri-crack-NonRound.dxf'],
   sphere:   ['tri-crack-SPHERE.00t', 'tri-crack-Sphere.dxf'],
   biggrid:  ['tri-crack-BigGrid.00t', 'tri-crack-big-grid.dxf'],
+  // Cube variants — no DXF yet (user is building them). Pass null to skip
+  // the DXF load and show a clear "no DXF" indicator in the left panel.
+  cube1:    ['cube1.00t', null],
+  cube2:    ['cube2.00t', null],
+  cube3:    ['cube3.00t', null],
+  cube4:    ['cube4.00t', null],
+  cube5:    ['cube5.00t', null],
 };
 
 window.loadExample = async (key) => {
@@ -1652,19 +1668,26 @@ window.loadExample = async (key) => {
   const [ootName, dxfName] = EXAMPLE_PAIRS[key];
   const base = '../exampleFiles/';
   try {
-    const [ootRes, dxfRes] = await Promise.all([
-      fetch(base + ootName + '?v=' + Date.now()),
-      fetch(base + dxfName + '?v=' + Date.now()),
-    ]);
+    // Always fetch the OOT; only fetch the DXF if a name is provided.
+    const ootRes = await fetch(base + ootName + '?v=' + Date.now());
     const ootBuf = await ootRes.arrayBuffer();
-    const dxfTxt = await dxfRes.text();
 
-    const dxfResult = parseDXF(dxfTxt);
     document.getElementById('hint-left').style.display = 'none';
-    document.getElementById('info-left').style.display = 'block';
-    document.getElementById('lv').textContent = dxfResult.vertices.length;
-    document.getElementById('lf').textContent = dxfResult.faces.length;
-    loadMesh('left', dxfResult, 0x4ade80);
+    if (dxfName) {
+      const dxfRes = await fetch(base + dxfName + '?v=' + Date.now());
+      const dxfTxt = await dxfRes.text();
+      const dxfResult = parseDXF(dxfTxt);
+      document.getElementById('no-dxf').style.display = 'none';
+      document.getElementById('info-left').style.display = 'block';
+      document.getElementById('lv').textContent = dxfResult.vertices.length;
+      document.getElementById('lf').textContent = dxfResult.faces.length;
+      loadMesh('left', dxfResult, 0x4ade80);
+    } else {
+      // No DXF available — clear the left mesh and show indicator.
+      document.getElementById('info-left').style.display = 'none';
+      document.getElementById('no-dxf').style.display = 'block';
+      loadMesh('left', { vertices: [], faces: [] }, 0x4ade80);
+    }
 
     const ootResult = parseOOT(ootBuf);
     currentOOT = ootResult;
@@ -1696,6 +1719,7 @@ setupDrop('left', file => {
   reader.onload = e => {
     const result = parseDXF(e.target.result);
     document.getElementById('hint-left').style.display = 'none';
+    document.getElementById('no-dxf').style.display = 'none';
     document.getElementById('info-left').style.display = 'block';
     document.getElementById('lv').textContent = result.vertices.length;
     document.getElementById('lf').textContent = result.faces.length;

@@ -806,3 +806,44 @@
 - **Score:** unchanged at 2/50.
 - **Solved-file regressions:** Triangle, Plane, Cube, Stepped (REVERTED).
 - **New direction implied:** Investigate whether the multi-section boundary `e0 03 14 20 00 40 17` resets the DELTA prev to the start-of-sub-section's leading FULL, OR to base_X / base_Y / base_Z. This connects multi-section detection (TEST-041, 042, 043) to coord decoding directly.
+
+---
+
+## CUBE FOCUS (SPHERE loop paused 2026-05-08)
+
+User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–cube5.00t (5 rotated cube variants, no DXFs yet — user is building them). The viewer (oot-compare.html) shows a "No DXF available" indicator for these files; OOT panel still renders the parsed result.
+
+### TEST-047: Baseline parse of cube1-5 + universal pre-coord prefix
+- **Status:** Investigation only. Documents starting state for the cube focus.
+- **Setup:** No DXFs yet for cube1-5. Baseline = "what does the current parser produce, and how does each compare to the original `tri-crack-solid.00t` (the one we have solved)?"
+- **Header check:** all 5 cube variants report `n_verts=8 n_faces=12` (identical to original cube — same topology, different rotation).
+- **Parser output (current state, no changes):**
+  | File | Parsed Verts | Parsed Faces | Multi-section | First parsed value |
+  |---|---|---|---|---|
+  | tri-crack-solid (orig) | 8 | 12 | 2 sub-sections | 100.0 (X) |
+  | cube1 | 7 | 10 | 2 sub-sections | 49.99 |
+  | cube2 | 10 | 8 | 3 sub-sections | 41.78 |
+  | cube3 | 9 | 12 | 2 sub-sections | 44.38 (X repeats) |
+  | cube4 | 21 | 12 | 2 sub-sections | 0.0 (Z=50 plane) |
+  | cube5 | 5 | 6 | **1 sub-section** | 2.62 |
+- **Universal pre-coord prefix (BIG STRUCTURAL FINDING):** All 6 files (5 variants + original) share an identical **27-byte** prefix from `Variant/C:` through `e0 0b 14`:
+  ```
+  56 61 72 69 61 6e 74 2f 43 3a 01 01 00 00 ff
+  40 15 00 20 40 00 00 43 e0 0e 2f
+  20 00 00 08 20 03 e0 0b 00 00 0c e0 0b 14
+  ```
+  The byte AFTER `14` diverges per file:
+  - tri-crack-solid: `01`
+  - cube1: `02`
+  - cube2: `11`
+  - cube3: `11`
+  - cube4: `17`
+  - cube5: `1f`
+- **Interpretation hypothesis:** The byte after `e0 0b 14` is a STRUCTURE-CONTROL byte. Values `0x01, 0x02` are valid count bytes (1 stored byte, 2 stored bytes). Values `0x11, 0x17, 0x1f` all have the separator pattern (`b & 0x07 == 7` for 0x17 and 0x1f; 0x11 has bit pattern hi=1 lo=1). This may be a coord-section header indicating "how many stored bytes the FIRST coord uses" with separator-style encoding for larger values.
+- **cube5 is the ideal cracking target:** Only 1 sub-section AND simplest count byte (0x1f, single FULL run). Coord region begins `40 47 f0 46 7b b3 d8 1d 40 52 2a 17 ae 2d b3 70 40 25 fa d4 3b e9 02 38 ...` — sequential 8-byte IEEE FULLs, decoded as ≈47.88, ≈73.05, ≈10.99. The first 3 are likely base X, Y, Z. (Compare to original cube which uses partial-byte FULLs and is old format.)
+- **What cube5's bytes tell us:** It's a NEW-FORMAT file with a clean FULL-run start. The current parser produces 5v/6f because the running-prev decoder doesn't handle the FULL-run-then-DELTA transition correctly in this layout.
+- **Next steps:**
+  1. Get cube5 parsing right end-to-end (simplest case, 1 sub-section, clean FULLs)
+  2. Diff cube1-5 to identify gate-shift/op-type signals invariant across rotations
+  3. Once cube5 is solved, generalize to cube1-4 with their multi-section structure
+- **No score yet** — DXFs missing. User will provide DXFs; viewer shows "No DXF available" placeholder until they arrive.

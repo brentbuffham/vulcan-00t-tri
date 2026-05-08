@@ -4,6 +4,18 @@
 
 ---
 
+## Active focus (2026-05-08)
+
+**SPHERE loop is PAUSED.** Last iter 9, score 2/50. SPHERE bottleneck identified
+as DELTA-decode artifacts (40/65 coord values are wrong numbers, not just wrong
+axis). See `SPHERE_LOOP_PLAN.md` for resume notes.
+
+**Current focus: cube1.00t–cube5.00t** (5 rotated cube variants from user). DXFs
+not yet built — viewer shows "No DXF available" indicator. Plan in
+`CUBE_LOOP_PLAN.md`. See TEST-047 in HistoryOfTests.md for baseline.
+
+---
+
 ## What's Working — DON'T BREAK
 
 ### Solved files (real binary decoding)

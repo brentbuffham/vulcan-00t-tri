@@ -936,3 +936,42 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
 - **Vulcan decimal-precision note (per user):** 49.992 is treated as a correct decode of "50" — Vulcan can introduce small decimal-precision drift. So the threshold for "match" should be ~1.0 unit, not exact equality.
 - **Score:** cube1 ground truth coverage 0/8 → **1/8** (V0 within 1.0 of (50,25,10)). With slightly looser tolerance (≤1.5) we'd get 2/8 (V3 ≈ 99 → (100,25,10)). All 6 unique cube1 coord values are decoded correctly — the bottleneck is now AXIS ASSIGNMENT, not coord decoding.
 - **What's next:** TAG/SEP-based axis state machine. The closest-delta heuristic must be augmented (or replaced) with a rule that uses the inter-coord TAG sequence to decide axis. Solid's identical TAG structure proves the encoding is the same; we just need to USE the TAGs.
+
+---
+
+### TEST-050: Cube-layout axis enforcement — cube1 0/8 → 5/8 corners (REAL CUBE WIN)
+- **Status:** Committed. Solved files unchanged; cube1 now renders as a recognizable 3D cube with 5 of 8 corners correct.
+- **Loop:** Cube focus iter 3
+- **Trigger:** TEST-049 unlocked all 6 of cube1's coord values (50, 25, 10, 60, 75, 99) but the closest-delta axis assignment locked them all onto X. User confirmed: "the vertices aren't even in a cube shape" — the 5 vertices were colinear (all Y=25, Z=10).
+- **Hypothesis:** When the coord-region byte structure matches the axis-aligned cube signature, force the X/Y/Z/Z/Y/X axis pattern (base corner → opposite corner). This is the natural Vulcan emission order for an 8-vertex axis-aligned box. The signature is byte-derived from inter-coord separators that solid cube and cube1 share identically.
+- **Byte signature (4 conditions, all must match):**
+  - `groups[2].seps == [0x17]`
+  - `groups[3].seps == [0x17]`
+  - `groups[4].seps == [0x2F]`
+  - some group has seps EXACTLY `[0x5F, 0x17, 0x2F]` (the "closing trio")
+- **Why the exact-triple condition matters:** SPHERE has standalone `0x5F` seps in 3 different groups (G27, G33, G39) but never the full triple. Without the exact-triple requirement, SPHERE would falsely match and regress to 1/50 (verified empirically: regressed before tightening, restored to 2/50 after).
+- **Survey:** Across all 17 test files, only solid cube and cube1 match this exact signature. cube2-5 don't (rotation changes the sep patterns); SPHERE/Hexhole/L-Shape/etc. don't.
+- **Implementation:** `python/oot_parser_v2.py` `assign_axes()` post-process. After the closest-delta pass runs, check the signature; if matched, override first 6 groups with `[0, 1, 2, 2, 1, 0]` (respecting any `forced_axis` from prior tag overrides). Synced to `js/oot-compare.html`.
+- **Results — solid cube layout enforcement:**
+  | File | Before | After | Outcome |
+  |---|---|---|---|
+  | Triangle | 3/3 | 3/3 | UNCHANGED ✓ |
+  | Plane | 4/4 | 4/4 | UNCHANGED ✓ |
+  | Linear | 7/7 | 7/7 | UNCHANGED ✓ |
+  | Cube (orig) | 8/8, 12f | 8/8, 12f | UNCHANGED ✓ (rule re-confirms existing assignment) |
+  | Fan, Prism, 4-Prism, Stepped, L-Shape, Hexhole, NonRound | unchanged | unchanged | ✓ |
+  | SPHERE | 2/50 | 2/50 | UNCHANGED (the exact-triple gate kept it from misfiring) |
+  | **cube1** | **0/8 corners (5 colinear verts)** | **5/8 corners (recognizable cube)** | **MAJOR WIN** |
+- **cube1 vertex output (after fix):**
+  ```
+  V0: (49.99, 25, 10) ✓ (50, 25, 10)
+  V1: (49.99, 25, 60) ✓ (50, 25, 60)
+  V2: (49.99, 75, 60) ✓ (50, 75, 60)
+  V3: (131040, 25, 10)  ← decode artifact, real value should be (100, 25, 60) or similar
+  V4: (99.0, 75, 60) ✓ (100, 75, 60)
+  V5: (99.0, 25, 10) ✓ (100, 25, 10)
+  V6, V7, V8: (131040, ...)  ← three more artifact vertices
+  ```
+- **What's still broken:** 4 of 9 vertices have X=131040 (decoder artifact). The Y/Z combinations on those artifact rows ((Y=25, Z=10), (Y=75, Z=60), (Y=75, Z=10), (Y=25, Z=60)) MATCH 4 different cube corners — so if we just fix the X value on each, we'd get full 8/8 coverage. The 131040 is from a DELTA decode beyond G6 that's not handled correctly. Investigation for next iter.
+- **Score:** cube1 corner coverage 0/8 → **5/8**. With looser tolerance (≤2.0) still 5/8 — the artifacts are wildly wrong, not borderline. The cube SHAPE is now visible in the viewer.
+- **Conclusion:** Real structural cracking — cube1 went from "5 colinear vertices, no cube visible" to "9 vertices, 5 of which form 5 corners of the expected box". Same code path benefits any future axis-aligned cube/box file with the matching byte signature. cube2-5 (rotated) need different handling because their byte structure differs.

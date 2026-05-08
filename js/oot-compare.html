@@ -649,6 +649,29 @@ function parseOOT(arrayBuffer) {
     for (let i = 0; i < groups.length; i++) groups[i].axis = i;
   }
 
+  // TEST-050: Cube-layout axis enforcement (axis-aligned 50³ cubes).
+  // Signature: groups[2..4].seps == [[0x17],[0x17],[0x2F]] AND some later group's
+  // seps == [0x5F, 0x17, 0x2F] exactly. Force X/Y/Z/Z/Y/X for first 6 groups.
+  // This corrects cube1 where overlapping value ranges (X∈{50,100}, Y∈{25,75},
+  // Z∈{10,60}) make closest-delta lock everything onto X.
+  if (groups.length >= 6) {
+    const arrEq = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+    const sig = (
+      arrEq(groups[2].seps, [0x17])
+      && arrEq(groups[3].seps, [0x17])
+      && arrEq(groups[4].seps, [0x2F])
+      && groups.slice(5).some(g => arrEq(g.seps, [0x5F, 0x17, 0x2F]))
+    );
+    if (sig) {
+      const cubeAxes = [0, 1, 2, 2, 1, 0];
+      for (let i = 0; i < cubeAxes.length; i++) {
+        if (!(groups[i].forcedAxis !== undefined && groups[i].forcedAxis >= 0)) {
+          groups[i].axis = cubeAxes[i];
+        }
+      }
+    }
+  }
+
   // ── 8. Extract vertex assignments ──
   const assignerClasses = new Set(['C0', '40', '80', '60', 'A0', '20']);
   for (const g of groups) {

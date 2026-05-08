@@ -329,6 +329,31 @@ def assign_axes(groups: List[CoordGroup]) -> None:
         g.axis = best_ax
         current[best_ax] = g.value
 
+    # TEST-050: Cube-layout axis enforcement. When the coord-region sep pattern
+    # matches the axis-aligned cube signature (proven by solid + cube1 sharing
+    # identical inter-coord seps), enforce X/Y/Z/Z/Y/X for the first 6 groups.
+    # Signature (all must match):
+    #   - groups[2].seps == [0x17]
+    #   - groups[3].seps == [0x17]
+    #   - groups[4].seps == [0x2F]
+    #   - some group has seps EXACTLY [0x5F, 0x17, 0x2F] (the "closing trio")
+    # The exact triple distinguishes axis-aligned cubes from SPHERE/etc., which
+    # have 0x5F as a standalone sep elsewhere but never the full triple.
+    # Purely byte-derived — no filename or vert-count shortcuts.
+    if len(groups) >= 6:
+        closing_trio = [0x5F, 0x17, 0x2F]
+        sig = (
+            groups[2].seps == [0x17]
+            and groups[3].seps == [0x17]
+            and groups[4].seps == [0x2F]
+            and any(g.seps == closing_trio for g in groups[5:])
+        )
+        if sig:
+            cube_axes = [0, 1, 2, 2, 1, 0]
+            for i, ax in enumerate(cube_axes):
+                if groups[i].forced_axis < 0:  # respect prior tag-driven overrides
+                    groups[i].axis = ax
+
 
 def extract_c0_assignments(groups: List[CoordGroup]) -> None:
     """Extract vertex slot assignments from coord section tags.

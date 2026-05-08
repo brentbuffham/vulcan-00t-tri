@@ -731,3 +731,42 @@
 - **Score:** unchanged at 2/50.
 - **Solved-file regressions:** none (flag default OFF, code reverted).
 - **Conclusion:** **SPHERE'S BOTTLENECK IS COORDINATES, NOT TOPOLOGY.** Multi-section decode produces working face topology but cannot lift vertex match because the vertex POSITIONS are wrong upstream. Future iters must crack axis assignment (Hypotheses 9, 10, 11) before any topology refinement can score.
+
+---
+
+### TEST-045: SPHERE Hypothesis 5 — sep 0x2F → Z (FAIL — breaks CUBE, no SPHERE improvement)
+- **Status:** REVERTED. Solved-file regression on CUBE; SPHERE unchanged.
+- **Loop:** SPHERE iteration 8
+- **Investigation phase (per-tag → axis correlation survey across SPHERE/CUBE/PRISM):**
+  - Captured `(prev_tag, axis_class)` pairs for each coord. SPHERE class breakdown:
+    - **C0** class precedes 4 coords; 3 are X-only. Survey suggests `C0:* → X`.
+    - **E0** class precedes 36/65 coords (dominant), but 12 Z + 21 ? + 3 XY → uninformative.
+    - **20** class precedes 14 coords, mostly artifacts (11 ?).
+  - **Cross-file conflict:** PRISM has C0:17 preceding i=7 v=500 (Y), so `C0:17 → X` (SPHERE) contradicts `C0:17 → Y` (PRISM). No tag-prev rule generalizes.
+  - 14 of 30 surveyed SPHERE groups have values that match NO DXF coord (artifacts like 1192.19, 426.65, 1099.75, 53.59, 287.5). Closer survey: **40 of 65** (61%) groups produce values not in DXF. **Decode-value bug, not just axis.**
+- **Separator survey:**
+  - SPHERE: sep 0x2F precedes 14 groups; **9 are Z**, 5 are decode artifacts. Strong Z signal.
+  - CUBE: sep 0x2F precedes 1 group, axis is **X** (cube i=5 v=300). Conflicts.
+  - PRISM: no captured prev_seps (separators don't carry into prev_seps in PRISM's layout).
+- **Hypothesis tested (rule):** When sep 0x2F precedes a coord AND closest-delta picks non-Z AND value ∈ [base_Z * 0.25, base_Z * 2.0], reassign to Z. Byte-derived range (uses file's own base_Z, no DXF dependency).
+- **Implementation:** `EXPERIMENTAL_SEP2F_Z` env-flag gate added in `assign_axes`. Tracked `prev_seps` across coord groups. Default OFF.
+- **Results with flag ON:**
+  | File | Baseline | Sep 0x2F → Z | Outcome |
+  |---|---|---|---|
+  | Triangle | 3/3, 1f | 3/3, 1f | OK |
+  | Plane | 4/4, 2f | 4/4, 2f | OK |
+  | Linear | 7/7, 5f | 7/7, 5f | OK |
+  | **Cube** | **8/8, 12f** | **4/8, 6f** | **REGRESSION** |
+  | Fan | 3/6, 6f | 3/6, 6f | OK |
+  | Stepped | 4/4, 2f | 4/4, 2f | OK |
+  | Prism | 5/5, 8f | 5/5, 8f | OK |
+  | SPHERE | 2/50 | 2/50 | unchanged |
+- **Why CUBE regressed:** CUBE i=5 v=300 is correctly assigned X by closest-delta (300 ≈ X base 100 closer than current Z=950). Sep 0x2F preceding it forced axis=Z, polluting the cube vertex layout. CUBE's base_Z=900, so 300 ∈ [225, 1800] = Z plausible range — rule fires when it shouldn't.
+- **Why SPHERE unchanged:** The 9 SPHERE Z values that this rule would identify are ALREADY assigned axis=Z by closest-delta (because their values are in 150-450 range, far from current X≈1000). The 5 ARTIFACT values that this rule reassigns to Z still don't match any DXF Z value, so vertex score is unaffected.
+- **Score:** unchanged at 2/50.
+- **Solved-file regressions:** CUBE 8/8 → 4/8 (REVERTED).
+- **Cumulative finding:** Hypotheses 1, 2, 4 (TEST-037, 038, 039), 5 (TEST-045) and 6 (rejected by byte evidence in iter 8 investigation — preceding tag patterns contradict across files) all FAIL. Tag/sep-prev classifiers don't disambiguate axis cleanly because:
+  1. The dominant preceding tag (E0:00) is uninformative
+  2. Cross-file conflicts: `C0:17 → X` in SPHERE but `→ Y` in PRISM; `sep 0x2F → Z` in SPHERE but `→ X` in CUBE
+  3. **40 of 65 SPHERE coord values are decode artifacts** — no axis rule can fix them
+- **Strategic implication:** Remaining axis hypotheses (7, 8, 10, 11) likely face the same bound: best achievable from axis-only fixes ≈ 25/50 (max # correct values). To get past that bar we need to fix the DELTA decode (the prev-tracking and base-byte-leading rules), which is a different problem — likely requiring careful instrumentation of the decoder against a known-good cube where every byte is understood.

@@ -170,3 +170,34 @@ For cube2 +44: between TAGs 40:27, E0:40, 40:CE, 40:1C, 20:0C, E0:E0 (6 TAGs in 
 For prism +27: pattern is count→TAG→count→TAG (alternating). Phase D NOT triggered.
 
 This is a context-sensitive rule that requires tracking "consecutive TAG count" or "bytes since last SEP/COUNT". Will test this in the next iteration.
+
+## TEST-055 attempts: context-aware rules also failed
+
+### Attempt 3: skip 0x00 if (stored is sep) AND (≥8 bytes since last COUNT)
+Hypothesis: cube2's misalignment is detectable because there's a long gap since the last legitimate COUNT.
+
+**Result:** Rule never fired because the greedy 0x40-prefix-FULL detection consumes those bytes BEFORE the parser reaches the 0x00. The artifact-emitting 0x40-prefix happens at +31 (cube2), well before the 0x00 misalignment at +44 — by the time we reach +44, the 0x00 has already been consumed as part of TAG E0:00 at +43.
+
+### Attempt 4: require FULL-chain context for greedy 0x40-prefix-FULL
+Hypothesis: only fire the greedy 0x40-prefix rule when the next 0x40-prefixed sequence ALSO starts at pos+8 (suggesting genuine FULL chain).
+
+**Result:** Fan regressed 3/6 → 0/6. Fan's post-base FULLs are NOT in adjacent chains — they're isolated FULLs surrounded by TAGs. So the chain requirement breaks fan.
+
+## Conclusive learning
+
+The encoder uses STATEFUL phase tracking that simple local-context rules can't replicate:
+- **Fan/NonRound mode:** isolated FULLs interspersed with TAG/SEP groups. The 0x40-prefix-FULL detection MUST fire even after TAGs.
+- **Cube2-5 mode:** post-base bytes are mostly TAGs encoding slot-references, with occasional DELTAs. The 0x40-prefix-FULL detection MUST NOT fire after the initial DELTA stream begins.
+
+Both modes use the same encoder; the BYTE SIGNAL distinguishing "FULL coming up" from "TAG coming up" is something we haven't decoded yet. The current parser can't tell them apart because the SIGNAL probably involves multi-byte context (perhaps a specific E0:lo TAG before the 0x40 indicating phase transition).
+
+## Approach change for next iteration
+
+Instead of trying to derive parser rules from byte-pattern observations, **reverse-engineer the encoder's phase transitions**. The encoder must emit a byte SEQUENCE that signals phase changes (e.g., "next is a DELTA stream", "next is a FULL stream", "next is slot-references"). Identify these phase-transition signals by:
+
+1. For each known coord (where I have ground truth value), find the bytes that produced it.
+2. For each artifact, find the bytes that produced it.
+3. Look at the bytes IMMEDIATELY preceding each — what's invariant across "real" emissions vs invariant across artifacts?
+4. The differing pattern IS the phase signal.
+
+This is more intensive but data-driven. It might reveal that, say, "the bytes `E0:08 5F` always precede a FULL chain phase" or "the bytes `40:00 17` always precede a slot-assignment phase."

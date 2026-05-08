@@ -680,3 +680,54 @@
 - **Score:** unchanged at 2/50 (investigation, not implementation).
 - **Next:** Implement multi-section face decoding — for each sub-section, run the face decoder with that sub-section's init_tri and ops, accumulate faces.
 - **Conclusion:** Real evidence that multi-section decoding will unlock SPHERE. The 11 sub-sections collectively reference 39 distinct vertex indices spanning 4-49.
+
+---
+
+### TEST-044: SPHERE multi-section face decoder implemented (FAIL — vertex match unchanged, faces regressed)
+- **Status:** REVERTED. Implementation worked structurally but did not move the SPHERE score; multiple files lost faces.
+- **Loop:** SPHERE iteration 7
+- **Hypothesis:** Following TEST-043's evidence that SPHERE's 11 sub-sections collectively reference 39 distinct vertex labels (vs. our single-section walk that uses only the FIRST init_tri), splitting the face_region at `e0 03 14 20 00 40 17` boundaries and running a fresh `EdgeBreakerDecoder` per sub-section should expose more correct face topology and lift vertex match.
+- **Implementation:** Added `EXPERIMENTAL_MULTISECTION` env-flag gate. When set:
+  - Compute sub-section ranges `[face_marker..b0, b0..b1, ..., bN..face_end]` where `bX` are the offsets recorded by TEST-042's detector
+  - Per sub-section: call `parse_face_section` to get topology_ops/vertex_refs/initial_verts, walk elements for sep context, build C-op queue from refs, decode with fresh `EdgeBreakerDecoder` seeded by sub-section's init_tri
+  - Pad single-DATA leading-40 sub-sections by `[0, sub_init[0]-1, first_ref]` so they decode rather than skip
+  - Union all faces → existing dedup/remap pipeline
+  - Excluded cube via `n_verts==8 and n_faces==12` so cube_pattern fast path stays active
+- **Results with flag ON:**
+  | File | Baseline | Multi-section | Δ verts | Δ faces |
+  |---|---|---|---|---|
+  | Triangle | 3/3, 1 face | 3/3, 1 face | 0 | 0 |
+  | Plane | 4/4, 2 faces | 4/4, 2 faces | 0 | 0 |
+  | Linear | 7/7, 5 faces | 7/7, 5 faces | 0 | 0 |
+  | Cube | 8/8, 12 faces | 8/8, 12 faces (excluded) | 0 | 0 |
+  | Fan | 3/6, 6 faces | **5/6**, **2 faces** | +2 ✓ | -4 ✗ |
+  | Stepped | 4/4, 2 faces | 4/4, 2 faces | 0 | 0 |
+  | Prism | 5/5, 8 faces | 5/5, 8 faces | 0 | 0 |
+  | Hexhole | 0/20, 4 faces | 0/20, 4 faces | 0 | 0 |
+  | L-Shape | 0/12, 6 faces | 0/12, **1 face** | 0 | -5 ✗ |
+  | NonRound | 3/12, 12 faces | **4/12**, **6 faces** | +1 ✓ | -6 ✗ |
+  | 4-Prism | 0/16, 12 faces | 0/16, **2 faces** | 0 | -10 ✗ |
+  | **SPHERE** | **2/50**, 96 faces | **2/50**, **40 faces** | **0** | **-56 ✗** |
+- **Per-sub-section diagnostic for SPHERE:**
+  - sub0: init=[0, 10, 3] ops=9 → 8 faces
+  - sub1: init=[0, 16, 12] ops=10 → 6 faces
+  - sub2: init=[0, 14, 9] ops=8 → 6 faces
+  - sub3: init=[0, 22, 21] ops=6 → 4 faces
+  - sub4: init=[0, 18, 19] ops=5 → 2 faces
+  - sub5: init=[0, 29, 25] ops=4 → 2 faces
+  - sub6: skip (no init DATA before first 40/C0 tag)
+  - sub7: init=[0, 30, 41] ops=18 → 14 faces
+  - sub8: init=[0, 38, 43] ops=12 → 4 faces
+  - sub9: skip (no init)
+  - sub10: skip (no init)
+  - **Raw total:** 46 faces; **after dedup/remap:** 40 faces
+- **Why this is the most important finding of the loop so far:**
+  1. **SPHERE vertex match is bounded above by vertex COORDINATES, not face topology.** We restructured face decode to produce 46 faces across 9 valid sub-sections — and vertex match stayed at 2/50. Faces only reference vertices; if the vertices at indices 0-50 are at the wrong (X,Y,Z), no face topology change can move the match score. The 2 matching vertices are presumably at coordinates that happen to coincide between the wrong axis assignment and DXF.
+  2. **Sub-section init_tri reconstruction is incomplete.** 3 of 11 sub-sections (sub6, sub9, sub10) have NO leading DATA before their first topology tag. This means the sub-section continuation rule isn't `init = [V1, prev_value]` — likely it's "inherit boundary from prior sub-section" (Spirale Reversi style topology continuation). Solving SPHERE will require modeling this correctly.
+  3. **Face count loss on solved-cell-shape files:** Fan/L-Shape/NonRound/4-Prism all lost faces. The single-section walk's permissive fall-through (last_op-driven R/L/E chain) generates valid faces from data that the per-sub-section path skips. Multi-section is structurally LESS forgiving for files where the encoder uses cross-sub-section op chains.
+- **Decision tree for next iters:**
+  - Given the bound-above-by-coords finding, **Hypothesis 10 (per-axis prev tracking) and Hypothesis 4 (Z-range filter, already attempted) and Hypothesis 9 (DELTA size hint) become the highest-leverage** since they directly target axis assignment.
+  - Multi-section topology is solvable but won't help SPHERE until coords are right. Defer.
+- **Score:** unchanged at 2/50.
+- **Solved-file regressions:** none (flag default OFF, code reverted).
+- **Conclusion:** **SPHERE'S BOTTLENECK IS COORDINATES, NOT TOPOLOGY.** Multi-section decode produces working face topology but cannot lift vertex match because the vertex POSITIONS are wrong upstream. Future iters must crack axis assignment (Hypotheses 9, 10, 11) before any topology refinement can score.

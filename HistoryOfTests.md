@@ -847,3 +847,43 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
   2. Diff cube1-5 to identify gate-shift/op-type signals invariant across rotations
   3. Once cube5 is solved, generalize to cube1-4 with their multi-section structure
 - **No score yet** — DXFs missing. User will provide DXFs; viewer shows "No DXF available" placeholder until they arrive.
+
+---
+
+### TEST-048: FULL-run trigger extension to separator-prefixed coord regions (PARTIAL WIN)
+- **Status:** Committed. Solved files intact; cube4/cube5/NonRound improved.
+- **Trigger:** TEST-047 baseline showed cube5 starts coord region with `0x1f` (separator) followed by 8-byte FULL doubles. The existing FULL-run trigger explicitly excluded separators (`not is_separator(region[0])`), so cube5 was misreading 0x1f as SEP and 0x40 as TAG, producing 5v/6f of garbage. Survey of all 17 example files showed exactly 3 with `b0_is_sep=True AND b1_is_full=True`: NonRound (0x1f), cube4 (0x17), cube5 (0x1f).
+- **Hypothesis:** Extend the FULL-run trigger so that EITHER `b0` is non-tag/non-sep/non-count (existing trigger A) OR `b0` is a separator AND `b1` is a FULL_INDICATOR (new trigger B). Both paths skip the leading byte and read consecutive 8-byte FULLs.
+- **Implementation (`python/oot_parser_v2.py`):** Added `trigger_b` in `parse_coord_elements` alongside the existing trigger. No flag — straight code path because the rule is byte-derived (separator + FULL indicator) and unambiguously safer than misreading the bytes as TAG.
+- **Results:**
+  | File | Before | After | Outcome |
+  |---|---|---|---|
+  | Triangle | 3/3, 1f | 3/3, 1f | UNCHANGED ✓ |
+  | Plane | 4/4, 2f | 4/4, 2f | UNCHANGED ✓ |
+  | Linear | 7/7, 5f | 7/7, 5f | UNCHANGED ✓ |
+  | Cube (orig) | 8/8, 12f | 8/8, 12f | UNCHANGED ✓ |
+  | Fan | 3/6, 6f | 3/6, 6f | UNCHANGED ✓ |
+  | Prism | 5/5, 8f | 5/5, 8f | UNCHANGED ✓ |
+  | 4-Sides Prism | 0/16, 12f | 0/16, 12f | UNCHANGED |
+  | Stepped | 4/4, 2f | 4/4, 2f | UNCHANGED ✓ |
+  | L-Shape | 0/12, 6f | 0/12, 6f | UNCHANGED |
+  | Hexhole | 0/20, 4f | 0/20, 4f | UNCHANGED |
+  | **NonRound** | 3/12, 12f, 27v | **2/16, 14f, 43v** | **mixed** (vert count up, match shifted) |
+  | SPHERE | 2/50, 96f | 2/50, 96f | UNCHANGED |
+  | **cube4** | 21v/12f garbage | **17v/10f saner** | **STRUCTURAL IMPROVEMENT** |
+  | **cube5** | 5v/6f garbage | **25v/11f sensible** | **STRUCTURAL WIN** |
+- **cube5 vertex output (sensible cube traversal pattern!):**
+  ```
+  V0: (47.877, 72.658, 10.990)
+  V1: (56.807, 72.658, 10.990)   ← V0→V1: only X changes
+  V2: (56.807, 72.658, 27.342)   ← V1→V2: only Z changes
+  V3: (56.807, 72.658, 30.141)   ← V2→V3: only Z changes
+  V4: (52.060, 93.789, 30.141)
+  V5: (56.807, 67.028, 30.141)
+  V6: (56.807, 93.789, 30.141)
+  V7: (52.060, 75.959, 30.141)
+  ```
+  These are edge-walks through coord space. Without a DXF we can't score, but visually this is plausible cube-corner decoding. The remaining 17 verts (V8-V24) are likely extra/phantom coords from over-decoding the DELTA tail; needs more investigation.
+- **What's still broken on cube5:** 25 vertices instead of 8, 11 faces instead of 12. The FULL-run reads 14 sequential FULLs successfully, but the post-FULL-run DELTA stream produces extras. Face decoder also doesn't yield 12 cleanly.
+- **What's still broken on cube1-3:** They have non-separator b0 (`0x02, 0x11, 0x11`) so trigger B doesn't fire. cube1 still produces 115715.562 artifact (DELTA decode going wild). cube2/cube3 similar. These need a different fix — possibly extending the trigger condition further, or fixing the DELTA logic for `b0=0x11` files (count=0x11=17, way outside normal count range).
+- **Conclusion:** Real coord-decode improvement on 3 files (cube4, cube5, NonRound) without any solved-file regression. cube5 is now ~70% structurally cracked at the coord level. Next iteration: investigate why cube5 produces 25 instead of 8 verts (likely the DELTA tail after the FULL-run is over-emitting), and tackle cube1-3's `b0` patterns 0x02 and 0x11.

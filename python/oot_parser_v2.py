@@ -76,8 +76,18 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
     TAG_CLASSES = (0x20, 0x40, 0x60, 0x80, 0xA0, 0xC0, 0xE0)
     FULL_INDICATORS = (0x40, 0x41, 0xC0, 0xC1)
     full_run_active = False  # set when this region starts with the FULL-run marker
-    if (len(region) > 0 and region[0] > 0x07 and not is_separator(region[0])
-            and (region[0] & 0xE0) not in TAG_CLASSES):
+    # Trigger A: leading byte is non-tag/non-sep/non-count (Fan/NonRound classic case
+    #   region[0] is a "FULL-run start marker" of values like 0x12, 0x14, etc.)
+    # Trigger B (TEST-048): leading byte IS a separator (cube4 0x17, cube5 0x1f,
+    #   NonRound 0x1f) AND the byte AFTER it is a FULL_INDICATOR. The separator
+    #   value here acts as a "FULL-run start marker" with separator-encoded
+    #   semantics. Both triggers skip the leading byte and read consecutive
+    #   8-byte FULLs from the next position.
+    trigger_a = (len(region) > 0 and region[0] > 0x07 and not is_separator(region[0])
+                 and (region[0] & 0xE0) not in TAG_CLASSES)
+    trigger_b = (len(region) > 1 and is_separator(region[0])
+                 and region[1] in FULL_INDICATORS)
+    if trigger_a or trigger_b:
         full_run_active = True
         pos = 1  # skip the run-start marker
         while pos + 8 <= len(region) and region[pos] in FULL_INDICATORS:

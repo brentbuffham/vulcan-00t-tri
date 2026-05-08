@@ -406,16 +406,22 @@ function parseOOT(arrayBuffer) {
     return result;
   }
 
-  // FULL-run mode (Fan, NonRound): if first byte isn't a count (0-6),
-  // isn't 0x07 in new format, isn't a separator, and isn't a standard tag
-  // class, treat it as a "full-precision run start" marker. Read consecutive
-  // 8-byte IEEE 754 BE doubles until next byte isn't a FULL indicator.
+  // FULL-run mode triggers (TEST-048):
+  //   A: first byte is non-count, non-separator, non-tag-class (Fan, NonRound classic)
+  //   B: first byte IS a separator AND second byte is a FULL indicator
+  //      (cube4 0x17, cube5 0x1f, NonRound 0x1f). In this case the leading
+  //      separator value functions as a FULL-run start marker.
+  // Both paths skip the leading byte and read consecutive 8-byte FULLs.
   const TAG_CLASSES = new Set([0x20, 0x40, 0x60, 0x80, 0xA0, 0xC0, 0xE0]);
   let fullRunActive = false;
   if (coordRegion.length > 0) {
     const fb = coordRegion[0];
     const fbIsSep = (fb & 0x07) === 0x07 && fb >= 0x07;
-    if (fb > 0x07 && !fbIsSep && !TAG_CLASSES.has(fb & 0xE0)) {
+    const fb1 = coordRegion.length > 1 ? coordRegion[1] : 0;
+    const fb1IsFull = (fb1 === 0x40 || fb1 === 0x41 || fb1 === 0xC0 || fb1 === 0xC1);
+    const triggerA = (fb > 0x07 && !fbIsSep && !TAG_CLASSES.has(fb & 0xE0));
+    const triggerB = (fbIsSep && fb1IsFull);
+    if (triggerA || triggerB) {
       fullRunActive = true;
       pos = 1;
       while (pos + 8 <= coordRegion.length) {

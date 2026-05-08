@@ -133,3 +133,40 @@ The cube2 case has a chain of "UNK" bytes (0x08 isn't count/sep/tag-class) and w
 - Or detect the "phase transition" from coord-emission to slot-assignment based on a specific byte pattern
 
 **Next experiment:** investigate the UNK byte 0x08 in cube2 specifically. Is it a phase marker the encoder uses? Cube4 also has UNK bytes (0x14, 0x16). If these UNK values appear consistently, they're likely intentional markers we don't yet decode.
+
+## TEST-054 attempts — both failed, documented
+
+### Attempt 1: deactivate greedy 0x40-prefix-FULL after first DELTA
+Hypothesis: the greedy "treat any 0x40-prefixed 8-byte sequence as FULL when full_run_active" rule (lines 214-225 of parse_coord_elements) creates cube2's 11.52 artifact by consuming `40 27 08 e0 40 54 ce 48` (TAG sequence) as a FULL.
+
+**Result:** Cube2's 11.52 artifact eliminated, BUT Fan regressed 3/6 → 0/6. Fan needs the greedy rule to fire AFTER its DELTAs (Fan has interleaved FULLs and DELTAs). Reverted.
+
+### Attempt 2: skip 0x00 if stored[0] is separator
+Hypothesis: count=0 + stored[0]_is_separator is a misalignment marker.
+
+**Result:** Cube2's `00 2f` artifact eliminated, BUT Prism regressed 4/4 → 2/4. Prism +27 has bytes `00 b7` legitimately encoding Z=5500 (apex Z). Reverted.
+
+## What both failures teach us
+
+The encoder uses MULTIPLE coord-encoding behaviors that depend on STATE/CONTEXT, not just on local byte patterns:
+- Fan: emits FULLs throughout (greedy rule HELPS)
+- Prism: 0x00 + sep can be a real DELTA producing 5500 (Z apex)
+- Cube2: 0x00 + sep is a misalignment after the parser's gone off-track
+
+Distinguishing these requires tracking encoder STATE — at which "phase" of the file the encoder is currently emitting:
+- Phase A: base FULLs (X, Y, Z of corner 0)
+- Phase B: more FULLs (additional unique values)
+- Phase C: DELTAs from running prev (compact deltas)
+- Phase D: slot-assignment TAGs (no more coord emission)
+
+The encoder transitions through these phases via specific byte signals. We need to identify those signals.
+
+## Hypothesis for next iteration
+
+Maybe the long sequence of TAGs (with no SEPs between them) is the "Phase D entry signal". When we see ≥3 TAGs in a row without intervening SEPs/COUNTs, we're in slot-assignment phase, and any subsequent 0x00 should be treated as misalignment.
+
+For cube2 +44: between TAGs 40:27, E0:40, 40:CE, 40:1C, 20:0C, E0:E0 (6 TAGs in a row, 12 bytes) we have NO SEPs. Then 0x00 misalignment. → Phase D entry triggered.
+
+For prism +27: pattern is count→TAG→count→TAG (alternating). Phase D NOT triggered.
+
+This is a context-sensitive rule that requires tracking "consecutive TAG count" or "bytes since last SEP/COUNT". Will test this in the next iteration.

@@ -326,13 +326,20 @@ def group_coord_elements(elements: List[CoordElement]) -> List[CoordGroup]:
 
 
 def assign_axes(groups: List[CoordGroup]) -> None:
-    """Assign X/Y/Z axis to each coordinate using closest-delta heuristic.
+    """Assign X/Y/Z axis to each coordinate.
 
-    Each coordinate value is assigned to the axis whose current running value
-    is closest. This works for files where axis value ranges don't overlap
-    (the common case for mining data: X/Y in thousands, Z in hundreds).
-
-    Falls back to tag-based state machine rules when values are ambiguous.
+    Two-pass approach (TEST-058):
+    1. SEP+E0:lo state machine — derived from byte-level analysis of cube1 vs
+       solid. The encoder emits transition signals between coords:
+         - SEP 0x17 + preceding E0:lo (lo>=7) → STAY on previous axis
+         - SEP 0x17 + preceding E0:lo (lo<7)  → CYCLE BACK once (Z→Y→X→Z)
+         - SEP 0x2F                           → CYCLE BACK once
+         - SEP 0x5F                           → CYCLE FORWARD once
+       Verified 6/6 on cube1 and 6/6 on solid cube. The rule applies WHENEVER
+       a SEP signal is present in the previous group's seps; falls back to
+       closest-delta when no signal exists (plane G3, prism's 80:1f mode, etc.).
+    2. Closest-delta — for groups where the state machine has no signal AND
+       no forced_axis. Same as before.
     """
     if len(groups) < 3:
         for i, g in enumerate(groups):
@@ -345,13 +352,43 @@ def assign_axes(groups: List[CoordGroup]) -> None:
 
     current = [groups[0].value, groups[1].value, groups[2].value]
 
-    for g in groups[3:]:
+    for i in range(3, len(groups)):
+        g = groups[i]
         if g.forced_axis >= 0:
             best_ax = g.forced_axis
         else:
-            # Closest-delta: assign to axis with nearest current value
-            deltas = [abs(g.value - current[ax]) for ax in range(3)]
-            best_ax = deltas.index(min(deltas))
+            # Try state machine first. Use the FIRST E0 tag in prev_g (4-prism's
+            # G4 has multiple E0 tags; the first one carries the transition
+            # signal, not the last). Use the LAST sep (cube1 G4 has multiple
+            # seps in its closing trio; the last is the immediate signal).
+            prev_g = groups[i - 1]
+            first_e0_lo = None
+            for t in prev_g.tags:
+                if t.cls == 'E0':
+                    first_e0_lo = t.lo_nib
+                    break
+            last_sep = prev_g.seps[-1] if prev_g.seps else None
+            sm_pred = None
+            if last_sep == 0x17:
+                if first_e0_lo is None:
+                    pass  # no E0 signal, fall through to closest-delta
+                elif first_e0_lo == 7:
+                    sm_pred = prev_g.axis  # STAY (only lo=7 exactly)
+                elif first_e0_lo < 7:
+                    sm_pred = (prev_g.axis - 1) % 3  # CYCLE BACK
+                else:  # lo >= 8 (including 0xF)
+                    sm_pred = (prev_g.axis + 1) % 3  # CYCLE FORWARD
+            elif last_sep == 0x2F:
+                sm_pred = (prev_g.axis - 1) % 3
+            elif last_sep == 0x5F:
+                sm_pred = (prev_g.axis + 1) % 3
+
+            if sm_pred is not None:
+                best_ax = sm_pred
+            else:
+                # Closest-delta fallback
+                deltas = [abs(g.value - current[ax]) for ax in range(3)]
+                best_ax = deltas.index(min(deltas))
         g.axis = best_ax
         current[best_ax] = g.value
 

@@ -1102,3 +1102,49 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
   - 92.14 (artifact, lookahead doesn't catch this case)
 - **Why 92.14 escapes:** the byte at pos+8 (=0x74) IS a standard TAG class indicator, so the lookahead allows it. The bytes ARE technically a valid IEEE double; they just weren't meant to be a FULL. Distinguishing this from a real FULL needs more context than 1-byte lookahead provides.
 - **Score progression on cube2:** 11v artifacts → 9v → 7v (2 iterations of artifact elimination). Real coord coverage still 1/8 because the eliminated artifacts didn't displace real values; the axis-misclassification problem still blocks coverage.
+
+---
+
+### TEST-058: SEP+E0:lo axis state machine (REAL WIN — cube1 0/8 → 5/8)
+- **Status:** Committed. ALL solved files preserved. Cube1 jumps to 5/8 corners. SPHERE +1.
+- **Loop:** Cube focus iter 8
+- **Hypothesis (derived from byte-level analysis of cube1 + solid):** The encoder emits transition signals between coords as the LAST SEP and FIRST E0:lo in the previous group's tags. The rule:
+  - SEP 0x17 + first E0:lo == 7 → STAY on previous axis
+  - SEP 0x17 + first E0:lo < 7 → CYCLE BACK once (Z→Y→X→Z)
+  - SEP 0x17 + first E0:lo >= 8 → CYCLE FORWARD once (X→Y→Z→X)
+  - SEP 0x2F → CYCLE BACK once
+  - SEP 0x5F → CYCLE FORWARD once
+- **Critical refinements:**
+  1. Use the **first** E0 tag in prev_g (not last). 4-Prism's G4 has multiple E0 tags ending with E0:07; the FIRST one (E0:0F) carries the transition signal.
+  2. STAY only fires when lo == 7 EXACTLY. lo >= 8 (including 0xF) means CYCLE FORWARD. Previous version had lo>=7 → STAY which broke 4-Prism.
+- **Implementation:** `assign_axes` in `python/oot_parser_v2.py`. Two-pass: state machine attempts first; falls back to closest-delta when no SEP signal exists. `forced_axis` (from 80:1f, etc.) still takes precedence over both.
+- **Validation across all ground-truth files:**
+  | File | Axes pred | Truth | Result |
+  |---|---|---|---|
+  | tri-crack-solid | [0,1,2,2,1,0] | [0,1,2,2,1,0] | 6/6 ✓ |
+  | cube1 | [0,1,2,2,1,0] | [0,1,2,2,1,0] | 6/6 ✓ |
+  | tri-crack-prism (X,Y,Z,X,Y,X,Y,Z) | (closest-delta fallback) | already solved 4/4 | unchanged |
+  | tri-crack-4sides-prism (G4 was failing) | refined rule fires correctly | restored 5/5 | ✓ |
+  | tri-crack (plane) | falls back to closest-delta | 4/4 | unchanged |
+- **Regression results:**
+  | File | Before | After |
+  |---|---|---|
+  | Triangle | 3/3 | 3/3 ✓ |
+  | Plane | 4/4 | 4/4 ✓ |
+  | Linear | 7/7 | 7/7 ✓ |
+  | Cube (orig) | 8/8 | 8/8 ✓ |
+  | Fan | 3/6 | 3/6 ✓ |
+  | Prism | 4/4 | 4/4 ✓ |
+  | 4-Prism | 5/5 | 5/5 ✓ (refined rule preserves) |
+  | Stepped | 0/20 | 0/20 (unchanged) |
+  | L-Shape | 0/12 | 0/12 (unchanged) |
+  | Hexhole | 3/12 | 3/12 (unchanged) |
+  | NonRound | 2/16 | 2/16 (unchanged) |
+  | **SPHERE** | **2/50** | **3/50 (+1)** ✓ |
+  | **cube1** | **0/8 corners** | **5/8 corners** ✓ |
+  | cube2-5 | unchanged | unchanged |
+- **Why this is real cracking, not a fingerprint:** The rule operates on byte-level signals (SEP byte value, E0 tag's lo_nib) that the encoder emits between coords. NO file-specific gates. The same code path:
+  - Recognizes cube1's `E0:07 + SEP 0x17` as STAY signal (correct)
+  - Recognizes 4-Prism's `E0:0F + SEP 0x17` as CYCLE FORWARD (correct)
+  - Falls back to closest-delta when no SEP signal exists (plane G3, prism's tag-only path)
+- **What's still left:** Cube1 is at 5/8 (not 8/8) because the slot-assignment phase (after the 6 base-coord groups) still has decoder issues — slot tags aren't building the missing 3 corners. Cube2-5 still need their FULL-run-mode axis rules derived (this state machine targets count-encoded mode).

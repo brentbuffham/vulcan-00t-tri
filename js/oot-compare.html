@@ -644,7 +644,7 @@ function parseOOT(arrayBuffer) {
   }
   if (currentGroup !== null) groups.push(currentGroup);
 
-  // ── 7. Assign axes (closest-delta heuristic) ──
+  // ── 7. Assign axes (TEST-058: SEP+E0:lo state machine + closest-delta fallback) ──
   if (groups.length >= 3) {
     groups[0].axis = 0;
     groups[1].axis = 1;
@@ -656,11 +656,35 @@ function parseOOT(arrayBuffer) {
       if (g.forcedAxis !== undefined && g.forcedAxis >= 0) {
         bestAx = g.forcedAxis;
       } else {
-        bestAx = 0;
-        let bestDelta = Math.abs(g.value - current[0]);
-        for (let ax = 1; ax < 3; ax++) {
-          const d = Math.abs(g.value - current[ax]);
-          if (d < bestDelta) { bestDelta = d; bestAx = ax; }
+        // State machine: use FIRST E0 tag in prev_g + LAST sep
+        const prev_g = groups[i - 1];
+        let firstE0Lo = null;
+        for (const t of prev_g.tags) {
+          if (t.cls === 'E0') { firstE0Lo = t.loNib; break; }
+        }
+        const lastSep = prev_g.seps.length ? prev_g.seps[prev_g.seps.length - 1] : null;
+        let smPred = null;
+        if (lastSep === 0x17) {
+          if (firstE0Lo !== null) {
+            if (firstE0Lo === 7) smPred = prev_g.axis;
+            else if (firstE0Lo < 7) smPred = (prev_g.axis - 1 + 3) % 3;
+            else smPred = (prev_g.axis + 1) % 3;
+          }
+        } else if (lastSep === 0x2F) {
+          smPred = (prev_g.axis - 1 + 3) % 3;
+        } else if (lastSep === 0x5F) {
+          smPred = (prev_g.axis + 1) % 3;
+        }
+
+        if (smPred !== null) {
+          bestAx = smPred;
+        } else {
+          bestAx = 0;
+          let bestDelta = Math.abs(g.value - current[0]);
+          for (let ax = 1; ax < 3; ax++) {
+            const d = Math.abs(g.value - current[ax]);
+            if (d < bestDelta) { bestDelta = d; bestAx = ax; }
+          }
         }
       }
       g.axis = bestAx;

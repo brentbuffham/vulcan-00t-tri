@@ -707,10 +707,25 @@ function parseOOT(arrayBuffer) {
   if (groups.length >= 3) {
     const basePositive = groups[0].value >= 0 && groups[1].value >= 0 && groups[2].value >= 0;
     if (basePositive) {
-      for (let i = 3; i < groups.length; i++) {
-        if (groups[i].value < 0) {
-          trimmedGroups = groups.slice(0, i);
-          break;
+      // TEST-051: Cube-signature trim. After 6 coord groups in a cube layout,
+      // remaining bytes are slot-assignment TAGs; the parser misreads them
+      // as count+stored DELTA producing 131040 artifact. Drop groups[6:].
+      const arrEq = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+      const cubeSig = (
+        groups.length >= 7
+        && arrEq(groups[2].seps, [0x17])
+        && arrEq(groups[3].seps, [0x17])
+        && arrEq(groups[4].seps, [0x2F])
+        && groups.slice(5).some(g => arrEq(g.seps, [0x5F, 0x17, 0x2F]))
+      );
+      if (cubeSig) {
+        trimmedGroups = groups.slice(0, 6);
+      } else {
+        for (let i = 3; i < groups.length; i++) {
+          if (groups[i].value < 0) {
+            trimmedGroups = groups.slice(0, i);
+            break;
+          }
         }
       }
     }

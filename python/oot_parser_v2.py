@@ -377,6 +377,11 @@ def trim_coord_groups(groups: List[CoordGroup]) -> List[CoordGroup]:
     The coord section transitions to the face section when coordinate values
     become negative (while base coords are positive) — a reliable marker since
     mining coordinates are always positive.
+
+    TEST-051: Also trim cube-signature files to exactly 6 coord groups. Once
+    the cube layout is detected (X/Y/Z/Z/Y/X), the bytes after the 6th coord
+    are all slot-assignment TAGs. The parser currently misreads `01 fe e0 ..`
+    in cube1 as a count+stored DELTA producing 131040 (artifact). Drop it.
     """
     if len(groups) < 3:
         return groups
@@ -384,6 +389,19 @@ def trim_coord_groups(groups: List[CoordGroup]) -> List[CoordGroup]:
     base_positive = all(groups[i].value >= 0 for i in range(min(3, len(groups))))
     if not base_positive:
         return groups  # can't use sign-based trimming
+
+    # Cube-signature trim (must run BEFORE the negative-value scan so the
+    # artifact group's huge-positive value doesn't survive)
+    if len(groups) >= 7:
+        closing_trio = [0x5F, 0x17, 0x2F]
+        cube_sig = (
+            groups[2].seps == [0x17]
+            and groups[3].seps == [0x17]
+            and groups[4].seps == [0x2F]
+            and any(g.seps == closing_trio for g in groups[5:])
+        )
+        if cube_sig:
+            return groups[:6]
 
     for i in range(3, len(groups)):
         if groups[i].value < 0:

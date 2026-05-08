@@ -975,3 +975,28 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
 - **What's still broken:** 4 of 9 vertices have X=131040 (decoder artifact). The Y/Z combinations on those artifact rows ((Y=25, Z=10), (Y=75, Z=60), (Y=75, Z=10), (Y=25, Z=60)) MATCH 4 different cube corners — so if we just fix the X value on each, we'd get full 8/8 coverage. The 131040 is from a DELTA decode beyond G6 that's not handled correctly. Investigation for next iter.
 - **Score:** cube1 corner coverage 0/8 → **5/8**. With looser tolerance (≤2.0) still 5/8 — the artifacts are wildly wrong, not borderline. The cube SHAPE is now visible in the viewer.
 - **Conclusion:** Real structural cracking — cube1 went from "5 colinear vertices, no cube visible" to "9 vertices, 5 of which form 5 corners of the expected box". Same code path benefits any future axis-aligned cube/box file with the matching byte signature. cube2-5 (rotated) need different handling because their byte structure differs.
+
+---
+
+### TEST-051: Trim cube-signature files to 6 coord groups — drops 131040 artifact (PARTIAL WIN)
+- **Status:** Committed. Solved files unchanged; cube1 covers 6/8 corners (up from 5/8).
+- **Loop:** Cube focus iter 4
+- **Trigger:** TEST-050 fixed cube1 axes but kept the 131040 artifact group (G6) which created 4 wrong vertices in `build_vertex_table`. User asked: "are those reusing addresses?" — perceptive question. The C0:* tags ARE references (hi_nib = vertex slot index, lo_nib = axis selector), but the 131040 itself is a decoder bug, not a reference.
+- **Root cause:** After cube1's G5 (X=99), the bytes are `40 5e 01 fe e0 08 5f e0 07 17 e0 07 2f c0 47 c0 8f c0 2f c0 17 a0 2f` — these should ALL be slot-assignment TAGs (no more coord values). The parser misreads `01 fe e0` as count(1) + stored=[fe, e0] = DELTA = 131040.
+- **Fix:** In `trim_coord_groups`, when the cube signature matches AND there are ≥7 groups, trim to exactly 6. The remaining bytes (TAGs from G6 onward) still get parsed as TAGs in the existing element walk; they just don't form a coord group anymore.
+- **Results:**
+  | File | Before | After | Outcome |
+  |---|---|---|---|
+  | All solved | unchanged | unchanged | OK ✓ |
+  | **cube1** | **5/8 corners (9 verts incl 4 at X=131040)** | **6/8 corners (6 verts, no artifacts)** | **WIN** |
+- **cube1 vertex output now (6 verts, all correct cube corners):**
+  ```
+  V0: (49.99, 25, 10) ✓ bottom-front-left
+  V1: (49.99, 25, 60) ✓ top-front-left
+  V2: (49.99, 75, 60) ✓ top-back-left
+  V3: (99.0, 75, 60) ✓ top-back-right
+  V4: (49.99, 75, 10) ✓ bottom-back-left
+  V5: (99.0, 25, 10) ✓ bottom-front-right
+  ```
+- **Still missing 2 corners:** (100, 25, 60) "top-front-right" and (100, 75, 10) "bottom-back-right". Both at X=100. Cube needs 8 vertices but we're producing 6, and 8 faces (vs the expected 12). The slot-assignment phase isn't generating these 2 vertices from the existing 6 axis values. Investigation for next iter.
+- **Score:** cube1 corner coverage 5/8 → **6/8** (75%).

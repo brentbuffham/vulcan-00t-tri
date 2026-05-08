@@ -92,3 +92,44 @@ This rule, if it holds:
 ## Tool: byte-role labeling
 
 The Python script `tools/label_cube_bytes.py` (TODO: extract from inline) walks a coord region and labels every byte by role: COUNT, STORED-FULL, STORED-DELTA, TAG-cls, TAG-b2, SEP, RUN-MARKER, UNK. Use this to align cube1 vs cube2 for byte-by-byte structural comparison.
+
+## TEST attempt: count=0 misalignment guard (FAILED, reverted)
+
+**Hypothesis:** In coord region, when `count=0` with stored=[X] where X is itself a separator byte, treat 0x00 as a misalignment marker (skip it).
+
+**Tested:** Implemented rule, ran regression.
+
+**Result:** PRISM dropped 4/4 → 2/4. Reverted.
+
+**Why prism broke:** Prism +27 has bytes `00 b7` where 0xb7 is sep+TAG-class A0. The DELTA decode produces Z=5500.0 — a REAL prism Z value (apex Z). So `count=0 + stored[0]_is_sep` is a legitimate DELTA for prism but a misalignment for cube2.
+
+**Differentiating context (raw bytes, NOT byte-pattern alone):**
+
+```
+prism +27 (legitimate Z=5500 DELTA):
+  ...02 40 b3 88        (G2 base Z=5000)
+     80 07              (TAG)
+     01 62 c0           (DELTA G3=150)
+     80 07              (TAG)
+     01 97 70           (DELTA — produces another Z value)
+     80 07              (TAG)
+     00 b7              ← this count=0 stored=[b7] → DELTA producing Z=5500 (real)
+
+cube2 +44 (artifact 15.73):
+  ...01 4f 74           (DELTA G3=62.91)
+     40 27              (TAG 40:27)
+     08                 ← UNK byte (parser misalignment indicator)
+     e0 40              (TAG E0:40 — BUT if 0x08 was a real count, what follows would differ)
+     40 ce 48 1c 2a 0c
+     ea e0
+     00 2f              ← this count=0 stored=[2f] → DELTA producing 15.73 (artifact)
+```
+
+The cube2 case has a chain of "UNK" bytes (0x08 isn't count/sep/tag-class) and what look like multi-byte TAG sequences. The prism case has clean count→TAG→count→TAG flow.
+
+**Implication:** The 0x00-as-misalignment rule needs CONTEXT — specifically, recognition of when the parser is in a "broken" state. Possibly:
+- Track whether we've seen an UNK byte recently
+- Or recognize that certain TAG sequences (multi-byte, no SEP between TAGs) are slot-assignment phases NOT coord-emission phases
+- Or detect the "phase transition" from coord-emission to slot-assignment based on a specific byte pattern
+
+**Next experiment:** investigate the UNK byte 0x08 in cube2 specifically. Is it a phase marker the encoder uses? Cube4 also has UNK bytes (0x14, 0x16). If these UNK values appear consistently, they're likely intentional markers we don't yet decode.

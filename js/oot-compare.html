@@ -561,8 +561,20 @@ function parseOOT(arrayBuffer) {
       // Fan-only extended-FULL detection: gated on fullRunActive, only fires
       // when the resulting double has positive magnitude in [10, 1e6].
       if (fullRunActive && pos + 8 <= coordRegion.length && !misaligned) {
+        // TEST-057: sane-sequel lookahead. After consuming 8 bytes as FULL, the
+        // byte at pos+8 should be a count/sep/standard-TAG-class/FULL_IND.
+        // Otherwise we're consuming TAG bytes that weren't meant as a FULL.
+        const _saneSequel = (p) => {
+          if (p >= coordRegion.length) return true;
+          const nb = coordRegion[p];
+          return nb <= 0x06
+              || ((nb & 0x07) === 0x07 && nb >= 0x07)
+              || ((nb & 0xE0) !== 0 && TAG_CLASSES.has(nb & 0xE0))
+              || nb === 0x40 || nb === 0x41 || nb === 0xC0 || nb === 0xC1;
+        };
         if ((b === 0x40 || b === 0x41 || b === 0xC0 || b === 0xC1)
-            && b2 !== 0x49 && b2 !== 0x59 && b2 !== 0x69 && b2 !== 0x79) {
+            && b2 !== 0x49 && b2 !== 0x59 && b2 !== 0x69 && b2 !== 0x79
+            && _saneSequel(pos + 8)) {
           const cand = new Uint8Array(8);
           for (let i = 0; i < 8; i++) cand[i] = coordRegion[pos + i];
           const cval = readBE64(cand);
@@ -574,7 +586,7 @@ function parseOOT(arrayBuffer) {
             continue;
           }
         }
-        if (b >= 0x08 && b <= 0x0e) {
+        if (b >= 0x08 && b <= 0x0e && _saneSequel(pos + 8)) {
           const ieee = new Uint8Array(8);
           ieee[0] = 0x40;
           for (let i = 1; i < 8; i++) ieee[i] = coordRegion[pos + i];

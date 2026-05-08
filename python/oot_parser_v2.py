@@ -220,7 +220,20 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
             # without the FULL-run marker (i.e. all solved files except
             # Fan/NonRound) are unaffected.
             if full_run_active and pos + 8 <= len(region) and not misaligned:
-                if b in FULL_INDICATORS and b2 not in COMPACT_FULL_BYTE2:
+                # TEST-057: After consuming 8 bytes as FULL, the byte at pos+8
+                # should be a "sane" parser-recognizable byte: a count (0-6), a
+                # separator, a standard TAG class indicator, or another FULL_IND.
+                # Otherwise we're consuming bytes that weren't meant to be a FULL.
+                # cube2 +31 has sequel 0x1c (non-standard) → reject 11.52 artifact.
+                def _sane_sequel(p):
+                    if p >= len(region):
+                        return True  # end-of-region, can't check, accept
+                    nb = region[p]
+                    return (nb <= 0x06
+                            or is_separator(nb)
+                            or (nb & 0xE0) in (0x20, 0x40, 0x60, 0x80, 0xA0, 0xC0, 0xE0)
+                            or nb in (0x40, 0x41, 0xC0, 0xC1))
+                if b in FULL_INDICATORS and b2 not in COMPACT_FULL_BYTE2 and _sane_sequel(pos + 8):
                     cand = list(region[pos:pos + 8])
                     cval = read_be_double(bytes(cand))
                     if cval == cval and 10.0 < cval < 1e6:
@@ -231,7 +244,7 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
                         prev = cand
                         pos += 8
                         continue
-                if b in (0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e):
+                if b in (0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e) and _sane_sequel(pos + 8):
                     ieee = [0x40] + list(region[pos + 1:pos + 8])
                     lval = read_be_double(bytes(ieee))
                     if lval == lval and 10.0 < lval < 1e6:

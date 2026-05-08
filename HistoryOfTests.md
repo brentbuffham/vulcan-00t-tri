@@ -1078,3 +1078,27 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
   | cube1, cube3, cube4, cube5 | unchanged | unchanged |
 - **What's still left:** Coverage didn't improve (still 1/8) because the eliminated artifact wasn't displacing a real value. The remaining 8 vertices include real X values 87.09, 16.78, 108.23 but axis-misclassified — these need the axis state machine fix. Cube1 still at 5v colinear (axis-misclassification).
 - **Real cracking progress:** The misalignment-detection rule is a UNIVERSAL byte-derived rule that uses the encoder's invariant (TAG classes are always one of 7 specific values). Any time the parser emits a non-standard TAG class, that's a self-evident encoder violation — meaning the parser is wrong. Same logic applies to all files. NOT a fingerprint check.
+
+---
+
+### TEST-057: Sane-sequel lookahead for greedy FULL emission (PARTIAL WIN)
+- **Status:** Committed. Cube2 drops from 9v to 7v (2 more artifacts eliminated). Solved files unchanged.
+- **Loop:** Cube focus iter 7
+- **Insight:** When the greedy FULL fall-through (0x40-prefix or long-FULL marker) consumes 8 bytes, the byte at `pos+8` should be a SANE parser-recognizable byte: a count (≤0x06), a separator, a standard TAG class indicator, or a FULL_IND. Otherwise the 8 bytes weren't intended as a FULL — they were TAGs/SEPs being mis-consumed.
+- **Implementation:** New `_sane_sequel(p)` helper. Both fall-through rules (0x40-prefix at lines 215+ and long-FULL marker at lines 226+) now check `_sane_sequel(pos+8)` before firing. If the byte after wouldn't be a sensible next-emission start, reject the FULL.
+- **Result:**
+  - cube2 pos 31 (artifact 11.52): byte at +39 is 0x1c (non-standard cls) → not sane → REJECTED ✓
+  - cube2 pos 33 (would have produced 33282 via long-FULL marker): byte at +41 is 0x0c (non-standard cls) → not sane → REJECTED ✓
+  - cube2 pos 41 (had been 55040): already blocked by misalignment from TEST-056 ✓
+  - cube2 pos 51 (real 87.09): byte at +59 is 0x40 (FULL_IND) → SANE → emitted ✓
+  - cube2 pos 59 (real 16.78): byte at +67 is 0xe0 (TAG class E0) → SANE → emitted ✓
+  - cube2 pos 78 (artifact 92.14): byte at +86 is 0x74 (TAG class 60) → SANE → still emitted ✗
+- **Cube2 emissions now (7 total, 6 real, 1 artifact):**
+  - 41.78 (X) ✓ 37.91 (Y) ✓ 10.25 (Z) ✓
+  - 62.91 (X DELTA) ✓
+  - 87.09 (X long-FULL) ✓
+  - 16.78 (Y 0x40-prefix) ✓
+  - 108.23 (X DELTA) ✓
+  - 92.14 (artifact, lookahead doesn't catch this case)
+- **Why 92.14 escapes:** the byte at pos+8 (=0x74) IS a standard TAG class indicator, so the lookahead allows it. The bytes ARE technically a valid IEEE double; they just weren't meant to be a FULL. Distinguishing this from a real FULL needs more context than 1-byte lookahead provides.
+- **Score progression on cube2:** 11v artifacts → 9v → 7v (2 iterations of artifact elimination). Real coord coverage still 1/8 because the eliminated artifacts didn't displace real values; the axis-misclassification problem still blocks coverage.

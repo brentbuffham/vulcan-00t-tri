@@ -770,3 +770,39 @@
   2. Cross-file conflicts: `C0:17 → X` in SPHERE but `→ Y` in PRISM; `sep 0x2F → Z` in SPHERE but `→ X` in CUBE
   3. **40 of 65 SPHERE coord values are decode artifacts** — no axis rule can fix them
 - **Strategic implication:** Remaining axis hypotheses (7, 8, 10, 11) likely face the same bound: best achievable from axis-only fixes ≈ 25/50 (max # correct values). To get past that bar we need to fix the DELTA decode (the prev-tracking and base-byte-leading rules), which is a different problem — likely requiring careful instrumentation of the decoder against a known-good cube where every byte is understood.
+
+---
+
+### TEST-046: SPHERE Hypothesis 10 — Per-axis prev tracking (FAIL — proves encoder uses running-prev, not per-axis-prev)
+- **Status:** REVERTED. Solved-file regressions on Triangle, Plane, Cube, Stepped, 4-Prism. SPHERE unchanged.
+- **Loop:** SPHERE iteration 9
+- **Hypothesis:** Maintain three per-axis prev buffers (`prev_X`, `prev_Y`, `prev_Z`) initialized from the first 3 FULL coords. For each DELTA, decode the stored bytes against each axis-prev and pick the axis whose result has the smallest `|val - prev_val|`. The intuition: if Vulcan encodes deltas relative to the SAME-AXIS prev (rather than the running prev), the per-axis-prev decoder should produce correct values where the running-prev approach goes off the rails on multi-section files like SPHERE.
+- **Implementation:** `EXPERIMENTAL_PER_AXIS_PREV` env-flag gate. Added `prev_per_axis = [base_X_bytes, base_Y_bytes, base_Z_bytes]` populated from `full_bytes_history`. Inside the DELTA branch, computed 3 candidate decodings (one per axis-prev), selected the one minimizing `|val - prev_val|`, then updated only that axis's prev buffer.
+- **Byte-level survey supporting the hypothesis (SPHERE only):** nb=1 transitions are 12 same-axis / 0 different-axis (100% same-axis). nb=7 are 5/8 (62% different-axis). Strong correlation suggested per-axis encoding might be the rule.
+- **Results with flag ON:**
+  | File | Baseline | Per-axis prev | Outcome |
+  |---|---|---|---|
+  | **Triangle** | **3/3, 1f** | **2/3, 1f** | **REGRESSION** |
+  | **Plane** | **4/4, 2f** | **2/4, 1f** | **REGRESSION (faces too)** |
+  | Linear | 7/7, 5f | 7/7, 5f | OK |
+  | **Cube** | **8/8, 12f** | **2/8, 4f** | **MAJOR REGRESSION** |
+  | Fan | 3/6, 6f | 3/6, 6f | OK |
+  | **Stepped** | **4/4, 2f** | **1/4, 2f** | **REGRESSION** |
+  | Prism | 5/5, 8f | 5/5, 8f | OK |
+  | Hexhole | 0/20 | 0/20 | OK (already broken) |
+  | L-Shape | 0/12 | 0/12 | OK |
+  | NonRound | 3/12 | 3/12 | OK |
+  | 4-Prism | 0/16 | 0/16 | OK |
+  | **SPHERE** | **2/50** | **2/50** | **unchanged** |
+- **Why CUBE regressed (analytical worked example):**
+  CUBE coord 5 has v=300 (X-axis). Encoder used running-prev (after coord 4 v=600 on Y), so stored byte `0x72` overlays at byte 1 of prev (which is 600's IEEE = `40 82 C0 00 00 00 00 00`), yielding `40 72 C0 00 00 00 00 00` = 300.0 ✓.
+  With per-axis-prev decoding, the stored byte overlays onto each axis prev:
+  - X path: `40 72 00 00 00 00 00 00` = 288 (prev_X bytes 2-7 are zeros from FULL=100)
+  - Y path: `40 72 C0 00 00 00 00 00` = 300 (matches!)
+  - Z path: `40 72 B0 00 00 00 00 00` = 297 (prev_Z's byte 2 is 0xB0 from 950)
+  My selector picks X (smallest |val-prev| since prev_X=100, |288-100|=188 < |300-500|=200 < |297-950|=653). **WRONG: encoder intent was X via running-prev, but my picker chose X with the WRONG VALUE 288.** This breaks the cube vertex layout.
+- **Why this proves running-prev:** If Vulcan used per-axis-prev encoding, the per-axis decoder would reproduce correct values across all files. Instead, it produces correct values ONLY when prev[same axis] happens to coincide with running-prev — which is true only for solved files where coord ordering matches axis cycling. The fact that **CUBE breaks AND SPHERE doesn't improve** is direct evidence that Vulcan uses running-prev for both file styles.
+- **Why SPHERE STILL didn't improve even though running-prev "should" decode it correctly:** SPHERE's running-prev decoder is already running — yet it produces 40/65 artifact values. So the bug is NOT "wrong prev" — it's something else about how prev gets updated mid-stream when sub-section boundaries (`e0 03 14 20 00 40 17`) occur. Likely the encoder RESETS prev (or switches prev source) at sub-section boundaries, and our decoder doesn't.
+- **Score:** unchanged at 2/50.
+- **Solved-file regressions:** Triangle, Plane, Cube, Stepped (REVERTED).
+- **New direction implied:** Investigate whether the multi-section boundary `e0 03 14 20 00 40 17` resets the DELTA prev to the start-of-sub-section's leading FULL, OR to base_X / base_Y / base_Z. This connects multi-section detection (TEST-041, 042, 043) to coord decoding directly.

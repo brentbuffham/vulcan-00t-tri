@@ -201,3 +201,39 @@ Instead of trying to derive parser rules from byte-pattern observations, **rever
 4. The differing pattern IS the phase signal.
 
 This is more intensive but data-driven. It might reveal that, say, "the bytes `E0:08 5F` always precede a FULL chain phase" or "the bytes `40:00 17` always precede a slot-assignment phase."
+
+## TEST-058 refined — cube.00t skyscraper insight (2026-05-09)
+
+User confirmed cube.00t is a 10×10×~40m "skyscraper" at UTM corner
+(27170, 157410, 1000). Expected opposite corner ≈ (27180, 157420, 1040).
+
+### Real byte signatures found in cube.00t
+
+The opposite corner's IEEE-byte differences from base ARE present in the file:
+
+| Real value | Expected IEEE | Differs at byte | Byte value | File position |
+|---|---|---|---|---|
+| Z+40=1040 | `40 90 40 00 ...` | byte 1 | 0x90 | pos 24 (consumed by G3 ✓) |
+| Y+10=157420 | `41 03 37 60 ...` | byte 3 | 0x60 | pos 31 (mis-decoded as 130) |
+| X+10=27180 | `40 DA 8B 00 ...` | byte 2 | 0x8B | pos 42 (mis-decoded as 872) |
+
+The encoder writes ONE byte per opposite-corner axis. Decoder needs to:
+1. Use **base_axis as prev** (not running prev)
+2. Overlay the stored byte at the IEEE byte position where base differs
+3. Zero-pad trailing bytes (new-format style)
+
+### What's missing — the position hint
+
+The lo_nib of the preceding E0 tag maps to byte position somehow:
+- E0:0A → Z+40 (byte 1)
+- E0:04 → Y+10 (byte 3)
+- E0:0B → X+10 (byte 2)
+- E0:07 → cube1 Z+50 (byte 1)
+
+5 data points isn't enough to derive the formula. Possible rules:
+- Bit-packing within lo_nib (e.g., (byte_pos << 1) | axis_change_bit)
+- Multiple TAGs together encode the position
+- The C0:slot tag's lo_nib (e.g., C0:2F lo=F) might be the byte-position hint
+- Or it's purely positional within the TAG sequence (Nth E0 tag = Nth axis)
+
+Need more cube data points (cube4, cube5 with multi-axis rotations) to narrow the rule.

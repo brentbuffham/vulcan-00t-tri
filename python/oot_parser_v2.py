@@ -372,11 +372,15 @@ def assign_axes(groups: List[CoordGroup]) -> None:
             if last_sep == 0x17:
                 if first_e0_lo is None:
                     pass  # no E0 signal, fall through to closest-delta
-                elif first_e0_lo == 7:
-                    sm_pred = prev_g.axis  # STAY (only lo=7 exactly)
+                elif first_e0_lo == 7 or first_e0_lo == 0xA:
+                    # TEST-058 refinement (cube.00t evidence): lo=7 (small-value
+                    # SAME-axis, cube1) and lo=A (large-value SAME-axis,
+                    # cube.00t UTM scale) both signal STAY. The lo_nib
+                    # additionally encodes value-magnitude class.
+                    sm_pred = prev_g.axis  # STAY
                 elif first_e0_lo < 7:
                     sm_pred = (prev_g.axis - 1) % 3  # CYCLE BACK
-                else:  # lo >= 8 (including 0xF)
+                else:  # lo in {8, 9, B, C, D, E, F}
                     sm_pred = (prev_g.axis + 1) % 3  # CYCLE FORWARD
             elif last_sep == 0x2F:
                 sm_pred = (prev_g.axis - 1) % 3

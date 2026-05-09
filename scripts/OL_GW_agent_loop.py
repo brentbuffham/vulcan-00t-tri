@@ -225,22 +225,45 @@ def parse_response(response: str):
 
 def apply_search_replace(search: str, replace: str) -> tuple:
     """Find `search` in PARSER_PATH and replace with `replace`.
-    Returns (success, error_msg)."""
+    Tries exact match, then progressively more lenient matching to handle
+    minor LLM formatting variations (trailing spaces, tab/space mix, etc.)."""
     src = PARSER_PATH.read_text()
-    # Try exact match first
-    if search in src:
-        # Must be unique
-        if src.count(search) > 1:
-            return False, f'SEARCH block matches {src.count(search)} times — must be unique'
-        new_src = src.replace(search, replace)
-        PARSER_PATH.write_text(new_src)
-        return True, ''
-    # Try without leading/trailing whitespace
+    # 1. Exact match
+    if search in src and src.count(search) == 1:
+        PARSER_PATH.write_text(src.replace(search, replace))
+        return True, 'exact'
+    if search in src and src.count(search) > 1:
+        return False, f'SEARCH matches {src.count(search)} times — must be unique'
+
+    # 2. Stripped (leading/trailing whitespace)
     stripped = search.strip()
     if stripped in src and src.count(stripped) == 1:
-        new_src = src.replace(stripped, replace.strip())
-        PARSER_PATH.write_text(new_src)
-        return True, '(matched after stripping)'
+        PARSER_PATH.write_text(src.replace(stripped, replace.strip()))
+        return True, 'stripped'
+
+    # 3. Normalize trailing whitespace per line
+    norm_search = '\n'.join(line.rstrip() for line in search.strip().splitlines())
+    norm_src = '\n'.join(line.rstrip() for line in src.splitlines())
+    if norm_search in norm_src and norm_src.count(norm_search) == 1:
+        # Find the actual block in the original src that matches
+        # (with original trailing whitespace)
+        src_lines = src.splitlines(keepends=False)
+        search_lines_norm = norm_search.splitlines()
+        for i in range(len(src_lines) - len(search_lines_norm) + 1):
+            if all(src_lines[i + j].rstrip() == search_lines_norm[j]
+                   for j in range(len(search_lines_norm))):
+                # Reconstruct the block we'll actually replace
+                actual_block = '\n'.join(src_lines[i:i + len(search_lines_norm)])
+                if src.count(actual_block) == 1:
+                    PARSER_PATH.write_text(src.replace(actual_block, replace.strip()))
+                    return True, 'whitespace-normalized'
+                break
+
+    # 4. Try matching just the first line as an anchor (last resort)
+    first_line = search.strip().splitlines()[0].strip() if search.strip() else ''
+    if first_line and src.count(first_line) == 1:
+        return False, f'SEARCH block not found exactly. Anchor line "{first_line[:60]}" exists once though — LLM probably altered the search block when copying.'
+
     return False, 'SEARCH block not found in parser source'
 
 

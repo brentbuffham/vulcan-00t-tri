@@ -103,19 +103,30 @@ def run_full_regression() -> Dict[str, Any]:
 
 
 def is_regression(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
-    """Return regression info: which solved-file thresholds dropped."""
+    """Return regression info: any file whose dxf_match or gt_coverage DROPPED.
+    Compares directly against the before-state — no fixed thresholds — so the
+    agent only reverts if a score actually went down vs. the previous baseline."""
     regressions = []
-    for name, threshold in SOLVED_THRESHOLDS.items():
-        if name not in before or name not in after:
+    for name in after:
+        if name not in before:
             continue
-        before_score = before[name].get('dxf_match')
-        after_score = after[name].get('dxf_match')
-        if after_score is not None and after_score < threshold:
+        # DXF match drop
+        before_dxf = before[name].get('dxf_match')
+        after_dxf = after[name].get('dxf_match')
+        if (before_dxf is not None and after_dxf is not None
+                and after_dxf < before_dxf):
             regressions.append({
-                'file': name,
-                'threshold': threshold,
-                'before': before_score,
-                'after': after_score,
+                'file': name, 'metric': 'dxf_match',
+                'before': before_dxf, 'after': after_dxf,
+            })
+        # GT coverage drop
+        before_gt = before[name].get('gt_coverage')
+        after_gt = after[name].get('gt_coverage')
+        if (before_gt is not None and after_gt is not None
+                and after_gt < before_gt):
+            regressions.append({
+                'file': name, 'metric': 'gt_coverage',
+                'before': before_gt, 'after': after_gt,
             })
     return regressions
 

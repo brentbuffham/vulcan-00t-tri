@@ -21,14 +21,15 @@ to propose, test, and commit incremental improvements to the .00t parser.
 ```
 brew install ollama
 ollama serve              # leave running in another terminal
-ollama pull qwen2.5-coder:32b   # or whichever model you prefer
+ollama pull qwen3:32b     # or whichever model you prefer
 pip install ezdxf         # for DXF-based scoring
 ```
 
-If you have less RAM than 24GB, use a smaller model:
+Default model is `qwen3:32b`. To use a different one:
 ```
-ollama pull qwen2.5-coder:7b
-export OLLAMA_MODEL=qwen2.5-coder:7b
+export OLLAMA_MODEL=qwen2.5-coder:14b
+# or
+export OLLAMA_MODEL=qwen3:8b
 ```
 
 ## Run

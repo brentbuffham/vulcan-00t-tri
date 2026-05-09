@@ -144,12 +144,20 @@ HYPOTHESIS: SKIP — <reason>
 
 
 DIFF_RE = re.compile(r'```(?:diff)?\n(.*?)```', re.DOTALL)
+THINK_RE = re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE)
+
+
+def strip_thinking(response: str) -> str:
+    """Remove <think>...</think> blocks (qwen3 default thinking mode)."""
+    return THINK_RE.sub('', response).strip()
 
 
 def parse_response(response: str):
-    """Extract (hypothesis, diff) from the LLM response."""
+    """Extract (hypothesis, diff) from the LLM response. Strips qwen3 think blocks first."""
+    body = strip_thinking(response)
+
     hypothesis = ''
-    for line in response.splitlines():
+    for line in body.splitlines():
         if line.strip().upper().startswith('HYPOTHESIS:'):
             hypothesis = line.split(':', 1)[1].strip()
             break
@@ -159,7 +167,7 @@ def parse_response(response: str):
     if hypothesis.upper().startswith('SKIP'):
         return hypothesis, None
 
-    m = DIFF_RE.search(response)
+    m = DIFF_RE.search(body)
     if not m:
         return hypothesis, None
     diff = m.group(1)
@@ -206,7 +214,7 @@ def append_log(entry: dict):
 
 
 def main():
-    print(f'Agent loop starting. Model: {os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:32b")}')
+    print(f'Agent loop starting. Model: {os.environ.get("OLLAMA_MODEL", "qwen3:32b")}')
     if not llm_client.check_available():
         print(f'❌ Ollama not reachable. Run `ollama serve` and pull the model first.')
         return 1

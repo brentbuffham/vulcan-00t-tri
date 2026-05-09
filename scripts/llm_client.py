@@ -12,7 +12,7 @@ import urllib.error
 
 
 OLLAMA_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434/api/generate')
-OLLAMA_MODEL = os.environ.get('OLLAMA_MODEL', 'qwen2.5-coder:32b')
+OLLAMA_MODEL = os.environ.get('OLLAMA_MODEL', 'qwen3:32b')
 
 
 def call(prompt: str, timeout: int = 600) -> str:

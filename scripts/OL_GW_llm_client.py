@@ -24,6 +24,9 @@ def call(prompt: str, timeout: int = 600) -> str:
         'options': {
             'temperature': 0.7,
             'num_predict': 2048,
+            # Default ollama context is 4096 tokens — our prompts are larger
+            # (parser source + history + research). 16384 fits comfortably.
+            'num_ctx': 16384,
         }
     }
     req = urllib.request.Request(

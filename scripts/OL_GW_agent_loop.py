@@ -62,18 +62,37 @@ def parser_source() -> str:
     return PARSER_PATH.read_text()
 
 
-def history_excerpt(max_chars=8000) -> str:
+def history_excerpt(max_chars=3000) -> str:
     if not HISTORY_PATH.exists():
         return ''
     text = HISTORY_PATH.read_text()
     return text[-max_chars:]
 
 
-def research_excerpt(max_chars=8000) -> str:
+def research_excerpt(max_chars=3000) -> str:
     if not RESEARCH_PATH.exists():
         return ''
     text = RESEARCH_PATH.read_text()
     return text[-max_chars:]
+
+
+def parser_assign_axes_section(max_chars=4000) -> str:
+    """Extract just the assign_axes function from the parser (most relevant
+    for axis cracking). If we can't find it, fall back to last 4KB."""
+    src = parser_source()
+    # Find the start of `def assign_axes(`
+    start = src.find('def assign_axes(')
+    if start < 0:
+        return src[-max_chars:]
+    # End at the next top-level `def ` or class
+    rest = src[start:]
+    end = max_chars
+    # Find a sensible cutoff — first `\n\n\ndef ` or `\nclass ` after start
+    for marker in ['\n\n\ndef ', '\nclass ', '\n\ndef trim_coord_groups']:
+        idx = rest.find(marker, 100)
+        if 0 < idx < end:
+            end = idx
+    return rest[:end]
 
 
 def build_prompt(scores_before: dict) -> str:
@@ -123,9 +142,10 @@ RESEARCH NOTES (last 8KB of CUBE_GRAMMAR_RESEARCH.md)
 {research_excerpt()}
 
 ================================================================
-CURRENT PARSER (python/oot_parser_v2.py — last 12KB so you see assign_axes)
+CURRENT PARSER — assign_axes() function (python/oot_parser_v2.py)
+This is the function most likely to need updating for axis-related rules.
 ================================================================
-{parser_source()[-12000:]}
+{parser_assign_axes_section()}
 
 ================================================================
 YOUR OUTPUT (strictly this format, nothing else)

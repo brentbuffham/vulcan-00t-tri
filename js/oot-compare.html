@@ -666,7 +666,9 @@ function parseOOT(arrayBuffer) {
         let smPred = null;
         if (lastSep === 0x17) {
           if (firstE0Lo !== null) {
-            if (firstE0Lo === 7) smPred = prev_g.axis;
+            // TEST-058 refined (cube.00t evidence): lo=7 (cube1 small-value
+            // SAME) and lo=A (cube.00t medium-value SAME UTM) both STAY.
+            if (firstE0Lo === 7 || firstE0Lo === 0xA) smPred = prev_g.axis;
             else if (firstE0Lo < 7) smPred = (prev_g.axis - 1 + 3) % 3;
             else smPred = (prev_g.axis + 1) % 3;
           }

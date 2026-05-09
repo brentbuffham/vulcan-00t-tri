@@ -259,10 +259,43 @@ def apply_search_replace(search: str, replace: str) -> tuple:
                     return True, 'whitespace-normalized'
                 break
 
-    # 4. Try matching just the first line as an anchor (last resort)
+    # 4. First+last line anchor: find both unique lines in source, replace
+    #    everything between them inclusive with the REPLACE block.
+    search_lines = [ln for ln in search.strip().splitlines() if ln.strip()]
+    if len(search_lines) >= 2:
+        first_line = search_lines[0].strip()
+        last_line = search_lines[-1].strip()
+        src_lines = src.splitlines()
+        first_idx = None
+        last_idx = None
+        for i, sl in enumerate(src_lines):
+            if sl.strip() == first_line:
+                if first_idx is None:
+                    first_idx = i
+                else:
+                    first_idx = -1  # ambiguous
+                    break
+        for i, sl in enumerate(src_lines):
+            if sl.strip() == last_line:
+                if last_idx is None or last_idx < (first_idx or 0):
+                    last_idx = i
+                # find the LAST occurrence after first_idx for ambiguity safety
+        if (first_idx is not None and first_idx >= 0 and last_idx is not None
+                and last_idx >= first_idx):
+            # Validate: the spanned block should be small enough that this isn't
+            # accidentally swallowing huge unrelated regions
+            span = last_idx - first_idx + 1
+            if span <= len(search_lines) * 2 + 4:
+                # Replace lines [first_idx .. last_idx] inclusive with replace block
+                replace_lines = replace.strip().splitlines()
+                new_src_lines = src_lines[:first_idx] + replace_lines + src_lines[last_idx + 1:]
+                PARSER_PATH.write_text('\n'.join(new_src_lines) + '\n')
+                return True, f'anchor-matched (span {span} lines)'
+
+    # Last resort: report what we tried
     first_line = search.strip().splitlines()[0].strip() if search.strip() else ''
     if first_line and src.count(first_line) == 1:
-        return False, f'SEARCH block not found exactly. Anchor line "{first_line[:60]}" exists once though — LLM probably altered the search block when copying.'
+        return False, f'SEARCH block not found exactly. Anchor line "{first_line[:60]}" exists once though — LLM altered the search block when copying.'
 
     return False, 'SEARCH block not found in parser source'
 

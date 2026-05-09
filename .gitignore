@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Claude Code session noise
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+
+# Old loop counters
+.loop_iter_count
+.cube_loop_iter
+.sphere_loop_iter
+
+# Python caches
+__pycache__/
+*.pyc

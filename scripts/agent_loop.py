@@ -220,13 +220,16 @@ def main():
         return 1
     print('✓ Ollama OK')
 
-    # Verify clean working tree before starting
-    p = git('status', '--porcelain', check=False)
+    # Verify the parser file is clean (only one we'll modify). Allow other
+    # untracked/dirty files (.DS_Store, .claude/*, etc.) since the agent
+    # doesn't touch them.
+    p = git('status', '--porcelain', str(PARSER_PATH), check=False)
     if p.stdout.strip():
-        print('❌ Working tree not clean. Commit or stash first:')
+        print(f'❌ {PARSER_PATH} has uncommitted changes:')
         print(p.stdout)
+        print('Commit or revert before running the agent.')
         return 1
-    print('✓ Working tree clean')
+    print(f'✓ {PARSER_PATH.name} is clean')
 
     iter_num = 0
     while True:

@@ -14,12 +14,12 @@ For each iteration:
   9. Repeat until interrupted (Ctrl-C) or stop_file present
 
 Run:
-  python3 scripts/agent_loop.py
+  python3 scripts/OL_GW_agent_loop.py
 Stop gracefully:
   touch agent_runs/STOP
 
 Configure via env:
-  OLLAMA_MODEL=qwen2.5-coder:32b   (default)
+  OLLAMA_MODEL=qwen3:32b           (default)
   AGENT_DELAY=2                    (seconds between iterations)
   AGENT_MAX_ITERS=0                (0 = unlimited)
 """
@@ -36,9 +36,9 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / 'scripts'))
 
-import llm_client
-import agent_safety
-import regression
+import OL_GW_llm_client as llm_client
+import OL_GW_agent_safety as agent_safety
+import OL_GW_regression as regression
 
 
 PARSER_PATH = ROOT / 'python' / 'oot_parser_v2.py'

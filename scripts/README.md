@@ -1,4 +1,7 @@
-# Autonomous OOT-parser cracking agent
+# OL-GW autonomous OOT-parser cracking agent
+
+`OL_GW_*` = **O**l**l**ama-**G**w**en** (Qwen). All files in this directory are
+part of the local-LLM agent harness.
 
 A Python loop that uses local Ollama (with Qwen or any code-capable model)
 to propose, test, and commit incremental improvements to the .00t parser.
@@ -36,7 +39,7 @@ export OLLAMA_MODEL=qwen3:8b
 
 From the repo root:
 ```
-python3 scripts/agent_loop.py
+python3 scripts/OL_GW_agent_loop.py
 ```
 
 It will run until you stop it. To stop gracefully (after the current iteration):
@@ -51,17 +54,17 @@ Or just Ctrl-C — the parser will be reverted to HEAD before exit.
 | Var | Default | Meaning |
 |---|---|---|
 | `OLLAMA_URL` | `http://localhost:11434/api/generate` | Ollama API endpoint |
-| `OLLAMA_MODEL` | `qwen2.5-coder:32b` | Model name pulled in Ollama |
+| `OLLAMA_MODEL` | `qwen3:32b` | Model name pulled in Ollama |
 | `AGENT_DELAY` | `2` | Seconds between iterations |
 | `AGENT_MAX_ITERS` | `0` (unlimited) | Stop after N iterations |
 
 ## Files in this directory
 
-- `agent_loop.py` — main loop
-- `regression.py` — runs the parser, scores against DXF + ground truth
-- `ground_truth.py` — known cube corners + thresholds for solved files
-- `llm_client.py` — Ollama API client
-- `agent_safety.py` — forbidden-pattern static checks
+- `OL_GW_agent_loop.py` — main loop
+- `OL_GW_regression.py` — runs the parser, scores against DXF + ground truth
+- `OL_GW_ground_truth.py` — known cube corners + thresholds for solved files
+- `OL_GW_llm_client.py` — Ollama API client
+- `OL_GW_agent_safety.py` — forbidden-pattern static checks
 - `README.md` — this file
 
 ## What the agent CAN'T do
@@ -95,9 +98,9 @@ If iterations keep failing at "no diff" or "diff didn't apply":
 - Check `agent_runs/log.jsonl` — recent entries show what the LLM said
 - Try a different model (qwen2.5-coder is usually good at diffs; tiny models
   might need more guidance)
-- Increase the prompt detail in `agent_loop.py`'s `build_prompt()`
+- Increase the prompt detail in `OL_GW_agent_loop.py`'s `build_prompt()`
 
 If scores never improve:
-- Check that the baseline scores are sensible: `python3 scripts/regression.py`
+- Check that the baseline scores are sensible: `python3 scripts/OL_GW_regression.py`
 - The agent is asking the LLM to crack genuinely hard remaining problems;
   you may need to tune the prompt with hints about what to focus on

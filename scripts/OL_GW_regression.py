@@ -14,7 +14,7 @@ from typing import Dict, Any
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / 'python'))
 
-from ground_truth import GT, SOLVED_THRESHOLDS, coverage as gt_coverage  # noqa: E402
+from OL_GW_ground_truth import GT, SOLVED_THRESHOLDS, coverage as gt_coverage  # noqa: E402
 
 
 def _load_dxf_vertices(dxf_path):

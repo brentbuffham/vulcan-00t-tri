@@ -152,19 +152,48 @@ YOUR OUTPUT (strictly this format, nothing else)
 ================================================================
 HYPOTHESIS: <one-line description of the rule you're testing>
 
-```diff
-<unified diff against python/oot_parser_v2.py — must apply cleanly with `git apply`>
+SEARCH:
+```
+<exact code from python/oot_parser_v2.py that you want to replace —
+copy it VERBATIM including indentation. Must be unique in the file.>
+```
+
+REPLACE:
+```
+<new code to replace it with — full block including indentation>
+```
+
+EXAMPLE:
+HYPOTHESIS: lo=B in E0 tag means cycle forward (cube.00t evidence)
+
+SEARCH:
+```
+                elif first_e0_lo < 7:
+                    sm_pred = (prev_g.axis - 1) % 3  # CYCLE BACK
+                else:  # lo in {{8, 9, B, C, D, E, F}}
+                    sm_pred = (prev_g.axis + 1) % 3  # CYCLE FORWARD
+```
+
+REPLACE:
+```
+                elif first_e0_lo < 7:
+                    sm_pred = (prev_g.axis - 1) % 3  # CYCLE BACK
+                elif first_e0_lo == 0xB:
+                    sm_pred = (prev_g.axis + 1) % 3  # cube.00t-style overlay
+                else:
+                    sm_pred = (prev_g.axis + 1) % 3  # CYCLE FORWARD
 ```
 
 If you can't think of a productive change, output:
 HYPOTHESIS: SKIP — <reason>
 
-(no diff — the agent will skip this iteration)
+(no SEARCH/REPLACE — the agent will skip this iteration)
 '''
 
 
-DIFF_RE = re.compile(r'```(?:diff)?\n(.*?)```', re.DOTALL)
 THINK_RE = re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE)
+SEARCH_RE = re.compile(r'SEARCH:\s*```(?:\w+)?\n(.*?)```', re.DOTALL | re.IGNORECASE)
+REPLACE_RE = re.compile(r'REPLACE:\s*```(?:\w+)?\n(.*?)```', re.DOTALL | re.IGNORECASE)
 
 
 def strip_thinking(response: str) -> str:
@@ -173,7 +202,7 @@ def strip_thinking(response: str) -> str:
 
 
 def parse_response(response: str):
-    """Extract (hypothesis, diff) from the LLM response. Strips qwen3 think blocks first."""
+    """Extract (hypothesis, search_block, replace_block) from the LLM response."""
     body = strip_thinking(response)
 
     hypothesis = ''
@@ -185,29 +214,34 @@ def parse_response(response: str):
         hypothesis = '(no hypothesis line)'
 
     if hypothesis.upper().startswith('SKIP'):
-        return hypothesis, None
+        return hypothesis, None, None
 
-    m = DIFF_RE.search(body)
-    if not m:
-        return hypothesis, None
-    diff = m.group(1)
-    # Strip leading/trailing whitespace; ensure trailing newline
-    if not diff.endswith('\n'):
-        diff += '\n'
-    return hypothesis, diff
+    s = SEARCH_RE.search(body)
+    r = REPLACE_RE.search(body)
+    if not s or not r:
+        return hypothesis, None, None
+    return hypothesis, s.group(1), r.group(1)
 
 
-def apply_diff(diff_text: str) -> tuple:
-    """Try git apply --check then git apply. Return (success, error_msg)."""
-    p = subprocess.run(['git', 'apply', '--check'], input=diff_text,
-                       capture_output=True, text=True, cwd=str(ROOT))
-    if p.returncode != 0:
-        return False, p.stderr.strip()
-    p = subprocess.run(['git', 'apply'], input=diff_text,
-                       capture_output=True, text=True, cwd=str(ROOT))
-    if p.returncode != 0:
-        return False, p.stderr.strip()
-    return True, ''
+def apply_search_replace(search: str, replace: str) -> tuple:
+    """Find `search` in PARSER_PATH and replace with `replace`.
+    Returns (success, error_msg)."""
+    src = PARSER_PATH.read_text()
+    # Try exact match first
+    if search in src:
+        # Must be unique
+        if src.count(search) > 1:
+            return False, f'SEARCH block matches {src.count(search)} times — must be unique'
+        new_src = src.replace(search, replace)
+        PARSER_PATH.write_text(new_src)
+        return True, ''
+    # Try without leading/trailing whitespace
+    stripped = search.strip()
+    if stripped in src and src.count(stripped) == 1:
+        new_src = src.replace(stripped, replace.strip())
+        PARSER_PATH.write_text(new_src)
+        return True, '(matched after stripping)'
+    return False, 'SEARCH block not found in parser source'
 
 
 def revert():
@@ -281,18 +315,20 @@ def main():
             time.sleep(DELAY * 5)
             continue
 
-        hypothesis, diff = parse_response(response)
+        hypothesis, search, replace = parse_response(response)
         print(f'  hypothesis: {hypothesis}')
 
-        if diff is None:
-            print(f'  → no diff (skip)')
+        if search is None or replace is None:
+            print(f'  → no SEARCH/REPLACE block (skip)')
             append_log({'iter': iter_num, 'ts': ts, 'hypothesis': hypothesis,
-                        'decision': 'skip_no_diff'})
+                        'decision': 'skip_no_blocks'})
             time.sleep(DELAY)
             continue
 
-        # Safety check
-        findings = agent_safety.scan_diff(diff)
+        # Safety check on the REPLACE block (the new code being added)
+        # Format it as a fake "+" diff for the existing scan_diff function
+        fake_diff = '\n'.join('+' + ln for ln in replace.splitlines())
+        findings = agent_safety.scan_diff(fake_diff)
         if findings:
             reasons = '; '.join(f['reason'] for f in findings)
             print(f'  → REJECTED by safety check: {reasons}')
@@ -301,10 +337,10 @@ def main():
             time.sleep(DELAY)
             continue
 
-        # Apply diff
-        ok, err = apply_diff(diff)
+        # Apply search/replace
+        ok, err = apply_search_replace(search, replace)
         if not ok:
-            print(f'  → diff did not apply: {err[:200]}')
+            print(f'  → patch did not apply: {err[:200]}')
             append_log({'iter': iter_num, 'ts': ts, 'hypothesis': hypothesis,
                         'decision': 'reject_apply', 'error': err[:500]})
             time.sleep(DELAY)

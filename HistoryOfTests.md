@@ -1148,3 +1148,22 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
   - Recognizes 4-Prism's `E0:0F + SEP 0x17` as CYCLE FORWARD (correct)
   - Falls back to closest-delta when no SEP signal exists (plane G3, prism's tag-only path)
 - **What's still left:** Cube1 is at 5/8 (not 8/8) because the slot-assignment phase (after the 6 base-coord groups) still has decoder issues — slot tags aren't building the missing 3 corners. Cube2-5 still need their FULL-run-mode axis rules derived (this state machine targets count-encoded mode).
+
+---
+
+### TEST-061: REVERT TEST-060 — geometric cube completer is a fast path
+- **Status:** Committed. cube1 returns to byte-decoded baseline (5/8 corners). All other files unchanged.
+- **User directive:** "Cube1 ✓ │ 8 │ 2×2×2 axis-aligned │ UNSOLVED" — the completer's 8/8 was geometric inference, not byte decoding. Same anti-pattern as TEST-050/051/052 reverted in TEST-053.
+- **What was reverted:** `_axis_aligned_cube_complete()` in `python/oot_parser_v2.py` and the equivalent block in `js/oot-compare.html`. Removed.
+- **Why it was a fast path:** The completer detected "exactly 2 unique values per axis after outlier filter, with sane aspect ratio" → emit all 8 lattice combinations. This is a geometric heuristic that does NOT decode the bytes. The encoder writes specific bytes for specific corners; if our parser only emits 5 of the 8 from the byte stream, the truth is "5/8 byte-decoded" — not "8/8 inferred".
+- **Honest baseline post-revert (cube1+2+3 corners covered):**
+  | File | Verts | Faces | Corners | Distinct values found |
+  |---|---|---|---|---|
+  | cube1 | 9 | 12 | 5/8 | 6/6 |
+  | cube2 | 7 | 8 | 1/8 | 8/10 |
+  | cube3 | 9 | 12 | 1/8 | 7/10 |
+  | cube4 | 18 | 10 | (no GT) | 6/10 best-fit |
+  | cube5 | 26 | 11 | (no GT) | 6/10 best-fit |
+- **Total cube corners covered (cube1+2+3): 7/24.** This is the honest cube baseline; brute force will be measured against it.
+- **What's preserved (real wins documented in WINS.md):** TEST-040 multi-section, TEST-049 escape stripping, TEST-056 misalignment detection, TEST-057 sane-sequel, TEST-058 SEP+E0:lo state machine. These are genuine byte-derived rules.
+- **What this enables:** A cube-focused brute-force harness can now measure improvements against the honest 7/24 baseline. Any rule that pushes corners coverage up is real cracking; any that gates on signature matches is a fast path and gets reverted.

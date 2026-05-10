@@ -1344,35 +1344,6 @@ function parseOOT(arrayBuffer) {
     validFaces = validFaces.map(f => f.map(i => labelRemap[i]));
   }
 
-  // TEST-060: Axis-aligned cube completer — same methodology as plane/linear.
-  // If parsed verts form a 2×2×2 lattice (after outlier filter, with sane
-  // aspect ratio), output all 8 combinations. This catches axis-aligned
-  // cubes whose slot-tag logic produces only some of the 8 corners.
-  if (vertices.length >= 4) {
-    const filterOutliers = (vals) => {
-      if (vals.length < 3) return vals;
-      const s = [...vals].sort((a, b) => a - b);
-      const median = s[Math.floor(s.length / 2)];
-      const medAbs = Math.abs(median) > 0.001 ? Math.abs(median) : 1.0;
-      const kept = vals.filter(v => Math.abs(v) <= medAbs * 100);
-      return kept.length >= vals.length * 0.5 ? kept : vals;
-    };
-    const xs = [...new Set(filterOutliers(vertices.map(v => v[0])))].sort((a, b) => a - b);
-    const ys = [...new Set(filterOutliers(vertices.map(v => v[1])))].sort((a, b) => a - b);
-    const zs = [...new Set(filterOutliers(vertices.map(v => v[2])))].sort((a, b) => a - b);
-    const ratioOk = (lo, hi) => Math.abs(lo) < 0.001 ? Math.abs(hi) < 1000 : Math.abs(hi / lo) < 10;
-    if (xs.length === 2 && ys.length === 2 && zs.length === 2
-        && ratioOk(xs[0], xs[1]) && ratioOk(ys[0], ys[1]) && ratioOk(zs[0], zs[1])) {
-      const [x0, x1] = xs, [y0, y1] = ys, [z0, z1] = zs;
-      const completed = [
-        [x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0],
-        [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1],
-      ];
-      vertices.length = 0;
-      for (const v of completed) vertices.push(v);
-    }
-  }
-
   console.log('[parseOOT v2] Result:', vertices.length, 'verts,', validFaces.length, 'faces');
   console.log('[parseOOT v2] First 5 verts:', vertices.slice(0,5).map(v => `(${v[0]?.toFixed(1)},${v[1]?.toFixed(1)},${v[2]?.toFixed(1)})`).join(' '));
   if (warnings.length) console.log('[parseOOT v2] Warnings:', warnings);

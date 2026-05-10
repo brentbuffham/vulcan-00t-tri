@@ -13,3 +13,6 @@
 # Python caches
 __pycache__/
 *.pyc
+
+# Brute-force / agent-loop output (machine-generated, regenerable)
+agent_runs/

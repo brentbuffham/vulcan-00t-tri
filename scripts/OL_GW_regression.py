@@ -45,8 +45,10 @@ def _load_dxf_vertices(dxf_path):
     return seen
 
 
-def _vertex_match(parsed, dxf, tol=1.0):
-    """Count how many DXF verts are in parsed verts."""
+def _vertex_match(parsed, dxf, tol=1.5):
+    """Count how many DXF verts are in parsed verts.
+    tol=1.5 matches gt_coverage()'s tolerance and accommodates Vulcan's
+    decimal-precision drift (e.g. 49.992 → 50 is a correct decode)."""
     matched = 0
     for d in dxf:
         for v in parsed:

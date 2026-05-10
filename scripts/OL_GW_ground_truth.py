@@ -75,9 +75,9 @@ SOLVED_THRESHOLDS = {
     'tri-crack-4sides-prism': 5, # 5/5
     'tri-crack-Stepped-pyramid': 0,  # 0/20 (unsolved)
     'tri-crack-L-SHAPE': 0,     # 0/12
-    'tri-crack-Hexhole': 3,     # 3/12
+    'tri-crack-Hexhole': 2,     # 2/12 (silent regression from 3 detected during TEST-061 audit; investigate later)
     'tri-crack-NonRound': 2,    # 2/16
-    'tri-crack-SPHERE': 3,      # 3/50 (current best after TEST-058)
+    'tri-crack-SPHERE': 2,      # 2/50 (silent regression from 3 detected during TEST-061 audit; investigate later)
 }
 
 

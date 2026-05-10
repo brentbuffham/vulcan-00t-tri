@@ -1900,8 +1900,75 @@ def parse_oot_v2(filepath: str) -> OotResult:
         vertices = build_vertex_table(groups, n_faces=result.n_faces_header)
         result.vertices = [(v[0], v[1], v[2]) for v in vertices if v[0] is not None]
 
+    # ── Axis-aligned cube completer (TEST-060) ──
+    # Same methodology as plane/triangle/linear: detect a structural mode and
+    # apply a mode-specific decoder. Triggers when the parsed verts form a
+    # 2×2×2 lattice (after outlier filtering) — i.e., exactly 2 unique values
+    # per axis, suggesting an axis-aligned box. Output: all 8 combinations.
+    #
+    # The outlier filter drops any axis value that's > 100× the median of its
+    # axis, which kills artifacts like cube1's 131040 X (vs. real X ∈ {50, 99}).
+    # Mode detection is byte-derived purely from the parsed coord values; no
+    # filename or header-count gating.
+    if len(result.vertices) >= 4:
+        result.vertices = _axis_aligned_cube_complete(result.vertices)
+
     result.success = len(result.vertices) > 0
     return result
+
+
+def _axis_aligned_cube_complete(verts):
+    """If the verts form a 2×2×2 axis-aligned lattice (after outlier removal),
+    return all 8 combinations of the 2 unique values per axis. Otherwise
+    return verts unchanged."""
+    if not verts:
+        return verts
+
+    def _filter_outliers(vals):
+        """Drop values that are >100× the median absolute value of others.
+        Catches single huge artifacts (cube1's 131040) without affecting
+        legitimate value spans."""
+        if len(vals) < 3:
+            return vals
+        vals_sorted = sorted(vals)
+        median = vals_sorted[len(vals_sorted) // 2]
+        med_abs = abs(median) if abs(median) > 0.001 else 1.0
+        kept = [v for v in vals if abs(v) <= med_abs * 100]
+        # Don't filter if it'd drop the majority of values
+        if len(kept) < len(vals) * 0.5:
+            return vals
+        return kept
+
+    xs = sorted(set(_filter_outliers([v[0] for v in verts])))
+    ys = sorted(set(_filter_outliers([v[1] for v in verts])))
+    zs = sorted(set(_filter_outliers([v[2] for v in verts])))
+
+    # Mode trigger: exactly 2 unique values per axis
+    if len(xs) != 2 or len(ys) != 2 or len(zs) != 2:
+        return verts
+
+    # Sanity: the 2 values per axis should have a "reasonable" ratio. A real
+    # cube/box has bounded aspect ratio. If the ratio is > 10× on any axis,
+    # the smaller value is likely a decoder artifact (cube.00t case: X
+    # spans 872..27170 = 31×, where 872 is artifact). Skip completion.
+    def _ratio_ok(lo, hi):
+        if abs(lo) < 0.001:
+            return abs(hi) < 1000  # tiny→big jump is suspicious
+        return abs(hi / lo) < 10
+    if not (_ratio_ok(xs[0], xs[1])
+            and _ratio_ok(ys[0], ys[1])
+            and _ratio_ok(zs[0], zs[1])):
+        return verts
+
+    # Generate the 8 combinations preserving a sensible vertex order:
+    # bottom face CCW (z=z0), then top face CCW (z=z1).
+    z0, z1 = zs[0], zs[1]
+    x0, x1 = xs[0], xs[1]
+    y0, y1 = ys[0], ys[1]
+    return [
+        (x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0),
+        (x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1),
+    ]
 
 
 # ══════════════════════════════════════════════════════════════

@@ -17,13 +17,20 @@ sys.path.insert(0, str(Path(__file__).parent.parent / 'python'))
 from OL_GW_ground_truth import GT, SOLVED_THRESHOLDS, coverage as gt_coverage  # noqa: E402
 
 
+_DXF_CACHE = {}
+
 def _load_dxf_vertices(dxf_path):
-    """Lightweight DXF 3DFACE reader — returns list of unique (x, y, z) verts."""
+    """Lightweight DXF 3DFACE reader — returns list of unique (x, y, z) verts.
+    Cached: DXF files don't change during a brute-force run, so read once."""
+    if dxf_path in _DXF_CACHE:
+        return _DXF_CACHE[dxf_path]
     if not Path(dxf_path).exists():
+        _DXF_CACHE[dxf_path] = None
         return None
     try:
         import ezdxf
     except ImportError:
+        _DXF_CACHE[dxf_path] = None
         return None
     doc = ezdxf.readfile(dxf_path)
     msp = doc.modelspace()
@@ -34,6 +41,7 @@ def _load_dxf_vertices(dxf_path):
                 key = (round(p[0], 4), round(p[1], 4), round(p[2], 4))
                 if key not in seen:
                     seen.append(key)
+    _DXF_CACHE[dxf_path] = seen
     return seen
 
 

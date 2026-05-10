@@ -49,6 +49,30 @@ def _vertex_match(parsed, dxf, tol=1.0):
     return matched
 
 
+def _value_match(parsed_verts, expected_corners, tol=1.5):
+    """Count how many distinct expected coord VALUES (per axis) appear anywhere
+    in the parsed verts. More sensitive than corner-tuple matching: if Y=157420
+    appears in any vertex, that's a hit even if X/Z are wrong on that vertex."""
+    if not expected_corners:
+        return None, None
+    expected_xs = sorted({c[0] for c in expected_corners})
+    expected_ys = sorted({c[1] for c in expected_corners})
+    expected_zs = sorted({c[2] for c in expected_corners})
+
+    parsed_xs = {v[0] for v in parsed_verts}
+    parsed_ys = {v[1] for v in parsed_verts}
+    parsed_zs = {v[2] for v in parsed_verts}
+
+    def hit_count(expected, parsed):
+        return sum(1 for e in expected if any(abs(p - e) < tol for p in parsed))
+
+    matched = (hit_count(expected_xs, parsed_xs)
+               + hit_count(expected_ys, parsed_ys)
+               + hit_count(expected_zs, parsed_zs))
+    total = len(expected_xs) + len(expected_ys) + len(expected_zs)
+    return matched, total
+
+
 def run_full_regression() -> Dict[str, Any]:
     """Parse every example file and return a dict of {basename: scores}."""
     import oot_parser_v2 as P
@@ -63,6 +87,7 @@ def run_full_regression() -> Dict[str, Any]:
                 'error': str(e),
                 'verts': 0, 'faces': 0,
                 'dxf_match': None, 'gt_coverage': None,
+                'value_match': None, 'value_total': None,
                 'header_verts': None, 'header_faces': None,
             }
             continue
@@ -87,8 +112,10 @@ def run_full_regression() -> Dict[str, Any]:
                     break
         # Ground truth coverage (cubes/skyscraper)
         gt_cov = None
+        value_match, value_total = None, None
         if name in GT and GT[name] is not None:
             gt_cov = gt_coverage(res.vertices, GT[name])
+            value_match, value_total = _value_match(res.vertices, GT[name])
         results[name] = {
             'verts': len(res.vertices),
             'faces': len(res.faces),
@@ -98,36 +125,25 @@ def run_full_regression() -> Dict[str, Any]:
             'dxf_total': dxf_total,
             'gt_coverage': gt_cov,
             'gt_total': len(GT[name]) if name in GT and GT[name] else None,
+            'value_match': value_match,
+            'value_total': value_total,
         }
     return results
 
 
 def is_regression(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, Any]:
-    """Return regression info: any file whose dxf_match or gt_coverage DROPPED.
-    Compares directly against the before-state — no fixed thresholds — so the
-    agent only reverts if a score actually went down vs. the previous baseline."""
+    """Return regression info: any file whose tracked score DROPPED."""
     regressions = []
     for name in after:
         if name not in before:
             continue
-        # DXF match drop
-        before_dxf = before[name].get('dxf_match')
-        after_dxf = after[name].get('dxf_match')
-        if (before_dxf is not None and after_dxf is not None
-                and after_dxf < before_dxf):
-            regressions.append({
-                'file': name, 'metric': 'dxf_match',
-                'before': before_dxf, 'after': after_dxf,
-            })
-        # GT coverage drop
-        before_gt = before[name].get('gt_coverage')
-        after_gt = after[name].get('gt_coverage')
-        if (before_gt is not None and after_gt is not None
-                and after_gt < before_gt):
-            regressions.append({
-                'file': name, 'metric': 'gt_coverage',
-                'before': before_gt, 'after': after_gt,
-            })
+        for metric in ('dxf_match', 'gt_coverage', 'value_match'):
+            b = before[name].get(metric)
+            a = after[name].get(metric)
+            if b is not None and a is not None and a < b:
+                regressions.append({
+                    'file': name, 'metric': metric, 'before': b, 'after': a,
+                })
     return regressions
 
 
@@ -137,16 +153,13 @@ def is_improvement(before: Dict[str, Any], after: Dict[str, Any]) -> Dict[str, A
     for name in after:
         if name not in before:
             continue
-        # DXF match improvement
-        before_dxf = before[name].get('dxf_match')
-        after_dxf = after[name].get('dxf_match')
-        if before_dxf is not None and after_dxf is not None and after_dxf > before_dxf:
-            improvements.append({'file': name, 'metric': 'dxf_match', 'before': before_dxf, 'after': after_dxf})
-        # GT coverage improvement
-        before_gt = before[name].get('gt_coverage')
-        after_gt = after[name].get('gt_coverage')
-        if before_gt is not None and after_gt is not None and after_gt > before_gt:
-            improvements.append({'file': name, 'metric': 'gt_coverage', 'before': before_gt, 'after': after_gt})
+        for metric in ('dxf_match', 'gt_coverage', 'value_match'):
+            b = before[name].get(metric)
+            a = after[name].get(metric)
+            if b is not None and a is not None and a > b:
+                improvements.append({
+                    'file': name, 'metric': metric, 'before': b, 'after': a,
+                })
     return improvements
 
 
@@ -160,7 +173,8 @@ def summarize(scores: Dict[str, Any]) -> str:
             continue
         dxf_str = f'dxf={s["dxf_match"]}/{s["dxf_total"]}' if s['dxf_match'] is not None else 'dxf=-'
         gt_str = f'gt={s["gt_coverage"]}/{s["gt_total"]}' if s['gt_coverage'] is not None else ''
-        lines.append(f'  {name:35} {s["verts"]:4}v {s["faces"]:4}f  {dxf_str:12} {gt_str}')
+        val_str = f'val={s["value_match"]}/{s["value_total"]}' if s.get('value_match') is not None else ''
+        lines.append(f'  {name:35} {s["verts"]:4}v {s["faces"]:4}f  {dxf_str:12} {gt_str:8} {val_str}')
     return '\n'.join(lines)
 
 

@@ -1198,6 +1198,40 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
 
 ---
 
+### TEST-069: Mode B branch architecture + hexhole/nonround coord-decoder confirmed bottleneck
+- **Status:** Mode B isolated branch shipped in Python + JS (commit 7d2638b);
+  doesn't fire on current corpus due to upstream coord decoder bugs.
+- **Architecture (parallel to Mode C TEST-067):**
+  - Detection: G2 first tag class == 'E0' AND coord_groups_to_verts(trimmed)
+    count >= n_verts_header
+  - Pipeline: shared_base CLERS dispatch (every op = C) → forward EdgeBreaker
+    decode with X=gate-rotation → coord_verts vertex table → dedup → return
+  - Same isolation as Mode C: no shared state with legacy parser
+- **Why it doesn't fire on current corpus:**
+  - Hexhole (TRIMMED): 6 coord_verts < 12 n_verts_header. Detection fails.
+    The 12-count from RAW groups was an accident — counted junk DELTA
+    values (-1299.75, 1984, etc.) as if they were verts.
+  - Nonround: G2 has NO tag (cls = None). Detection signature inapplicable.
+    Coord decoder produces junk: 1984, 47×3, 736×2, 221 (off-by-1 from
+    222.22), 199.46, 38.50, etc.
+  - Stepped: TAG-as-trigger (G0 starts with E0) — needs own detection.
+- **Common root cause across hexhole/nonround/stepped:**
+  - 3-byte short FULL rule over-fires (e.g., 221.0 emitted when real
+    value should be 222.22 from full IEEE bytes)
+  - IDELTA reconstruction degenerates (produces duplicates like 47×3)
+  - DELTA with large prev_diff produces nonsense (1984)
+  - Some encoder-specific signal (likely byte2=0x1B in coord region or
+    a tag class encoding) we haven't decoded
+- **Hexhole break point identified:** at coord byte 87, count=0x04 + bytes
+  `c0 00 01 e2 8f` literally decodes as IEEE -2.000920 — the encoder used
+  some non-standard interpretation for this byte sequence.
+- **Path forward:** Mode B architecture is ready. Next session needs
+  parse_coord_elements investigation to fix the value-decoding bugs for
+  hexhole/nonround/stepped specifically. Once clean values feed into
+  coord_groups_to_verts, Mode B branch will fire automatically.
+
+---
+
 ### TEST-068: Mode B is a COORD DECODER problem, not face decode (Phase 2 probe)
 - **Status:** Diagnostic only — no code change.
 - **Tested:** ran `coord_groups_to_verts` (Mode C pair-completion algorithm)

@@ -67,23 +67,33 @@ def encode(faces: Sequence[Tuple[int, int, int]],
         if n < 3:
             # Boundary degenerate — shouldn't happen for valid mesh
             break
-        gA = boundary[gate % n]
-        gB = boundary[(gate + 1) % n]
-        edge_key = frozenset((gA, gB))
-        tris = edge_to_tris.get(edge_key, [])
+        # Find the next gate position that has an unvisited triangle.
+        # For open meshes, the gate may sit on a boundary edge (1 tri, already
+        # visited) — rotate through gate positions until we find work.
         candidate = None
-        for fi in tris:
-            if fi not in visited:
-                candidate = fi
+        gA = None
+        gB = None
+        for try_offset in range(n):
+            g = (gate + try_offset) % n
+            ta = boundary[g % n]
+            tb = boundary[(g + 1) % n]
+            tris = edge_to_tris.get(frozenset((ta, tb)), [])
+            for fi in tris:
+                if fi not in visited:
+                    candidate = fi
+                    gate = g
+                    gA = ta
+                    gB = tb
+                    break
+            if candidate is not None:
                 break
         if candidate is None:
-            # Gate edge has no unvisited triangle. In a single-strip mesh,
-            # this means we've hit a dead-end and need to backtrack (S op).
-            # For now: error out — Vulcan corpus is expected to be single-strip.
+            # No unvisited triangle reachable from current boundary — truly stuck.
             return {
                 'clers': ''.join(clers), 'seed_tri': seed, 'trace': trace,
                 'success': False,
-                'error': f'dead end at gate ({gA}, {gB}); {len(faces) - len(visited)} faces unvisited',
+                'error': f'no unvisited triangle reachable from boundary {boundary}; '
+                         f'{len(faces) - len(visited)} faces unvisited',
             }
         visited.add(candidate)
         f = faces[candidate]

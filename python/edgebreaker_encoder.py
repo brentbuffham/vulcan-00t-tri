@@ -127,12 +127,38 @@ def encode(faces: Sequence[Tuple[int, int, int]],
             # New gate at (left_v, gB) — gate index shifts back by 1.
             gate = (gate - 1) % len(boundary)
         else:
+            # S op — the third vertex is on the boundary but not at left/right
+            # of gate. The triangle splits the boundary loop into two pieces.
+            # Find v_third's position in boundary.
+            try:
+                v_third_idx = boundary.index(v_third)
+            except ValueError:
+                return {
+                    'clers': ''.join(clers + ['S']), 'seed_tri': seed, 'trace': trace,
+                    'success': False,
+                    'error': f'S triangle vert {v_third} not found in boundary {boundary}',
+                }
             op = 'S'
-            # Split — would need stack. Not implemented.
+            # The triangle (gA, gB, v_third) creates a chord from gB to v_third
+            # (and gA to v_third). Boundary splits at gB..v_third and v_third..gA.
+            # Forward EB convention: push one half-loop on stack, continue with
+            # the other. We continue with the half containing gA (gate stays
+            # near current position).
+            # For diagnostic use only — face emission unchanged. We just emit
+            # 'S' and DO NOT recurse properly. After 'S' the encoder needs an
+            # 'E' on the stacked loop later. For counting purposes only.
+            # Simplification: emit 'S' and abort — we just want to count.
+            clers.append(op)
+            if verbose:
+                trace.append({'face': candidate, 'op': op, 'v_third': v_third,
+                              'boundary_before_split': list(boundary)})
+            # For now, abort — diagnostic completion via S count is what we need.
             return {
-                'clers': ''.join(clers + [op]), 'seed_tri': seed, 'trace': trace,
+                'clers': ''.join(clers), 'seed_tri': seed, 'trace': trace,
                 'success': False,
-                'error': f'S op encountered at face {candidate}; not implemented',
+                'partial': True,
+                'visited_count': len(visited), 'total_faces': len(faces),
+                'note': 'S op detected; encoder aborts after S for diagnostic mode',
             }
 
         # Detect E (end-of-strip): boundary down to 3 vertices and all faces

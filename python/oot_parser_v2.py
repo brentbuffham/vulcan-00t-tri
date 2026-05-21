@@ -1596,19 +1596,26 @@ def parse_oot_v2(filepath: str) -> OotResult:
                 except Exception as _mc_err:
                     result.warnings.append(f'Mode C decode failed: {_mc_err}; falling back')
                 else:
-                    # Map abstract IDs to coord_verts. Pad if decoder created
-                    # more IDs than coord_verts has (would indicate Mode C
-                    # signature is misfiring; pad with apex copies for safety).
                     _mc_verts_out = list(_mc_coord_verts)
                     while len(_mc_verts_out) < _mc_decoded['vertex_count']:
                         _mc_verts_out.append(_mc_verts_out[0])
-                    # Final result fields — no legacy state mixed in
+                    # Dedup faces: R ops at the end of CLERS often emit
+                    # triangles that duplicate (reverse-wind) earlier C
+                    # triangles — visible as Z-fighting in the viewer. Keep
+                    # only the first occurrence of each unordered vert set.
+                    _mc_seen_sets = set()
+                    _mc_unique_faces = []
+                    for _mc_f in _mc_decoded['faces']:
+                        _mc_key = tuple(sorted(_mc_f))
+                        if _mc_key not in _mc_seen_sets and len(set(_mc_f)) == 3:
+                            _mc_seen_sets.add(_mc_key)
+                            _mc_unique_faces.append(_mc_f)
                     result.vertices = [tuple(v) for v in _mc_verts_out]
-                    result.faces = list(_mc_decoded['faces'])
+                    result.faces = _mc_unique_faces
                     result.warnings.append(
                         f'Mode C branch: clers={_mc_clers!r}, '
                         f'seed={_mc_seed}, verts={len(result.vertices)}, '
-                        f'faces={len(result.faces)}'
+                        f'faces={len(result.faces)} (deduped from {len(_mc_decoded["faces"])})'
                     )
                     return result
         # ──── End Mode C branch ─────────────────────────────────────────

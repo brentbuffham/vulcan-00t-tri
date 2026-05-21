@@ -1282,10 +1282,22 @@ function parseOOT(arrayBuffer) {
           const _mcDecoded = _mcDecodeForward(_mcClers, [1, 2, 0]);
           const _mcVertsOut = _mcCoordVerts.slice();
           while (_mcVertsOut.length < _mcDecoded.vertexCount) _mcVertsOut.push(_mcVertsOut[0].slice());
-          warnings.push(`Mode C branch: clers='${_mcClers}', seed=[1,2,0], verts=${_mcVertsOut.length}, faces=${_mcDecoded.faces.length}`);
+          // Dedup faces: R ops at end of CLERS often emit reverse-wound
+          // duplicates of earlier C triangles (visible as Z-fighting).
+          const _mcSeenSets = new Set();
+          const _mcUniqueFaces = [];
+          for (const _mcF of _mcDecoded.faces) {
+            if (new Set(_mcF).size !== 3) continue;  // skip degenerate
+            const _mcKey = [..._mcF].sort((a,b)=>a-b).join(',');
+            if (!_mcSeenSets.has(_mcKey)) {
+              _mcSeenSets.add(_mcKey);
+              _mcUniqueFaces.push(_mcF);
+            }
+          }
+          warnings.push(`Mode C branch: clers='${_mcClers}', seed=[1,2,0], verts=${_mcVertsOut.length}, faces=${_mcUniqueFaces.length} (deduped from ${_mcDecoded.faces.length})`);
           return {
             vertices: _mcVertsOut.map(v => v.slice()),
-            faces: _mcDecoded.faces.map(f => f.slice()),
+            faces: _mcUniqueFaces.map(f => f.slice()),
             warnings: warnings,
             nVertsHeader: nVertsHeader,
             nFacesHeader: nFacesHeader,

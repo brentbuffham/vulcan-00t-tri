@@ -879,19 +879,7 @@ function parseOOT(arrayBuffer) {
           if (gk.axis >= 0 && gk.axis <= 2) running_fan[gk.axis] = gk.value;
           verts.push([...running_fan]);
         }
-        // Collect pair Xs to pick reuse_x = max (V4 in fan empirically reuses V1.X = 300)
-        const pairXs = [];
-        {
-          let i3 = 3;
-          while (i3 < trimmedGroups.length) {
-            const gi3 = trimmedGroups[i3];
-            if (i3 + 1 < trimmedGroups.length && gi3.axis === 0 && trimmedGroups[i3 + 1].axis === 1) {
-              pairXs.push(gi3.value);
-              i3 += 2;
-            } else { i3 += 1; }
-          }
-        }
-        const reuseX = pairXs.length > 0 ? Math.max(...pairXs) : trimmedGroups[0].value;
+        let firstPairX = null;
         let slot = 1;
         let i2 = 3;
         while (i2 < trimmedGroups.length) {
@@ -899,9 +887,10 @@ function parseOOT(arrayBuffer) {
           if (i2 + 1 < trimmedGroups.length && gi.axis === 0 && trimmedGroups[i2 + 1].axis === 1) {
             const xv = gi.value, yv = trimmedGroups[i2 + 1].value;
             if (slot + 1 < verts.length) verts[slot + 1] = [xv, yv, baseZ_fan];
+            if (firstPairX === null) firstPairX = xv;
             slot += 2; i2 += 2;
           } else if (gi.axis === 1) {
-            if (slot < verts.length) verts[slot] = [reuseX, gi.value, baseZ_fan];
+            if (firstPairX !== null && slot < verts.length) verts[slot] = [firstPairX, gi.value, baseZ_fan];
             slot += 1; i2 += 1;
           } else { slot += 1; i2 += 1; }
         }
@@ -1373,47 +1362,10 @@ function parseOOT(arrayBuffer) {
     // Step 3: build final vertex list: keep unique vertices (dupRemap[i]===i)
     // OR referenced duplicates. Drop unreferenced duplicates only.
     // For prism-pattern files, ALSO drop unreferenced unique phantoms.
-    // Fan-style files also carry 80:1f but their apex/rim vertices are
-    // unreferenced uniques that we MUST keep — gate the prism drop.
-    const _zValsPost = trimmedGroups.filter(g => g.axis === 2 && Math.abs(g.value) > 1).map(g => g.value);
-    const _yCountPost = trimmedGroups.filter(g => g.axis === 1).length;
-    const _fanPatternPost = (
-      trimmedGroups.length >= 5 && _zValsPost.length >= 1 && _yCountPost >= 4 &&
-      _zValsPost.every(z => Math.abs(z - _zValsPost[0]) < 0.5) &&
-      trimmedGroups[0].axis === 0 && trimmedGroups[1].axis === 1 && trimmedGroups[2].axis === 2
-    );
-    const prismPatternPost = (!_fanPatternPost) && trimmedGroups.some(g =>
+    const prismPatternPost = trimmedGroups.some(g =>
       (g.forcedAxis !== undefined && g.forcedAxis >= 0) ||
       g.tags.some(t => t.cls === '80' && t.byte2 === 0x1f)
     );
-    // Fan chimera drop: unreferenced uniques that aren't a valid (X, Y, Z)
-    // combo from the encoder's group structure are intermediate running-state
-    // captures (X from one pair + Y from another); drop them from render.
-    const validFanCombos = new Set();
-    if (_fanPatternPost) {
-      const baseZpost = _zValsPost[0];
-      const rnd = (c) => c.toFixed(3);
-      const combo = (x, y, z) => `${rnd(x)}|${rnd(y)}|${rnd(z)}`;
-      validFanCombos.add(combo(trimmedGroups[0].value, trimmedGroups[1].value, baseZpost));
-      const pairXsPost = [];
-      const pairsPost = [];
-      const yOnlysPost = [];
-      let kk = 3;
-      while (kk < trimmedGroups.length) {
-        const gk = trimmedGroups[kk];
-        if (kk + 1 < trimmedGroups.length && gk.axis === 0 && trimmedGroups[kk + 1].axis === 1) {
-          pairsPost.push([gk.value, trimmedGroups[kk + 1].value]);
-          pairXsPost.push(gk.value);
-          kk += 2;
-        } else if (gk.axis === 1) {
-          yOnlysPost.push(gk.value);
-          kk += 1;
-        } else { kk += 1; }
-      }
-      for (const [x, y] of pairsPost) validFanCombos.add(combo(x, y, baseZpost));
-      const reuseXpost = pairXsPost.length > 0 ? Math.max(...pairXsPost) : trimmedGroups[0].value;
-      for (const y of yOnlysPost) validFanCombos.add(combo(reuseXpost, y, baseZpost));
-    }
     const referenced = new Set();
     for (const f of validFaces) for (const i of f) referenced.add(i);
     const finalRemap = {};
@@ -1422,11 +1374,6 @@ function parseOOT(arrayBuffer) {
       const isDup = dupRemap[i] !== i;
       if (isDup && !referenced.has(i)) continue;  // drop unreferenced duplicate
       if (prismPatternPost && !referenced.has(i) && !isDup) continue;  // drop phantom uniques (prism only)
-      if (_fanPatternPost && !referenced.has(i) && !isDup) {
-        const v = vertices[i];
-        const key = `${v[0].toFixed(3)}|${v[1].toFixed(3)}|${v[2].toFixed(3)}`;
-        if (!validFanCombos.has(key)) continue;  // drop fan chimera
-      }
       finalRemap[i] = newVerts.length;
       newVerts.push(vertices[i]);
     }

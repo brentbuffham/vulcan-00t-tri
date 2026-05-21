@@ -602,10 +602,10 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
     )
     if fan_pattern:
         base_z = z_vals[0]
-        # Legacy layout: face section DATA refs are authored against a per-group
-        # running-state vertex list. Keep that scaffold so face indices land on
-        # valid slots; overwrite the slots that actually correspond to clean
-        # (X, Y) pair vertices with the correct values.
+        # Build legacy running-state primaries (one per non-base group) so
+        # face section DATA refs — authored against this layout — still land
+        # at valid indices. Then OVERWRITE specific slots with clean (X, Y)
+        # pair vertices so the rendered positions match DXF.
         verts = [[groups[0].value, groups[1].value, base_z]]
         running = [groups[0].value, groups[1].value, base_z]
         for g in groups[3:]:
@@ -613,20 +613,12 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
                 running[g.axis] = g.value
             verts.append(list(running))
 
-        # Collect pairs to determine reuse_x = max X (V4 empirically reuses V1.X).
-        pair_xs = []
-        i = 3
-        while i < len(groups):
-            g = groups[i]
-            if i + 1 < len(groups) and g.axis == 0 and groups[i + 1].axis == 1:
-                pair_xs.append(g.value)
-                i += 2
-            else:
-                i += 1
-        reuse_x = max(pair_xs) if pair_xs else groups[0].value
-
-        # Walk groups again and place clean (X, Y) pair vertices at slot+1.
-        slot = 1
+        # Walk groups again and pair (X, Y) values per vertex. The Y member
+        # of each (X, Y) pair lands at slot+1 (since after X update we have
+        # phantom slot, then after Y the clean vertex). For Y-only groups,
+        # X is reused from the FIRST pair (apex of fan).
+        first_pair_x = None
+        slot = 1  # verts[0] is V_base; first non-base primary is at verts[1]
         i = 3
         while i < len(groups):
             g = groups[i]
@@ -635,12 +627,13 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
                 y_val = groups[i + 1].value
                 if slot + 1 < len(verts):
                     verts[slot + 1] = [x_val, y_val, base_z]
+                if first_pair_x is None:
+                    first_pair_x = x_val
                 slot += 2
                 i += 2
             elif g.axis == 1:
-                # Y-only — reuse X = max X (V4 in fan)
-                if slot < len(verts):
-                    verts[slot] = [reuse_x, g.value, base_z]
+                if first_pair_x is not None and slot < len(verts):
+                    verts[slot] = [first_pair_x, g.value, base_z]
                 slot += 1
                 i += 1
             else:
@@ -650,18 +643,23 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
         # Append c0_slots so face section DATA refs to high indices land on
         # actual vertices (the legacy builder does this after primaries).
         c0_slots_local = {}
-        assigner_classes = {'C0', '40', '80', '60', 'A0', '20'}
         base_xyz = [groups[0].value, groups[1].value, base_z]
+        running2 = list(base_xyz)
+        assigner_classes = {'C0', '40', '80', '60', 'A0', '20'}
         for g in groups:
             ax = g.axis
+            if 0 <= ax <= 2:
+                running2[ax] = g.value
             for t in g.tags:
                 if t.cls in assigner_classes and t.hi_nib > 0 and 0 <= ax <= 2:
                     sl = t.hi_nib
                     if sl not in c0_slots_local:
                         c0_slots_local[sl] = list(base_xyz)
                     c0_slots_local[sl][ax] = g.value
-                    if t.lo_nib in (0x7, 0xF):
+                    if t.lo_nib == 0x7:
                         c0_slots_local[sl][2] = base_z
+                    elif t.lo_nib == 0xF:
+                        c0_slots_local[sl][2] = base_z  # fan has only one Z
         for sl in sorted(c0_slots_local.keys()):
             verts.append(c0_slots_local[sl])
         return verts
@@ -1909,54 +1907,10 @@ def parse_oot_v2(filepath: str) -> OotResult:
         # Note: A0:7f (4-prism's similar tag) is NOT included here because
         # 4-prism's c0_slot[4] = DXF V0 is a valid unreferenced unique that
         # we must keep — the face decoder needs to still pick it up.
-        # Fan-style files also carry 80:1f but with Z-flat + many-Y group shape,
-        # and their apex/rim vertices are unreferenced uniques that we MUST keep.
-        # Recompute the same fan_pattern test from build_vertex_table.
-        _z_vals_post = [g.value for g in groups if g.axis == 2 and abs(g.value) > 1]
-        _y_count_post = sum(1 for g in groups if g.axis == 1)
-        _fan_pattern_post = (
-            len(groups) >= 5
-            and len(_z_vals_post) >= 1
-            and all(abs(z - _z_vals_post[0]) < 0.5 for z in _z_vals_post)
-            and _y_count_post >= 4
-            and groups[0].axis == 0 and groups[1].axis == 1 and groups[2].axis == 2
-        )
-        prism_pattern_post = (not _fan_pattern_post) and any(
+        prism_pattern_post = any(
             g.forced_axis >= 0 or any(t.cls == '80' and t.byte2 == 0x1f for t in g.tags)
             for g in groups
         )
-        # For fan-style: build the set of "valid" (X, Y, Z) combos from the
-        # encoder's group structure — apex (G0,G1,G2) + each (X,Y) pair + each
-        # Y-only group with reuse_x = max pair X. An unreferenced unique vertex
-        # that doesn't match any valid combo is a "chimera" (intermediate
-        # running-state capture: X from one pair, Y from another) and should be
-        # dropped from the rendered output even though we keep it during the
-        # face-decode phase (the decoder's index space needs the scaffolding).
-        valid_fan_combos = set()
-        if _fan_pattern_post:
-            _base_z_post = _z_vals_post[0]
-            _apex_post = (groups[0].value, groups[1].value, _base_z_post)
-            valid_fan_combos.add(tuple(round(c, 3) for c in _apex_post))
-            _pair_xs_post = []
-            _pairs_post = []
-            _y_onlys_post = []
-            _k = 3
-            while _k < len(groups):
-                _gk = groups[_k]
-                if (_k + 1 < len(groups) and _gk.axis == 0 and groups[_k + 1].axis == 1):
-                    _pairs_post.append((_gk.value, groups[_k + 1].value))
-                    _pair_xs_post.append(_gk.value)
-                    _k += 2
-                elif _gk.axis == 1:
-                    _y_onlys_post.append(_gk.value)
-                    _k += 1
-                else:
-                    _k += 1
-            for _x, _y in _pairs_post:
-                valid_fan_combos.add(tuple(round(c, 3) for c in (_x, _y, _base_z_post)))
-            _reuse_x = max(_pair_xs_post) if _pair_xs_post else groups[0].value
-            for _y in _y_onlys_post:
-                valid_fan_combos.add(tuple(round(c, 3) for c in (_reuse_x, _y, _base_z_post)))
         referenced = set()
         for f in remapped_faces:
             for idx in f:
@@ -1969,9 +1923,6 @@ def parse_oot_v2(filepath: str) -> OotResult:
                 continue
             if prism_pattern_post and i not in referenced and not is_dup:
                 continue  # drop unreferenced phantom uniques (prism only)
-            if (_fan_pattern_post and i not in referenced and not is_dup
-                    and tuple(round(c, 3) for c in v) not in valid_fan_combos):
-                continue  # drop fan-mode chimera (X from one pair + Y from another)
             final_remap[i] = len(new_verts)
             new_verts.append(v)
 

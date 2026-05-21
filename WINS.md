@@ -62,10 +62,8 @@ Each entry: the rule, byte signature, where it lives, the test that found it.
 - **Where:** `python/oot_parser_v2.py` use_base_y_for_next_delta branch; mirrored in JS.
 - **Test:** TEST-062.
 
-### W9. Gate `prism_pattern_post` dedup-drop on `not _fan_pattern_post`
-- **What:** The post-build deduplication drops unreferenced unique verts when prism pattern is detected (`80:1f` tag present). Fan also carries `80:1f` but its apex + rim vertices are intentional unreferenced uniques that we must keep. Gate the drop on NOT fan_pattern (Z-flat + ≥4 Y-axis groups + standard axis prefix).
-- **Where:** `python/oot_parser_v2.py` dedup step; mirrored in JS.
-- **Test:** TEST-062. Recovered fan apex (V3=254.29, 482.66) and V5 (273.24, 476.34).
+### W9. ~~Gate `prism_pattern_post` dedup-drop on `not _fan_pattern_post`~~ (REVERTED — was a fingerprint cheat)
+- **Reverted:** This was a per-file pattern gate (Z-flat + ≥4 Y-axis groups), not a universal byte-level rule. Per the "winners do hard yards" rule, removed. See HistoryOfTests TEST-063.
 
 ## Solved File Formats
 
@@ -77,7 +75,6 @@ Each entry: the rule, byte signature, where it lives, the test that found it.
 | `tri-crack-solid` (cube) | 8/8 | 12 | axis-aligned box, full SEP/E0 grammar |
 | `tri-crack-prism` | 4/4 | — | prism mode |
 | `tri-crack-4sides-prism` | 5/5 | — | 4-sided prism |
-| `tri-crack-fan` | 6/6 | — | flat fan, FULL-run with 3-byte short FULLs + DELTA snap |
 
 ## Partial Wins (real progress, not yet 100%)
 

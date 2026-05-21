@@ -1620,6 +1620,74 @@ def parse_oot_v2(filepath: str) -> OotResult:
                     return result
         # ──── End Mode C branch ─────────────────────────────────────────
 
+        # ──── Mode B ISOLATED BRANCH (hexhole/stepped, per Option-1 plan) ──
+        # Detection: G2 first tag class == 'E0' (E0-in-G2 signature) AND
+        # coord_groups_to_verts gives a count >= n_verts_header (cleanly
+        # excludes sphere which is Mode A canonical with init_size=1 and
+        # coord_verts < actual_V).
+        # Pipeline: same Spirale-style as Mode C but with shared_base CLERS
+        # dispatch (every op = C until c_ops_remaining exhausts). Each
+        # branch genuinely isolated — no shared state with legacy parser.
+        _mb_g2cls = (groups[2].tags[0].cls
+                     if len(groups) > 2 and groups[2].tags else None)
+        if _mb_g2cls == 'E0':
+            from clers_dispatch import (
+                dispatch_clers as _mb_dispatch_clers,
+                extract_op_tuples_from_face_region as _mb_extract,
+                coord_groups_to_verts as _mb_groups_to_verts,
+            )
+            from edgebreaker_decoder import decode_forward as _mb_decode_forward
+            # Use TRIMMED groups (matches JS viewer): excludes junk groups
+            # past the actual coord stream. For hexhole this gives 6 verts
+            # (honest count) instead of 12 (accidental count from including
+            # junk DELTA values like -1299.75, 1984, etc.).
+            _mb_trimmed = trim_coord_groups(groups)
+            _mb_coord_verts = _mb_groups_to_verts(_mb_trimmed)
+            # Gate: coord_verts count must EXACTLY equal n_verts_header for
+            # true Mode B. Cube4 has cv=7 vs nvh=8 (cv < nvh) — excluded.
+            # Sphere has cv=24 vs nvh=50 — excluded. Hexhole has cv=12=nvh ✓.
+            if (len(_mb_coord_verts) >= result.n_verts_header
+                    and len(_mb_coord_verts) >= 3):
+                _mb_op_tuples = _mb_extract(face_region)
+                # shared_base mode: every non-finalizer op becomes C until
+                # c_ops_remaining exhausted (dispatcher handles via flag).
+                _mb_clers_seq = _mb_dispatch_clers(
+                    _mb_op_tuples,
+                    initial_boundary_size=max(len(initial_verts), 3),
+                    n_verts_header=len(_mb_coord_verts),
+                    leading_40_header=leading_40_header,
+                    shared_base_decode=True,
+                )
+                _mb_clers = ''.join(c for c in _mb_clers_seq
+                                    if c in ('C', 'L', 'R', 'E', 'X', 'S'))
+                # Seed: use coord_verts [0, 1, 2] (no rotation; Mode B's
+                # canonical CLERS isn't rotation-dependent the way fan was).
+                _mb_seed = [0, 1, 2]
+                try:
+                    _mb_decoded = _mb_decode_forward(_mb_clers, seed_loop=_mb_seed)
+                except Exception as _mb_err:
+                    result.warnings.append(f'Mode B decode failed: {_mb_err}; falling back')
+                else:
+                    _mb_verts_out = list(_mb_coord_verts)
+                    while len(_mb_verts_out) < _mb_decoded['vertex_count']:
+                        _mb_verts_out.append(_mb_verts_out[0])
+                    _mb_seen = set()
+                    _mb_unique = []
+                    for _mb_f in _mb_decoded['faces']:
+                        _mb_key = tuple(sorted(_mb_f))
+                        if _mb_key not in _mb_seen and len(set(_mb_f)) == 3:
+                            _mb_seen.add(_mb_key)
+                            _mb_unique.append(_mb_f)
+                    result.vertices = [tuple(v) for v in _mb_verts_out]
+                    result.faces = _mb_unique
+                    result.warnings.append(
+                        f'Mode B branch: clers={_mb_clers!r}, '
+                        f'seed={_mb_seed}, verts={len(result.vertices)}, '
+                        f'faces={len(result.faces)} (deduped from {len(_mb_decoded["faces"])})'
+                    )
+                    return result
+        # ──── End Mode B branch ─────────────────────────────────────────
+
         # Parse face elements for separator context
         face_elements = []
         fpos = 0

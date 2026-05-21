@@ -1313,6 +1313,130 @@ function parseOOT(arrayBuffer) {
     }
     // ──── End Mode C branch ────────────────────────────────────────────
 
+    // ──── Mode B ISOLATED BRANCH (hexhole, per Option-1 plan) ──────────
+    // Detection: G2 first tag class == 'E0' AND coord_verts count
+    // >= n_verts_header (excludes cube4 with cv<nvh and sphere cv<<nvh).
+    // Uses shared_base CLERS dispatch (every op = C until queue exhausts).
+    if (_mc_g2cls === 'E0') {
+      // coord_groups_to_verts (same as Mode C, but recomputed here since
+      // Mode C only computed it when g2cls === '60').
+      const _mbCoordVerts = (function() {
+        if (trimmedGroups.length < 3) return [];
+        const baseZ = trimmedGroups[2].value;
+        const baseX = trimmedGroups[0].value;
+        const baseY = trimmedGroups[1].value;
+        const verts = [[baseX, baseY, baseZ]];
+        let mostRecentX = baseX;
+        const pairXs = [];
+        let i = 3;
+        while (i < trimmedGroups.length) {
+          const g = trimmedGroups[i];
+          const ax = g.axis;
+          if (i + 1 < trimmedGroups.length && ax === 0 && trimmedGroups[i+1].axis === 1) {
+            mostRecentX = g.value;
+            pairXs.push(g.value);
+            verts.push([g.value, trimmedGroups[i+1].value, baseZ]);
+            i += 2;
+          } else if (ax === 1) {
+            const reuseX = pairXs.length ? Math.max(...pairXs) : mostRecentX;
+            verts.push([reuseX, g.value, baseZ]);
+            i += 1;
+          } else { if (ax === 0) mostRecentX = g.value; i += 1; }
+        }
+        return verts;
+      })();
+      if (_mbCoordVerts.length >= nVertsHeader && _mbCoordVerts.length >= 3) {
+        // Build op_tuples
+        const _mbOpTuples = [];
+        {
+          let pos = 0, lastSep = null;
+          while (pos < faceRegion.length) {
+            const b = faceRegion[pos];
+            if (b <= 0x06) { const nb = b + 1; if (pos + 1 + nb > faceRegion.length) break; pos += 1 + nb; continue; }
+            if (_mc_isSep(b)) { lastSep = b; pos += 1; continue; }
+            if (pos + 1 < faceRegion.length) {
+              const b2 = faceRegion[pos+1];
+              const hi3 = b & 0xE0;
+              const clsMap = {0x20:'20', 0x40:'40', 0xC0:'C0', 0xE0:'E0'};
+              let cls = clsMap[hi3] || b.toString(16).padStart(2,'0').toUpperCase();
+              if (b === 0xE1) cls = 'E1';
+              if (cls === '40' || cls === 'C0' || cls === 'E1') {
+                _mbOpTuples.push({sep: lastSep, lo: b2 & 0xF, cls: cls, b2: b2});
+                lastSep = null;
+              }
+              pos += 2;
+            } else break;
+          }
+        }
+        // shared_base dispatch (every non-finalizer op = C until c_ops exhausted)
+        const _mbDispatch = (ops, initSize, nVertsHdr, leadingDrop) => {
+          let cOps = Math.max(nVertsHdr - initSize, 0);
+          const out = [];
+          let opsCopy = ops.slice();
+          if (leadingDrop && opsCopy.length) { out.push('SKIP'); opsCopy = opsCopy.slice(1); }
+          for (const op of opsCopy) {
+            if (op.b2 === 0x1B) { out.push('X'); continue; }
+            if (cOps > 0) { out.push('C'); cOps -= 1; }
+            else out.push('X');
+          }
+          return out;
+        };
+        const _mbInitSize = Math.max(initialVerts.length, 3);
+        const _mbClersSeq = _mbDispatch(_mbOpTuples, _mbInitSize, _mbCoordVerts.length, leading40Header);
+        const _mbClers = _mbClersSeq.filter(c => c === 'C' || c === 'L' || c === 'R' || c === 'E' || c === 'X' || c === 'S').join('');
+        // decode_forward (same impl as Mode C — reuse the function defined above)
+        const _mbDecodeForward = (clers, seedLoop) => {
+          if (seedLoop.length < 3) throw new Error('seed < 3');
+          const boundary = seedLoop.slice();
+          let gate = 1;
+          let nextV = Math.max(...seedLoop) + 1;
+          const faces = [[seedLoop[0], seedLoop[1], seedLoop[2]]];
+          for (const op of clers) {
+            if (op === 'X') { if (boundary.length) gate = (gate - 1 + boundary.length) % boundary.length; continue; }
+            const n = boundary.length;
+            if (n < 3) return {faces, vertexCount: nextV};
+            const gA = boundary[gate % n];
+            const gB = boundary[(gate + 1) % n];
+            if (op === 'C') {
+              const v = nextV++; faces.push([gA, gB, v]); boundary.splice((gate % n) + 1, 0, v);
+            } else if (op === 'R') {
+              const rN = boundary[(gate + 2) % n]; faces.push([gA, gB, rN]); boundary.splice((gate + 1) % n, 1);
+              if (gate >= boundary.length) gate %= boundary.length;
+            } else if (op === 'L') {
+              const lN = boundary[(gate - 1 + n) % n]; faces.push([gA, gB, lN]); boundary.splice(gate % n, 1);
+              gate = boundary.length ? ((gate - 1 + boundary.length) % boundary.length) : 0;
+            } else if (op === 'E') {
+              if (n >= 3) faces.push([gA, gB, boundary[(gate + 2) % n]]); boundary.length = 0; break;
+            }
+          }
+          return {faces, vertexCount: nextV};
+        };
+        try {
+          const _mbDecoded = _mbDecodeForward(_mbClers, [0, 1, 2]);
+          const _mbVertsOut = _mbCoordVerts.slice();
+          while (_mbVertsOut.length < _mbDecoded.vertexCount) _mbVertsOut.push(_mbVertsOut[0].slice());
+          const _mbSeen = new Set();
+          const _mbUnique = [];
+          for (const _mbF of _mbDecoded.faces) {
+            if (new Set(_mbF).size !== 3) continue;
+            const _mbKey = [..._mbF].sort((a,b)=>a-b).join(',');
+            if (!_mbSeen.has(_mbKey)) { _mbSeen.add(_mbKey); _mbUnique.push(_mbF); }
+          }
+          warnings.push(`Mode B branch: clers='${_mbClers}', seed=[0,1,2], verts=${_mbVertsOut.length}, faces=${_mbUnique.length} (deduped from ${_mbDecoded.faces.length})`);
+          return {
+            vertices: _mbVertsOut.map(v => v.slice()),
+            faces: _mbUnique.map(f => f.slice()),
+            warnings: warnings,
+            nVertsHeader: nVertsHeader,
+            nFacesHeader: nFacesHeader,
+          };
+        } catch (mbErr) {
+          warnings.push('Mode B decode failed: ' + mbErr.message + '; falling back');
+        }
+      }
+    }
+    // ──── End Mode B branch ────────────────────────────────────────────
+
     // ── Separator-based EdgeBreaker face decoder ──
     let lastSep2 = null, lastE0 = null;
     const opsWithSep = [];

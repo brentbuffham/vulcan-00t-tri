@@ -563,6 +563,44 @@ def _build_vertex_table_shared_base(groups: List[CoordGroup], base: List[float])
     return vertices
 
 
+# ── C0-SLOT STRATEGY (swappable for brute-force search) ──────────────
+# The c0_slot logic is the universal piece we haven't fully cracked.
+# Default: the historical "every-tag axis update" rule. Brute-force scripts
+# can swap this callable to test alternative encoder interpretations.
+#
+# Contract: strategy(groups, base, base_z, alt_z, assigner_classes, apex_y_synth)
+# returns dict {slot_idx: [x, y, z]}.
+def _c0_strategy_default(groups, base, base_z, alt_z, assigner_classes, apex_y_synth):
+    c0_slots = {}
+    running = list(base)
+    for i, g in enumerate(groups):
+        ax = g.axis
+        if 0 <= ax <= 2:
+            running[ax] = apex_y_synth.get(i, g.value)
+        for t in g.tags:
+            if not (t.cls in assigner_classes and t.hi_nib > 0):
+                continue
+            slot = t.hi_nib
+            if slot not in c0_slots:
+                c0_slots[slot] = list(base)
+            if 0 <= ax <= 2:
+                c0_slots[slot][ax] = g.value
+            if t.lo_nib == 0x7:
+                c0_slots[slot][2] = base_z
+            elif t.lo_nib == 0xF:
+                c0_slots[slot][2] = alt_z
+    return c0_slots
+
+
+_C0_STRATEGY = _c0_strategy_default
+
+
+def set_c0_strategy(strategy):
+    """Swap the c0_slot building strategy globally (for brute-force search)."""
+    global _C0_STRATEGY
+    _C0_STRATEGY = strategy if strategy is not None else _c0_strategy_default
+
+
 def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[Optional[float]]]:
     """Build vertex table: PRIMARIES FIRST, then C0 SLOTS APPENDED.
 
@@ -720,7 +758,9 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
         g.forced_axis >= 0 or any(t.cls == '80' and t.byte2 == 0x1f for t in g.tags)
         for g in groups
     )
-    c0_slots = {}  # slot_idx -> [x, y, z]
+    # C0 slot building delegated to the swappable strategy (default: historical).
+    assigner_classes = {'C0', '40', '80', '60', 'A0', '20'}
+    c0_slots = _C0_STRATEGY(groups, base, base_z, alt_z, assigner_classes, apex_y_synth)
 
     for i, g in enumerate(groups):
         ax = g.axis
@@ -728,21 +768,6 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
             continue
         # Apply apex-Y synthesis if this group is the 4-prism A0:7f Y group.
         running[ax] = apex_y_synth.get(i, g.value)
-
-        # Collect slot assignments from assigner tag classes
-        # C0 is primary, 40/80/60/A0/20 with hi_nib>0 also assign
-        assigner_classes = {'C0', '40', '80', '60', 'A0', '20'}
-        for t in g.tags:
-            if not (t.cls in assigner_classes and t.hi_nib > 0):
-                continue
-            slot = t.hi_nib
-            if slot not in c0_slots:
-                c0_slots[slot] = list(base)
-            c0_slots[slot][ax] = g.value
-            if t.lo_nib == 0x7:
-                c0_slots[slot][2] = base_z
-            elif t.lo_nib == 0xF:
-                c0_slots[slot][2] = alt_z
 
         # Build primaries
         emitted: List[List[float]] = []

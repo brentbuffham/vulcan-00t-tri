@@ -39,6 +39,10 @@ def decode_forward(clers: str, seed_loop: Sequence[int]) -> dict:
 
     for i, op in enumerate(clers):
         if op == 'X':
+            # Vulcan finalizer (byte2 = 0x1B): rotate gate by -1.
+            # NOT a no-op. The legacy decoder calls gate_advance(-1) here.
+            if boundary:
+                gate = (gate - 1) % len(boundary)
             continue
         n = len(boundary)
         if n < 3:

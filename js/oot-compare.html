@@ -1251,7 +1251,11 @@ function parseOOT(arrayBuffer) {
           let nextV = Math.max(...seedLoop) + 1;
           const faces = [[seedLoop[0], seedLoop[1], seedLoop[2]]];
           for (const op of clers) {
-            if (op === 'X') continue;
+            if (op === 'X') {
+              // Vulcan finalizer (byte2=0x1B): gate rotation -1, NOT a no-op.
+              if (boundary.length) gate = (gate - 1 + boundary.length) % boundary.length;
+              continue;
+            }
             const n = boundary.length;
             if (n < 3) return {faces, vertexCount: nextV, openLoops: 1};
             const gA = boundary[gate % n];

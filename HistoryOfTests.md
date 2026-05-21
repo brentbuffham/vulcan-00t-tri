@@ -1198,6 +1198,25 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
 
 ---
 
+### TEST-065: Corrected delta_C reveals sphere is Mode A; fan is the ONLY Mode C
+- **Status:** Diagnostic only — no code change. Taxonomy refinement.
+- **Earlier formula bug:** `canonical_n_C = actual_V - 3` assumed initial_size always 3.
+  Actually `initial_size = len(initial_verts)` varies:
+  - init = 3: triangle, plane, prism, linear, 4sides, cube, fan, lshape, stepped
+  - init = 1: hexhole, nonround, sphere
+- **Corrected formula:** `delta_C = n_C - (actual_V - initial_size)`
+- **Updated taxonomy:**
+  | Mode | Files |
+  |---|---|
+  | A (canonical, delta 0) | triangle, plane, prism, 4sides, cube, lshape, **sphere** |
+  | B (under, every-op-creates) | linear (-1), hexhole (-5), nonround (-12), stepped (-8) |
+  | C (over, c_ops_remaining bug) | **fan (+1, only one)** |
+- **Sphere joined Mode A:** dispatcher produces n_C = 49 = 50 - 1 exactly. The sphere's 2/50 baseline face-match is a vertex-table issue (chimera positions), NOT a CLERS dispatch issue. CLERS is canonical.
+- **Fan is now sole Mode C:** pair-completion count = 6 matches actual_V. Whether this rule is fan-specific or universal-Mode-C-applicable is unverifiable until another Mode C file is found.
+- **Bytes-after-0x12 test:** ruled out face-index hypothesis. 0x12 = 18 = 6×3 coincidence; bytes are unambiguous IEEE doubles.
+
+---
+
 ### TEST-063: REVERT fan_pattern_post chimera-drop + Y-only X-reuse (HONESTY REVERT)
 - **Status:** Committed. Fan returns to 3/6 DXF match. All byte-level rules from TEST-062 remain (3-byte short FULL, DELTA snap, prism gate). Reverted the fingerprint-based cheats.
 - **What was reverted:**

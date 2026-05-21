@@ -1546,6 +1546,73 @@ def parse_oot_v2(filepath: str) -> OotResult:
             face_region, result.n_verts_header
         )
 
+        # ──── Mode C ISOLATED BRANCH ────────────────────────────────────
+        # Per TEST-067: when full_run_active fires (trigger_a/b) AND G2's
+        # first tag class is '60' AND initial_verts has 3 entries, the file
+        # is Mode C (currently only fan). The legacy parser's vertex_table
+        # contains chimera positions and the c_ops_remaining counter is
+        # over-budgeted from n_verts_header. To get correct topology we
+        # bypass the legacy pipeline ENTIRELY and use:
+        #   - canonical CLERS from dispatch_clers (with c_ops corrected by
+        #     coord_groups_to_verts vertex count)
+        #   - forward EdgeBreaker decode (decode_forward) with seed rotated
+        #     left by 1 to put apex at gate's right neighbour
+        #   - coord-derived vertex table (coord_groups_to_verts result)
+        # No legacy state touched. Returns result directly on success.
+        _mode_c_b0 = coord_region[0] if coord_region else 0
+        _mode_c_b1 = coord_region[1] if len(coord_region) > 1 else 0
+        _MC_TAG = (0x20, 0x40, 0x60, 0x80, 0xA0, 0xC0, 0xE0)
+        _mc_triggera = (_mode_c_b0 > 0x07 and not is_separator(_mode_c_b0)
+                        and (_mode_c_b0 & 0xE0) not in _MC_TAG)
+        _mc_triggerb = (is_separator(_mode_c_b0)
+                        and _mode_c_b1 in (0x40, 0x41, 0xC0, 0xC1))
+        _mc_full_run = _mc_triggera or _mc_triggerb
+        _mc_g2cls = (groups[2].tags[0].cls
+                     if len(groups) > 2 and groups[2].tags else None)
+        if (_mc_full_run and _mc_g2cls == '60' and len(initial_verts) == 3):
+            from clers_dispatch import (
+                dispatch_clers as _mc_dispatch_clers,
+                extract_op_tuples_from_face_region as _mc_extract,
+                coord_groups_to_verts as _mc_groups_to_verts,
+            )
+            from edgebreaker_decoder import decode_forward as _mc_decode_forward
+            _mc_coord_verts = _mc_groups_to_verts(groups)
+            if len(_mc_coord_verts) >= 3:
+                _mc_actual_v = len(_mc_coord_verts)
+                _mc_op_tuples = _mc_extract(face_region)
+                _mc_clers_seq = _mc_dispatch_clers(
+                    _mc_op_tuples, len(initial_verts), _mc_actual_v,
+                    leading_40_header=leading_40_header,
+                )
+                _mc_clers = ''.join(c for c in _mc_clers_seq
+                                    if c in ('C', 'L', 'R', 'E', 'X', 'S'))
+                # Seed: rotate left by 1 of [0, 1, 2] → [1, 2, 0]
+                # This places apex (coord_verts[0]) at gate's right (boundary[2])
+                # so C ops fan out from the apex's neighbour vert, matching
+                # the encoder's intended topology orientation for fan.
+                _mc_seed = [1, 2, 0]
+                try:
+                    _mc_decoded = _mc_decode_forward(_mc_clers, seed_loop=_mc_seed)
+                except Exception as _mc_err:
+                    result.warnings.append(f'Mode C decode failed: {_mc_err}; falling back')
+                else:
+                    # Map abstract IDs to coord_verts. Pad if decoder created
+                    # more IDs than coord_verts has (would indicate Mode C
+                    # signature is misfiring; pad with apex copies for safety).
+                    _mc_verts_out = list(_mc_coord_verts)
+                    while len(_mc_verts_out) < _mc_decoded['vertex_count']:
+                        _mc_verts_out.append(_mc_verts_out[0])
+                    # Final result fields — no legacy state mixed in
+                    result.vertices = [tuple(v) for v in _mc_verts_out]
+                    result.faces = list(_mc_decoded['faces'])
+                    result.warnings.append(
+                        f'Mode C branch: clers={_mc_clers!r}, '
+                        f'seed={_mc_seed}, verts={len(result.vertices)}, '
+                        f'faces={len(result.faces)}'
+                    )
+                    return result
+        # ──── End Mode C branch ─────────────────────────────────────────
+
         # Parse face elements for separator context
         face_elements = []
         fpos = 0

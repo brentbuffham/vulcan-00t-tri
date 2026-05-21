@@ -1198,6 +1198,34 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
 
 ---
 
+### TEST-068: Mode B is a COORD DECODER problem, not face decode (Phase 2 probe)
+- **Status:** Diagnostic only — no code change.
+- **Tested:** ran `coord_groups_to_verts` (Mode C pair-completion algorithm)
+  against nonround/sphere/stepped/hexhole to see if any can fold into the
+  fan-style Mode C branch.
+- **Results:**
+  | File | coord_verts count | DXF actual_V | Z values | Coord match |
+  |---|---|---|---|---|
+  | nonround | 13 | 16 | All 300 (DXF has 4) | junk (1984, 736) |
+  | sphere | 24 | 50 | All 300 (DXF varies) | undercount |
+  | stepped | 7 | 20 | All 100 (DXF has 5) | undercount |
+  | hexhole | **12 ✓** | 12 | All 300 (DXF: 300+350) | 2/12 junk |
+- **Hexhole gives correct COUNT but junk VALUES**: negative X values
+  (-1299.75), missing the 350 Z level. So even count-match doesn't unblock —
+  the coord values are broken upstream of the face decoder.
+- **Conclusion:** Mode B files' bottleneck is the **coord decoder**
+  (`parse_coord_elements`), not the face decoder. The fan Mode C branch
+  architecture only works because fan's coord decoder produces clean
+  values; Mode B files have junk values regardless of vertex assembly.
+- **Specific decoder issues to fix for Mode B (future sessions):**
+  - 3-byte short FULL rule over-fires (e.g. produces 221.0 when real is 222.22)
+  - DELTA reconstruction junk for sequences specific to Mode B files
+  - Stepped's TAG-as-trigger (0xE0 first byte) needs its own coord-parse path
+  - Missing per-vertex Z extraction (Mode B files have varying Z)
+- **No regression / no change. Fan Mode C remains locked at TEST-067 state.**
+
+---
+
 ### TEST-066: Mode C "cheap fix" attempt fails — c_ops and vertex_table entangled
 - **Status:** Reverted. No net change to scores.
 - **Hypothesis (per user's Phase 1 Step 1):** Detect Mode C overflow during

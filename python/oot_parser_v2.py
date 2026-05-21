@@ -1761,6 +1761,12 @@ def parse_oot_v2(filepath: str) -> OotResult:
             ops_with_sep = ops_with_sep[1:]
 
         c_ops_remaining = max(result.n_verts_header - len(init_tri), 0)
+        # NOTE: Tried Mode C c_ops recalibration via coord_groups_to_verts for
+        # fan — TEST-066. Made fan WORSE (3/6 → 2/6) because the c_ops fix
+        # produces different CLERS but the vertex_table chimeras (V0, V2, V5
+        # in fan's output) are unchanged. Reducing C ops just picks fewer
+        # queue verts; doesn't fix which verts are picked. The Mode C
+        # solution requires vertex_table fix simultaneously, not just c_ops.
         last_op = None
 
         # ── CUBE FAST PATH (TEST-027) ──
@@ -1809,13 +1815,11 @@ def parse_oot_v2(filepath: str) -> OotResult:
 
         # Detect shared-base for face decode strategy: keep doing C ops
         # in strip-style traversal instead of R fallback when sep=None.
-        # NOTE: 2026-05 diagnostic — tried extending to "E0-in-G2 first tag"
-        # to catch hexhole/sphere/stepped (Mode B candidates), but the
-        # shared_base path artificially caps face count at n_verts_header-2,
-        # so sphere went 96→48 faces with NO DXF improvement. Reverted.
-        # The E0-G2 signal IS real (clean B-vs-canonical distinguisher) but
-        # shared_base's vertex-creation model needs revision before it can
-        # handle Mode B files. See HistoryOfTests TEST-064.
+        # NOTE TEST-066: Extending detection to E0-in-G2 catches stepped
+        # but the shared_base path emits too FEW faces (queue exhaustion +
+        # R fallback interact badly: stepped goes 5v/6f → 5v/3f). The path
+        # needs deeper revision than the detector. For now, only the
+        # original linear-strip rule fires.
         shared_base_decode = (
             groups and groups[0].tags and groups[0].tags[0].cls == '60' and
             len([g.value for g in groups[:4] if abs(g.value) > 1]) >= 2 and

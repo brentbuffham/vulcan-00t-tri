@@ -1198,6 +1198,38 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
 
 ---
 
+### TEST-066: Mode C "cheap fix" attempt fails — c_ops and vertex_table entangled
+- **Status:** Reverted. No net change to scores.
+- **Hypothesis (per user's Phase 1 Step 1):** Detect Mode C overflow during
+  dispatch, recompute actual_V via coord_groups_to_verts, retry → fan 6/6.
+- **What happened:** Implemented Mode C detector (full_run_active + G2 first
+  tag class = '60', narrowed from non-E0 after cube2/cube3 false positives).
+  Detector correctly fires for fan only. c_ops_remaining recalibrated from
+  13 → 3, producing canonical CLERS "CCCRR" via dispatcher.
+- **Result: fan got WORSE (3/6 → 2/6 DXF face match).** The c_ops_remaining
+  fix changes which positions in the queue the C ops pick from, but the
+  vertex_table CONTENTS (chimera positions at slot 7, 9, 10, 11) are
+  unchanged. Reducing C ops just picks fewer queue items but doesn't fix
+  which items are correct. Same problem applies to sphere.
+- **Also tried:** Extending shared_base_decode with E0-in-G2 detector +
+  R fallback after queue exhaustion. Catches stepped but stepped goes
+  5v/6f → 5v/3f (queue exhaustion + R fallback interact badly). Hexhole
+  excluded by init_verts size constraint, so no improvement there either.
+- **Architectural conclusion:** Mode C and Mode B fixes can't land
+  cheaply via c_ops or detector alone. The vertex_table construction is
+  entangled with CLERS dispatch — fix one without the other and topology
+  degrades. The full fix requires either:
+  1. Replace vertex_table for Mode C with coord_groups_to_verts output AND
+     remap face indices accordingly, OR
+  2. Bypass existing forward decoder for Mode C and use Spirale Reversi
+     pipeline (already demonstrated 3/6 in scripts/OL_GW_spirale_apply).
+- **Path forward:** Mode C fan investigation must include vertex_table
+  replacement, not just c_ops. The Spirale Reversi pipeline already
+  achieves fan 3/6 (the topology ceiling) — integrating it as a Mode C
+  branch in the main parser is the real win.
+
+---
+
 ### TEST-065: Corrected delta_C reveals sphere is Mode A; fan is the ONLY Mode C
 - **Status:** Diagnostic only — no code change. Taxonomy refinement.
 - **Earlier formula bug:** `canonical_n_C = actual_V - 3` assumed initial_size always 3.

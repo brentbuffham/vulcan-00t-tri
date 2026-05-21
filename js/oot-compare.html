@@ -434,20 +434,41 @@ function parseOOT(arrayBuffer) {
     if (triggerA || triggerB) {
       fullRunActive = true;
       pos = 1;
-      while (pos + 8 <= coordRegion.length) {
+      while (pos + 3 <= coordRegion.length) {
         const ind = coordRegion[pos];
         if (ind !== 0x40 && ind !== 0x41 && ind !== 0xC0 && ind !== 0xC1) break;
-        const data = new Uint8Array(8);
-        for (let i = 0; i < 8; i++) data[i] = coordRegion[pos + i];
-        const val = readBE64(data);
-        elements.push({ etype: 'COORD', offset: pos, value: val, kind: 'FULL', nBytes: 8 });
+        // Fan-style 3-byte short FULL: clean round values (900.0, 500.0) are
+        // stored as just [40, expHi, expLo]; trailing bytes belong to subsequent
+        // tags/seps. If val_3 is exact integer AND val_8 is within 0.5, the 5
+        // trailing bytes aren't mantissa data — use the short FULL.
+        const data3 = new Uint8Array(8);
+        for (let i = 0; i < 3; i++) data3[i] = coordRegion[pos + i];
+        const val3 = readBE64(data3);
+        let useShort = false;
+        let data, val, nb;
+        if (pos + 8 <= coordRegion.length) {
+          const data8 = new Uint8Array(8);
+          for (let i = 0; i < 8; i++) data8[i] = coordRegion[pos + i];
+          const val8 = readBE64(data8);
+          if (Math.abs(val3 - Math.round(val3)) < 1e-6
+              && Math.abs(val8 - val3) < 0.5
+              && val3 > 10 && val3 < 1e6) {
+            useShort = true;
+          }
+          if (useShort) { data = data3; val = val3; nb = 3; }
+          else { data = data8; val = val8; nb = 8; }
+        } else {
+          if (Math.abs(val3 - Math.round(val3)) < 1e-6 && val3 > 10 && val3 < 1e6) {
+            data = data3; val = val3; nb = 3;
+          } else { break; }
+        }
+        elements.push({ etype: 'COORD', offset: pos, value: val, kind: 'FULL', nBytes: nb });
         if (Math.abs(val) > 1) {
           fullValues.push(Math.abs(val));
           if (fullValues.length === 3) ideltaThreshold = Math.max(...fullValues) * 3;
         }
-        // prev is a Uint8Array (const ref) — copy bytes in place
         for (let i = 0; i < 8; i++) prev[i] = data[i];
-        pos += 8;
+        pos += nb;
       }
     }
   }
@@ -514,10 +535,21 @@ function parseOOT(arrayBuffer) {
       } else {
         // Pick prev: by default running prev, but use base[Y] (2nd FULL) when
         // 80:1f flag was just set and this is a 1-byte DELTA in old format.
+        // Gated on !fullRunActive: fan also has 80:1f but with clean running
+        // prev, so base[Y] override gives wrong magnitudes (581 vs 600).
         let baseForDelta = prev;
-        if (useBaseYForNextDelta && nb === 1 && fullBytesHistory.length >= 2 && !isNewFormat) {
+        if (useBaseYForNextDelta && nb === 1 && fullBytesHistory.length >= 2
+            && !isNewFormat && !fullRunActive) {
           baseForDelta = fullBytesHistory[1];
           forcedAxisForThis = 1;
+        }
+        if (fullRunActive) {
+          // Fan-style: clean coords stored with trailing zeros — snap prev's
+          // bytes 3..7 to zero so DELTA result is exact (e.g. 300 from 476.34
+          // prev → 300.0, not 300.05).
+          const snap = new Uint8Array(8);
+          snap[0] = baseForDelta[0]; snap[1] = baseForDelta[1]; snap[2] = baseForDelta[2];
+          baseForDelta = snap;
         }
         r = new Uint8Array(8);
         r[0] = baseForDelta[0];
@@ -573,17 +605,39 @@ function parseOOT(arrayBuffer) {
               || nb === 0x40 || nb === 0x41 || nb === 0xC0 || nb === 0xC1;
         };
         if ((b === 0x40 || b === 0x41 || b === 0xC0 || b === 0xC1)
-            && b2 !== 0x49 && b2 !== 0x59 && b2 !== 0x69 && b2 !== 0x79
-            && _saneSequel(pos + 8)) {
-          const cand = new Uint8Array(8);
-          for (let i = 0; i < 8; i++) cand[i] = coordRegion[pos + i];
-          const cval = readBE64(cand);
-          if (cval === cval && cval > 10 && cval < 1e6) {
-            elements.push({ etype: 'COORD', value: cval, kind: 'FULL', nBytes: 8 });
-            fullValues.push(Math.abs(cval));
-            for (let i = 0; i < 8; i++) prev[i] = cand[i];
-            pos += 8;
-            continue;
+            && b2 !== 0x49 && b2 !== 0x59 && b2 !== 0x69 && b2 !== 0x79) {
+          // Fan-style 3-byte short FULL: same heuristic as init loop.
+          if (pos + 3 <= coordRegion.length) {
+            const d3 = new Uint8Array(8);
+            for (let i = 0; i < 3; i++) d3[i] = coordRegion[pos + i];
+            const v3 = readBE64(d3);
+            let v8Check = null;
+            if (pos + 8 <= coordRegion.length) {
+              const d8 = new Uint8Array(8);
+              for (let i = 0; i < 8; i++) d8[i] = coordRegion[pos + i];
+              v8Check = readBE64(d8);
+            }
+            if (Math.abs(v3 - Math.round(v3)) < 1e-6
+                && v3 > 10 && v3 < 1e6
+                && (v8Check === null || Math.abs(v8Check - v3) < 0.5)) {
+              elements.push({ etype: 'COORD', value: v3, kind: 'FULL', nBytes: 3 });
+              fullValues.push(Math.abs(v3));
+              for (let i = 0; i < 8; i++) prev[i] = d3[i];
+              pos += 3;
+              continue;
+            }
+          }
+          if (pos + 8 <= coordRegion.length && _saneSequel(pos + 8)) {
+            const cand = new Uint8Array(8);
+            for (let i = 0; i < 8; i++) cand[i] = coordRegion[pos + i];
+            const cval = readBE64(cand);
+            if (cval === cval && cval > 10 && cval < 1e6) {
+              elements.push({ etype: 'COORD', value: cval, kind: 'FULL', nBytes: 8 });
+              fullValues.push(Math.abs(cval));
+              for (let i = 0; i < 8; i++) prev[i] = cand[i];
+              pos += 8;
+              continue;
+            }
           }
         }
         if (b >= 0x08 && b <= 0x0e && _saneSequel(pos + 8)) {
@@ -825,7 +879,19 @@ function parseOOT(arrayBuffer) {
           if (gk.axis >= 0 && gk.axis <= 2) running_fan[gk.axis] = gk.value;
           verts.push([...running_fan]);
         }
-        let firstPairX = null;
+        // Collect pair Xs to pick reuse_x = max (V4 in fan empirically reuses V1.X = 300)
+        const pairXs = [];
+        {
+          let i3 = 3;
+          while (i3 < trimmedGroups.length) {
+            const gi3 = trimmedGroups[i3];
+            if (i3 + 1 < trimmedGroups.length && gi3.axis === 0 && trimmedGroups[i3 + 1].axis === 1) {
+              pairXs.push(gi3.value);
+              i3 += 2;
+            } else { i3 += 1; }
+          }
+        }
+        const reuseX = pairXs.length > 0 ? Math.max(...pairXs) : trimmedGroups[0].value;
         let slot = 1;
         let i2 = 3;
         while (i2 < trimmedGroups.length) {
@@ -833,10 +899,9 @@ function parseOOT(arrayBuffer) {
           if (i2 + 1 < trimmedGroups.length && gi.axis === 0 && trimmedGroups[i2 + 1].axis === 1) {
             const xv = gi.value, yv = trimmedGroups[i2 + 1].value;
             if (slot + 1 < verts.length) verts[slot + 1] = [xv, yv, baseZ_fan];
-            if (firstPairX === null) firstPairX = xv;
             slot += 2; i2 += 2;
           } else if (gi.axis === 1) {
-            if (firstPairX !== null && slot < verts.length) verts[slot] = [firstPairX, gi.value, baseZ_fan];
+            if (slot < verts.length) verts[slot] = [reuseX, gi.value, baseZ_fan];
             slot += 1; i2 += 1;
           } else { slot += 1; i2 += 1; }
         }
@@ -1308,10 +1373,47 @@ function parseOOT(arrayBuffer) {
     // Step 3: build final vertex list: keep unique vertices (dupRemap[i]===i)
     // OR referenced duplicates. Drop unreferenced duplicates only.
     // For prism-pattern files, ALSO drop unreferenced unique phantoms.
-    const prismPatternPost = trimmedGroups.some(g =>
+    // Fan-style files also carry 80:1f but their apex/rim vertices are
+    // unreferenced uniques that we MUST keep — gate the prism drop.
+    const _zValsPost = trimmedGroups.filter(g => g.axis === 2 && Math.abs(g.value) > 1).map(g => g.value);
+    const _yCountPost = trimmedGroups.filter(g => g.axis === 1).length;
+    const _fanPatternPost = (
+      trimmedGroups.length >= 5 && _zValsPost.length >= 1 && _yCountPost >= 4 &&
+      _zValsPost.every(z => Math.abs(z - _zValsPost[0]) < 0.5) &&
+      trimmedGroups[0].axis === 0 && trimmedGroups[1].axis === 1 && trimmedGroups[2].axis === 2
+    );
+    const prismPatternPost = (!_fanPatternPost) && trimmedGroups.some(g =>
       (g.forcedAxis !== undefined && g.forcedAxis >= 0) ||
       g.tags.some(t => t.cls === '80' && t.byte2 === 0x1f)
     );
+    // Fan chimera drop: unreferenced uniques that aren't a valid (X, Y, Z)
+    // combo from the encoder's group structure are intermediate running-state
+    // captures (X from one pair + Y from another); drop them from render.
+    const validFanCombos = new Set();
+    if (_fanPatternPost) {
+      const baseZpost = _zValsPost[0];
+      const rnd = (c) => c.toFixed(3);
+      const combo = (x, y, z) => `${rnd(x)}|${rnd(y)}|${rnd(z)}`;
+      validFanCombos.add(combo(trimmedGroups[0].value, trimmedGroups[1].value, baseZpost));
+      const pairXsPost = [];
+      const pairsPost = [];
+      const yOnlysPost = [];
+      let kk = 3;
+      while (kk < trimmedGroups.length) {
+        const gk = trimmedGroups[kk];
+        if (kk + 1 < trimmedGroups.length && gk.axis === 0 && trimmedGroups[kk + 1].axis === 1) {
+          pairsPost.push([gk.value, trimmedGroups[kk + 1].value]);
+          pairXsPost.push(gk.value);
+          kk += 2;
+        } else if (gk.axis === 1) {
+          yOnlysPost.push(gk.value);
+          kk += 1;
+        } else { kk += 1; }
+      }
+      for (const [x, y] of pairsPost) validFanCombos.add(combo(x, y, baseZpost));
+      const reuseXpost = pairXsPost.length > 0 ? Math.max(...pairXsPost) : trimmedGroups[0].value;
+      for (const y of yOnlysPost) validFanCombos.add(combo(reuseXpost, y, baseZpost));
+    }
     const referenced = new Set();
     for (const f of validFaces) for (const i of f) referenced.add(i);
     const finalRemap = {};
@@ -1320,6 +1422,11 @@ function parseOOT(arrayBuffer) {
       const isDup = dupRemap[i] !== i;
       if (isDup && !referenced.has(i)) continue;  // drop unreferenced duplicate
       if (prismPatternPost && !referenced.has(i) && !isDup) continue;  // drop phantom uniques (prism only)
+      if (_fanPatternPost && !referenced.has(i) && !isDup) {
+        const v = vertices[i];
+        const key = `${v[0].toFixed(3)}|${v[1].toFixed(3)}|${v[2].toFixed(3)}`;
+        if (!validFanCombos.has(key)) continue;  // drop fan chimera
+      }
       finalRemap[i] = newVerts.length;
       newVerts.push(vertices[i]);
     }
@@ -1820,10 +1927,9 @@ window.loadExample = async (key) => {
       rwarn.textContent = (rwarn.textContent ? rwarn.textContent + ' | ' : '') + outlierMsg;
     }
     if (document.getElementById('debug-panel').style.display !== 'none') renderDebug(ootResult);
-    console.log('[loadExample]', key, {dxf: dxfResult, oot: ootResult});
+    console.log('[loadExample]', key, {oot: ootResult});
   } catch (err) {
     console.error('[loadExample] failed:', err);
-    alert('Load failed: ' + err.message);
   }
 };
 

@@ -97,18 +97,43 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
     if trigger_a or trigger_b:
         full_run_active = True
         pos = 1  # skip the run-start marker
-        while pos + 8 <= len(region) and region[pos] in FULL_INDICATORS:
-            data = list(region[pos:pos + 8])
-            val = read_be_double(bytes(data))
+        while pos + 3 <= len(region) and region[pos] in FULL_INDICATORS:
+            # Fan-style 3-byte short FULL: clean round values (900.0, 500.0)
+            # are stored as just [40, expHi, expLo] with trailing bytes belonging
+            # to subsequent tags/seps. Detect by comparing val_3 (zero-padded)
+            # against val_8: if val_3 is exact integer AND val_8 is within 0.5,
+            # the 5 trailing bytes are not mantissa data.
+            data3 = list(region[pos:pos + 3]) + [0] * 5
+            val3 = read_be_double(bytes(data3))
+            use_short = False
+            if pos + 8 <= len(region):
+                data8 = list(region[pos:pos + 8])
+                val8 = read_be_double(bytes(data8))
+                if (abs(val3 - round(val3)) < 1e-6
+                        and abs(val8 - val3) < 0.5
+                        and 10.0 < val3 < 1e6):
+                    use_short = True
+            else:
+                use_short = (abs(val3 - round(val3)) < 1e-6 and 10.0 < val3 < 1e6)
+            if use_short:
+                data = data3
+                val = val3
+                nb = 3
+            else:
+                if pos + 8 > len(region):
+                    break
+                data = list(region[pos:pos + 8])
+                val = read_be_double(bytes(data))
+                nb = 8
             elements.append(CoordElement(
-                etype='COORD', offset=pos, value=val, kind='FULL', n_bytes=8
+                etype='COORD', offset=pos, value=val, kind='FULL', n_bytes=nb
             ))
             if abs(val) > 1:
                 full_values.append(abs(val))
                 if len(full_values) == 3:
                     idelta_threshold = max(full_values) * 3
             prev = data
-            pos += 8
+            pos += nb
 
     while pos < len(region):
         b = region[pos]
@@ -165,9 +190,18 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
                 if (use_base_y_for_next_delta
                         and nb == 1
                         and len(full_bytes_history) >= 2
-                        and not new_format):
+                        and not new_format
+                        and not full_run_active):
+                    # Prism-only: fan also hits 80:1f but with a clean running prev,
+                    # so applying base[Y] there gives wrong magnitudes (581 vs 600).
                     base_for_delta = full_bytes_history[1]
                     forced_axis_for_this = 1  # axis Y
+                if full_run_active:
+                    # Fan-style DELTAs assume prev was zero-padded after byte 2
+                    # (clean trailing bytes). When prev is an 8-byte FULL with
+                    # real mantissa bits, those bits would leak into the DELTA
+                    # result (e.g. 300 from 476.34 prev → 300.05). Snap.
+                    base_for_delta = list(base_for_delta[:3]) + [0] * 5
                 if new_format:
                     # New format: zero out trailing bytes
                     r = [base_for_delta[0]] + stored + [0] * (8 - nb - 1)
@@ -233,17 +267,36 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
                             or is_separator(nb)
                             or (nb & 0xE0) in (0x20, 0x40, 0x60, 0x80, 0xA0, 0xC0, 0xE0)
                             or nb in (0x40, 0x41, 0xC0, 0xC1))
-                if b in FULL_INDICATORS and b2 not in COMPACT_FULL_BYTE2 and _sane_sequel(pos + 8):
-                    cand = list(region[pos:pos + 8])
-                    cval = read_be_double(bytes(cand))
-                    if cval == cval and 10.0 < cval < 1e6:
-                        elements.append(CoordElement(
-                            etype='COORD', offset=pos, value=cval, kind='FULL', n_bytes=8,
-                        ))
-                        full_values.append(abs(cval))
-                        prev = cand
-                        pos += 8
-                        continue
+                if b in FULL_INDICATORS and b2 not in COMPACT_FULL_BYTE2:
+                    # Fan-style 3-byte short FULL: prefer val_3 if it's an exact
+                    # integer close to val_8 (same heuristic as init FULL-run loop).
+                    if pos + 3 <= len(region):
+                        d3 = list(region[pos:pos + 3]) + [0] * 5
+                        v3 = read_be_double(bytes(d3))
+                        v8_check = None
+                        if pos + 8 <= len(region):
+                            v8_check = read_be_double(bytes(region[pos:pos + 8]))
+                        if (abs(v3 - round(v3)) < 1e-6
+                                and 10.0 < v3 < 1e6
+                                and (v8_check is None or abs(v8_check - v3) < 0.5)):
+                            elements.append(CoordElement(
+                                etype='COORD', offset=pos, value=v3, kind='FULL', n_bytes=3,
+                            ))
+                            full_values.append(abs(v3))
+                            prev = d3
+                            pos += 3
+                            continue
+                    if pos + 8 <= len(region) and _sane_sequel(pos + 8):
+                        cand = list(region[pos:pos + 8])
+                        cval = read_be_double(bytes(cand))
+                        if cval == cval and 10.0 < cval < 1e6:
+                            elements.append(CoordElement(
+                                etype='COORD', offset=pos, value=cval, kind='FULL', n_bytes=8,
+                            ))
+                            full_values.append(abs(cval))
+                            prev = cand
+                            pos += 8
+                            continue
                 if b in (0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e) and _sane_sequel(pos + 8):
                     ieee = [0x40] + list(region[pos + 1:pos + 8])
                     lval = read_be_double(bytes(ieee))
@@ -549,10 +602,10 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
     )
     if fan_pattern:
         base_z = z_vals[0]
-        # Build legacy running-state primaries (one per non-base group) so
-        # face section DATA refs — authored against this layout — still land
-        # at valid indices. Then OVERWRITE specific slots with clean (X, Y)
-        # pair vertices so the rendered positions match DXF.
+        # Legacy layout: face section DATA refs are authored against a per-group
+        # running-state vertex list. Keep that scaffold so face indices land on
+        # valid slots; overwrite the slots that actually correspond to clean
+        # (X, Y) pair vertices with the correct values.
         verts = [[groups[0].value, groups[1].value, base_z]]
         running = [groups[0].value, groups[1].value, base_z]
         for g in groups[3:]:
@@ -560,12 +613,20 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
                 running[g.axis] = g.value
             verts.append(list(running))
 
-        # Walk groups again and pair (X, Y) values per vertex. The Y member
-        # of each (X, Y) pair lands at slot+1 (since after X update we have
-        # phantom slot, then after Y the clean vertex). For Y-only groups,
-        # X is reused from the FIRST pair (apex of fan).
-        first_pair_x = None
-        slot = 1  # verts[0] is V_base; first non-base primary is at verts[1]
+        # Collect pairs to determine reuse_x = max X (V4 empirically reuses V1.X).
+        pair_xs = []
+        i = 3
+        while i < len(groups):
+            g = groups[i]
+            if i + 1 < len(groups) and g.axis == 0 and groups[i + 1].axis == 1:
+                pair_xs.append(g.value)
+                i += 2
+            else:
+                i += 1
+        reuse_x = max(pair_xs) if pair_xs else groups[0].value
+
+        # Walk groups again and place clean (X, Y) pair vertices at slot+1.
+        slot = 1
         i = 3
         while i < len(groups):
             g = groups[i]
@@ -574,13 +635,12 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
                 y_val = groups[i + 1].value
                 if slot + 1 < len(verts):
                     verts[slot + 1] = [x_val, y_val, base_z]
-                if first_pair_x is None:
-                    first_pair_x = x_val
                 slot += 2
                 i += 2
             elif g.axis == 1:
-                if first_pair_x is not None and slot < len(verts):
-                    verts[slot] = [first_pair_x, g.value, base_z]
+                # Y-only — reuse X = max X (V4 in fan)
+                if slot < len(verts):
+                    verts[slot] = [reuse_x, g.value, base_z]
                 slot += 1
                 i += 1
             else:
@@ -590,23 +650,18 @@ def build_vertex_table(groups: List[CoordGroup], n_faces: int = 0) -> List[List[
         # Append c0_slots so face section DATA refs to high indices land on
         # actual vertices (the legacy builder does this after primaries).
         c0_slots_local = {}
-        base_xyz = [groups[0].value, groups[1].value, base_z]
-        running2 = list(base_xyz)
         assigner_classes = {'C0', '40', '80', '60', 'A0', '20'}
+        base_xyz = [groups[0].value, groups[1].value, base_z]
         for g in groups:
             ax = g.axis
-            if 0 <= ax <= 2:
-                running2[ax] = g.value
             for t in g.tags:
                 if t.cls in assigner_classes and t.hi_nib > 0 and 0 <= ax <= 2:
                     sl = t.hi_nib
                     if sl not in c0_slots_local:
                         c0_slots_local[sl] = list(base_xyz)
                     c0_slots_local[sl][ax] = g.value
-                    if t.lo_nib == 0x7:
+                    if t.lo_nib in (0x7, 0xF):
                         c0_slots_local[sl][2] = base_z
-                    elif t.lo_nib == 0xF:
-                        c0_slots_local[sl][2] = base_z  # fan has only one Z
         for sl in sorted(c0_slots_local.keys()):
             verts.append(c0_slots_local[sl])
         return verts
@@ -1854,10 +1909,54 @@ def parse_oot_v2(filepath: str) -> OotResult:
         # Note: A0:7f (4-prism's similar tag) is NOT included here because
         # 4-prism's c0_slot[4] = DXF V0 is a valid unreferenced unique that
         # we must keep — the face decoder needs to still pick it up.
-        prism_pattern_post = any(
+        # Fan-style files also carry 80:1f but with Z-flat + many-Y group shape,
+        # and their apex/rim vertices are unreferenced uniques that we MUST keep.
+        # Recompute the same fan_pattern test from build_vertex_table.
+        _z_vals_post = [g.value for g in groups if g.axis == 2 and abs(g.value) > 1]
+        _y_count_post = sum(1 for g in groups if g.axis == 1)
+        _fan_pattern_post = (
+            len(groups) >= 5
+            and len(_z_vals_post) >= 1
+            and all(abs(z - _z_vals_post[0]) < 0.5 for z in _z_vals_post)
+            and _y_count_post >= 4
+            and groups[0].axis == 0 and groups[1].axis == 1 and groups[2].axis == 2
+        )
+        prism_pattern_post = (not _fan_pattern_post) and any(
             g.forced_axis >= 0 or any(t.cls == '80' and t.byte2 == 0x1f for t in g.tags)
             for g in groups
         )
+        # For fan-style: build the set of "valid" (X, Y, Z) combos from the
+        # encoder's group structure — apex (G0,G1,G2) + each (X,Y) pair + each
+        # Y-only group with reuse_x = max pair X. An unreferenced unique vertex
+        # that doesn't match any valid combo is a "chimera" (intermediate
+        # running-state capture: X from one pair, Y from another) and should be
+        # dropped from the rendered output even though we keep it during the
+        # face-decode phase (the decoder's index space needs the scaffolding).
+        valid_fan_combos = set()
+        if _fan_pattern_post:
+            _base_z_post = _z_vals_post[0]
+            _apex_post = (groups[0].value, groups[1].value, _base_z_post)
+            valid_fan_combos.add(tuple(round(c, 3) for c in _apex_post))
+            _pair_xs_post = []
+            _pairs_post = []
+            _y_onlys_post = []
+            _k = 3
+            while _k < len(groups):
+                _gk = groups[_k]
+                if (_k + 1 < len(groups) and _gk.axis == 0 and groups[_k + 1].axis == 1):
+                    _pairs_post.append((_gk.value, groups[_k + 1].value))
+                    _pair_xs_post.append(_gk.value)
+                    _k += 2
+                elif _gk.axis == 1:
+                    _y_onlys_post.append(_gk.value)
+                    _k += 1
+                else:
+                    _k += 1
+            for _x, _y in _pairs_post:
+                valid_fan_combos.add(tuple(round(c, 3) for c in (_x, _y, _base_z_post)))
+            _reuse_x = max(_pair_xs_post) if _pair_xs_post else groups[0].value
+            for _y in _y_onlys_post:
+                valid_fan_combos.add(tuple(round(c, 3) for c in (_reuse_x, _y, _base_z_post)))
         referenced = set()
         for f in remapped_faces:
             for idx in f:
@@ -1870,6 +1969,9 @@ def parse_oot_v2(filepath: str) -> OotResult:
                 continue
             if prism_pattern_post and i not in referenced and not is_dup:
                 continue  # drop unreferenced phantom uniques (prism only)
+            if (_fan_pattern_post and i not in referenced and not is_dup
+                    and tuple(round(c, 3) for c in v) not in valid_fan_combos):
+                continue  # drop fan-mode chimera (X from one pair + Y from another)
             final_remap[i] = len(new_verts)
             new_verts.append(v)
 

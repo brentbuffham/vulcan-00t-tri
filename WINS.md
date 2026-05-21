@@ -46,6 +46,27 @@ Each entry: the rule, byte signature, where it lives, the test that found it.
 - **Where:** `python/oot_parser_v2.py` `_sane_sequel()` and the two greedy fall-throughs.
 - **Test:** TEST-057. Eliminated 2 cube2 artifacts (11.52 and 33282).
 
+### W6. 3-byte short FULL detection in FULL-run mode
+- **What:** Clean round values (900.0, 500.0) are stored as just 3 bytes (sign+exp+leading mantissa) — the trailing 5 IEEE bytes would be all-zero, and the encoder omits them in favor of subsequent TAG/SEP bytes. Detect by comparing `val_3` (read 3 bytes + 5 zeros) against `val_8` (read 8 bytes): if `val_3` is an exact integer AND `val_8` is within 0.5 of it, prefer `val_3` and advance 3 bytes.
+- **Where:** `python/oot_parser_v2.py` init FULL-run loop and standard-parsing FULL extension; mirrored in `js/oot-compare.html`.
+- **Test:** TEST-062. Cracked fan: 900.0/500.0 exact (was 900.05/500.03), and recovered 273.24 (was eaten by 900 over-read).
+- **Generalization:** Encoder rule for any file with `full_run_active`. Will likely apply to NonRound too.
+
+### W7. Snap-prev-to-3-bytes before DELTA in `full_run_active`
+- **What:** In FULL-run mode, before computing a DELTA, zero out `prev[3:8]`. The encoder assumes DELTAs are stacked on "clean" prev values where bytes 3..7 are zero; if `prev` was a real 8-byte FULL with mantissa data, leaving those bytes in causes the DELTA result to inherit mantissa noise.
+- **Where:** `python/oot_parser_v2.py` DELTA reconstruction, gated on `full_run_active`; mirrored in JS.
+- **Test:** TEST-062. Fan 300 DELTA from prev=476.34 → exact 300.0 (was 300.05); 600 DELTA from clean 300 prev → exact 600.0 (was 600.05).
+
+### W8. Gate `80:1f` prism rule on `not full_run_active`
+- **What:** Prism's "use base[Y] for next 1-byte DELTA" rule mis-fires in fan/NonRound (also have 80:1f tags but with clean running prev). Gate the rule so it only applies outside FULL-run mode.
+- **Where:** `python/oot_parser_v2.py` use_base_y_for_next_delta branch; mirrored in JS.
+- **Test:** TEST-062.
+
+### W9. Gate `prism_pattern_post` dedup-drop on `not _fan_pattern_post`
+- **What:** The post-build deduplication drops unreferenced unique verts when prism pattern is detected (`80:1f` tag present). Fan also carries `80:1f` but its apex + rim vertices are intentional unreferenced uniques that we must keep. Gate the drop on NOT fan_pattern (Z-flat + ≥4 Y-axis groups + standard axis prefix).
+- **Where:** `python/oot_parser_v2.py` dedup step; mirrored in JS.
+- **Test:** TEST-062. Recovered fan apex (V3=254.29, 482.66) and V5 (273.24, 476.34).
+
 ## Solved File Formats
 
 | File | Verts | Faces | Structural mode |
@@ -56,6 +77,7 @@ Each entry: the rule, byte signature, where it lives, the test that found it.
 | `tri-crack-solid` (cube) | 8/8 | 12 | axis-aligned box, full SEP/E0 grammar |
 | `tri-crack-prism` | 4/4 | — | prism mode |
 | `tri-crack-4sides-prism` | 5/5 | — | 4-sided prism |
+| `tri-crack-fan` | 6/6 | — | flat fan, FULL-run with 3-byte short FULLs + DELTA snap |
 
 ## Partial Wins (real progress, not yet 100%)
 
@@ -65,9 +87,8 @@ Each entry: the rule, byte signature, where it lives, the test that found it.
 | cube2 (-25°) | 1/8 corners, 8/10 distinct values | Decoder emits 41.78, 62.91, 87.09, 16.78, 37.91, 108.23 (rotated coords) | 2 missing values (Y=62.09, Y=83.22), Z=60 missing, axis assignment wrong |
 | cube3 (-75°) | 1/8 corners, 7/10 distinct values | Similar — most rotated values decoded | Y=19.38, Y=80.62 missing, Z=60 missing |
 | Hexhole | 3/12 | Some decode | Multi-section unhandled |
-| NonRound | 2/16 | Some decode | Decoder mode unknown |
+| NonRound | 2/16 | Same encoding family as fan; 3-byte short FULL + DELTA snap apply but X-reuse rule unknown | Pairing |
 | SPHERE | 3/50 | TEST-058 axis state machine helped | Multi-section + axis overlap |
-| Fan | 3/6 | Mode partially derived | Pairing of values into vertices |
 
 ## Anti-Patterns (rejected and reverted, kept here so we don't repeat them)
 

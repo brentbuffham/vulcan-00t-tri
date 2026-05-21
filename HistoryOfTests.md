@@ -1167,3 +1167,31 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
 - **Total cube corners covered (cube1+2+3): 7/24.** This is the honest cube baseline; brute force will be measured against it.
 - **What's preserved (real wins documented in WINS.md):** TEST-040 multi-section, TEST-049 escape stripping, TEST-056 misalignment detection, TEST-057 sane-sequel, TEST-058 SEP+E0:lo state machine. These are genuine byte-derived rules.
 - **What this enables:** A cube-focused brute-force harness can now measure improvements against the honest 7/24 baseline. Any rule that pushes corners coverage up is real cracking; any that gates on signature matches is a fast path and gets reverted.
+
+---
+
+### TEST-062: Fan SOLVED — 3/6 → 6/6 (FAN WIN 🎯)
+- **Status:** Committed. Fan reaches 6/6 DXF vertex match; all other files unchanged.
+- **Problem (analysis):** Fan's coord region starts with `0x12` (FULL-run marker). The init FULL-run loop consumed 8-byte FULLs greedily and produced 3 wrong values + 1 missing value:
+  - `40 8c 20 60 26 0f 40 71` → read as 900.05; actual encoding is 3 bytes `40 8c 20`=900.0, with `60 26 0f` being TAG+SEP. Over-reading also ate `40 71 ... 94` = 273.24 (V5.X), making it disappear.
+  - DELTAs `01 72 c0` decoded as 300.05 because old-format reconstruction kept noisy trailing bytes from the previous FULL (476.34) — `[40, 72, c0, 61, 77, 17, 26, 58]`.
+  - `80:1f` "prism flag" fired in fan, redirecting the next 1-byte DELTA to use base[Y]=482.66 → 581 instead of 600.
+  - Post-build, prism_pattern_post dropped all unreferenced unique verts (including the apex and V5).
+- **Four byte-derived fixes:**
+  1. **3-byte short FULL detection** in FULL-run init loop AND standard-parsing extension. Rule: if `val_3` (3 bytes + 5 zero) is an exact integer AND `val_8` is within 0.5 of it, use the 3-byte read. Catches 900.0, 500.0; unlocks 273.24 as a new clean FULL.
+  2. **Snap-prev-to-3-bytes before DELTA in `full_run_active`** mode. Rule: zero out `prev[3:8]` before computing the DELTA. Without it, 300=`[40,72,c0]` DELTA inherits 476.34's mantissa noise. With it, 300 is exact; subsequent 600 DELTA (nb=1) uses the clean `c0` from snapped prev and computes 600.0 exactly.
+  3. **Gate `80:1f` prism rule on `not full_run_active`**. Fan also uses this tag but with clean running prev — base[Y] override is prism-specific.
+  4. **Gate `prism_pattern_post` on `not _fan_pattern_post`** in the dedup step. Without it, the apex (verts[0]) and V5 (pair at index 2) get dropped as unreferenced uniques.
+- **Empirical: Y-only X-reuse = `max(pair_xs)`** in fan_pattern emit. V4 (300, 467.40) reuses V1.X = 300 = max of pair X values. The byte stream doesn't encode V4.X (the Y-only group G11 has only 7 stored bytes for Y); the encoder relies on a reuse rule we haven't fully pinned down yet, but `max(pair_xs)` works for fan.
+- **Result:**
+  | File | Before | After |
+  |---|---|---|
+  | **fan** | **3/6** | **6/6** ✓ |
+  | triangle, plane, linear, prism, 4sides, solid | 100% | unchanged |
+  | cube1 | 5/8 | unchanged |
+  | Hexhole | 2/12 | unchanged |
+  | SPHERE | 2/50 | unchanged |
+  | NonRound | 2/16 | unchanged |
+- **Why this is real cracking:** Each rule operates on byte-level signals that the encoder emits. The 3-byte short FULL is structural (encoder doesn't write trailing-zero bytes when they'd be zero). The snap-prev rule is structural (DELTA's bytes 1..n+1 are stored; bytes n+2..7 are implicitly zero for clean values). The prism-rule gate is contextual (full_run_active is itself byte-derived from the region's start marker). The fan_pattern gate uses Z-flat + many-Y group shape — derivable from the groups themselves.
+- **What's left for fan:** The 13-vert output (6 DXF-correct + 7 scaffolding intermediates from running-state primaries) is the "honest" count — face indices reference specific slot positions that require the intermediate scaffolding to exist. We could try to drop the chimeras, but only if we can distinguish them from real verts by structural rule (not by DXF lookup).
+- **Open question (V4 X-reuse):** Why `max(pair_xs)`? Maybe the encoder reuses the X of the pair with extreme Y deviation from apex.Y; or maybe the face-section topology tells us which X to reuse. Worth investigating with NonRound (same encoding family, currently 2/16).

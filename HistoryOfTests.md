@@ -1198,6 +1198,35 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
 
 ---
 
+### TEST-071: 4-sides prism is Mode D — rectangular-prism pattern needing own branch
+- **Status:** Diagnosed. 4-sides has dxf_match=5/5 (all 5 DXF coord values
+  present) but legacy parser emits 10 verts (5 real + 5 chimera) → visually
+  broken spike instead of prism shape.
+- **Real DXF verts produced (5 of 10):**
+  - V0 primary[i=2] = (1000, 100, 5000) — DXF V1
+  - V1 primary[i=4] = (1200, 50, 5000) — DXF V3
+  - V2 primary[i=7] = (1100, 75, 5500) — DXF V2 (apex)
+  - V4 primary[i=3] = (1200, 100, 5000) — DXF V4
+  - V5 c0_slot[1] = (1000, 50, 5000) — DXF V0
+- **Chimera positions (5 of 10):** intermediate running-state primaries at
+  (1000, 75, 5000), (1100, 50, 5000), (1100, 75, 5000), (1100, 100, 5000),
+  (1000, 72, 5500).
+- **Signature:** G0 tag '60', G1 tag '60', G2 tag '20' (NOT '60' like fan,
+  NOT 'E0' like Mode B), A0:7f tag on G6 triggers apex_y_synth, leading_40
+  header True, init_verts=[1,3,7].
+- **Path forward:** New "Mode D" isolated branch for rectangular prisms.
+  Pipeline:
+  - Detect: G0/G1 cls=='60' AND G2 cls=='20' AND apex_y_synth fires
+  - Build verts: 4 base corners at {min/max X} × {min/max Y} × base_Z, +
+    apex at (apex_x_from_G5, apex_y_synth, alt_Z_from_G7) = 5 verts
+  - Canonical CLERS for 4-sides via dispatcher (with c_ops=2 from actual_V=5)
+  - decode_forward → 6 faces (4 sides + 2 base triangulation)
+- **Pair-completion DOESN'T work for 4-sides:** only emits 3 verts (apex +
+  2 pairs). Needs the rectangular-base derivation rule.
+- **Not committed yet — investigation only.** End-of-push stopping point.
+
+---
+
 ### TEST-069: Mode B branch architecture + hexhole/nonround coord-decoder confirmed bottleneck
 - **Status:** Mode B isolated branch shipped in Python + JS (commit 7d2638b);
   doesn't fire on current corpus due to upstream coord decoder bugs.

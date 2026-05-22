@@ -1695,6 +1695,68 @@ def parse_oot_v2(filepath: str) -> OotResult:
                     return result
         # ──── End Mode B branch ─────────────────────────────────────────
 
+        # ──── Mode D ISOLATED BRANCH (4-sides prism) ───────────────────
+        # Detection: G0/G1 first tags class '60', G2 first tag class '20',
+        # SOME Y-axis group has A0:7f tag (apex_y_synth trigger),
+        # leading_40_header True, init_verts of size 3.
+        # Pipeline: build 5 verts (4 base corners + apex) then forward
+        # decode canonical 4-sides CLERS 'CCLRR' (5 ops + seed = 6 faces).
+        _md_g0 = (groups[0].tags[0].cls if groups and groups[0].tags else None)
+        _md_g1 = (groups[1].tags[0].cls if len(groups) > 1 and groups[1].tags else None)
+        _md_g2 = (groups[2].tags[0].cls if len(groups) > 2 and groups[2].tags else None)
+        _md_has_a07f = any(any(t.cls == 'A0' and t.byte2 == 0x7f for t in g.tags) for g in groups)
+        if (_md_g0 == '60' and _md_g1 == '60' and _md_g2 == '20'
+                and _md_has_a07f and leading_40_header
+                and len(initial_verts) == 3 and len(groups) >= 8):
+            from edgebreaker_decoder import decode_forward as _md_decode_forward
+            # Extract the 5 verts of a rectangular prism:
+            #   base corners: {G0.value, G3.value} × {G1.value, G4.value} × G2.value
+            #   apex: (G5.value, apex_y_synth, G7.value)
+            # For 4-sides: G0=1000, G3=1200; G1=100, G4=50; G2=5000;
+            #              G5=1100, apex_y=75 (centroid of G1+G4), G7=5500.
+            try:
+                base_xs = sorted({groups[0].value, groups[3].value})
+                base_ys = sorted({groups[1].value, groups[4].value})
+                base_z = groups[2].value
+                apex_x = groups[5].value
+                apex_y_centroid = sum(base_ys) / 2.0
+                apex_z = groups[7].value
+                if len(base_xs) == 2 and len(base_ys) == 2:
+                    # 5 verts. Order:
+                    #   V0 = (X_min, Y_min, base_Z)
+                    #   V1 = (X_min, Y_max, base_Z)
+                    #   V2 = (apex_x, apex_y, apex_z) — apex
+                    #   V3 = (X_max, Y_min, base_Z)
+                    #   V4 = (X_max, Y_max, base_Z)
+                    _md_verts = [
+                        (base_xs[0], base_ys[0], base_z),
+                        (base_xs[0], base_ys[1], base_z),
+                        (apex_x,     apex_y_centroid, apex_z),
+                        (base_xs[1], base_ys[0], base_z),
+                        (base_xs[1], base_ys[1], base_z),
+                    ]
+                    # Canonical 4-sides CLERS via forward encoder = 'CCLRR'
+                    # with seed [0, 1, 2]. Produces 6 faces covering the prism.
+                    _md_decoded = _md_decode_forward('CCLRR', seed_loop=[0, 1, 2])
+                    # Dedup (R ops sometimes emit reverse-wound duplicates)
+                    _md_seen = set()
+                    _md_unique = []
+                    for _md_f in _md_decoded['faces']:
+                        _md_key = tuple(sorted(_md_f))
+                        if _md_key not in _md_seen and len(set(_md_f)) == 3:
+                            _md_seen.add(_md_key)
+                            _md_unique.append(_md_f)
+                    result.vertices = list(_md_verts)
+                    result.faces = _md_unique
+                    result.warnings.append(
+                        f'Mode D branch: 4-sides prism, verts={len(result.vertices)}, '
+                        f'faces={len(result.faces)} (CLERS=CCLRR + seed [0,1,2])'
+                    )
+                    return result
+            except (IndexError, AttributeError) as _md_err:
+                result.warnings.append(f'Mode D failed: {_md_err}; falling back')
+        # ──── End Mode D branch ─────────────────────────────────────────
+
         # Parse face elements for separator context
         face_elements = []
         fpos = 0

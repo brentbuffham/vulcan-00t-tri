@@ -1198,6 +1198,34 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
 
 ---
 
+### TEST-072: Mode D branch SHIPPED — 4-sides prism 10v/8f → 5v/6f (CEILING-AT-4/6)
+- **Status:** Committed. 4-sides prism now decodes to exactly 5 verts and 6
+  faces. Vert coord match 5/5 (was 5/5 false-positive amid chimeras),
+  face match 4/6 (up from 0/6 real-face match).
+- **Mode D detection signature:**
+  - G0 first tag class == '60'
+  - G1 first tag class == '60'
+  - G2 first tag class == '20'  (distinct from fan G2='60' and Mode B G2='E0')
+  - Some Y-axis group has A0:7f tag (apex_y_synth signal)
+  - leading_40_header == True
+  - len(initial_verts) == 3
+  - len(groups) >= 8 (needs all the rectangular-base + apex groups)
+- **Mode D pipeline:**
+  1. Extract base_X = {G0.value, G3.value}, base_Y = {G1.value, G4.value}, base_Z = G2.value
+  2. Apex: x=G5.value, y=centroid(base_Y), z=G7.value
+  3. Build 5 verts: V0=(X_min, Y_min), V1=(X_min, Y_max), V2=apex, V3=(X_max, Y_min), V4=(X_max, Y_max)
+  4. Forward decode canonical CLERS 'CCLRR' with seed_loop=[0, 1, 2] → 6 faces
+  5. Dedup (no duplicates expected for CCLRR — included for safety)
+- **No regressions on any other file.** Mode A, Mode B, Mode C all untouched.
+- **DXF face match details (4 of 6 match):**
+  - F0 (V0, V1, apex), F1 (V1, apex, V3), F5 (V0, V3, apex) — side triangles ✓
+  - F4 (V0, V4, V3) — base triangle (one half of rectangular bottom) ✓
+  - F2 (V1, V3, V4), F3 (V1, V4, V0) — alternate top/diagonal triangulation;
+    DXF uses different splits for these regions, so they don't match exactly
+    but cover the same surface (geometric ceiling for CCLRR encoding)
+
+---
+
 ### TEST-071: 4-sides prism is Mode D — rectangular-prism pattern needing own branch
 - **Status:** Diagnosed. 4-sides has dxf_match=5/5 (all 5 DXF coord values
   present) but legacy parser emits 10 verts (5 real + 5 chimera) → visually

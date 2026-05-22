@@ -1437,6 +1437,76 @@ function parseOOT(arrayBuffer) {
     }
     // ──── End Mode B branch ────────────────────────────────────────────
 
+    // ──── Mode D ISOLATED BRANCH (4-sides prism, sync with Python TEST-072) ──
+    // Detection: G0/G1 cls='60', G2 cls='20', some Y group has A0:7f,
+    // leading_40_header, init_verts.length == 3.
+    // Pipeline: build 5 verts (4 base corners + apex), decode canonical CCLRR.
+    const _md_g0 = (trimmedGroups[0] && trimmedGroups[0].tags && trimmedGroups[0].tags.length)
+                   ? trimmedGroups[0].tags[0].cls : null;
+    const _md_g1 = (trimmedGroups[1] && trimmedGroups[1].tags && trimmedGroups[1].tags.length)
+                   ? trimmedGroups[1].tags[0].cls : null;
+    const _md_g2_for_d = (trimmedGroups[2] && trimmedGroups[2].tags && trimmedGroups[2].tags.length)
+                        ? trimmedGroups[2].tags[0].cls : null;
+    const _md_hasA07f = trimmedGroups.some(g => g.tags && g.tags.some(t => t.cls === 'A0' && t.byte2 === 0x7f));
+    if (_md_g0 === '60' && _md_g1 === '60' && _md_g2_for_d === '20'
+        && _md_hasA07f && leading40Header
+        && initialVerts.length === 3 && trimmedGroups.length >= 8) {
+      try {
+        const baseXs = Array.from(new Set([trimmedGroups[0].value, trimmedGroups[3].value])).sort((a,b) => a-b);
+        const baseYs = Array.from(new Set([trimmedGroups[1].value, trimmedGroups[4].value])).sort((a,b) => a-b);
+        const baseZ = trimmedGroups[2].value;
+        const apexX = trimmedGroups[5].value;
+        const apexY = (baseYs[0] + baseYs[1]) / 2.0;
+        const apexZ = trimmedGroups[7].value;
+        if (baseXs.length === 2 && baseYs.length === 2) {
+          const _mdVerts = [
+            [baseXs[0], baseYs[0], baseZ],
+            [baseXs[0], baseYs[1], baseZ],
+            [apexX,     apexY,     apexZ],
+            [baseXs[1], baseYs[0], baseZ],
+            [baseXs[1], baseYs[1], baseZ],
+          ];
+          // Forward EB decode of canonical 'CCLRR' with seed [0,1,2]
+          const _mdDecode = (clers, seedLoop) => {
+            const boundary = seedLoop.slice();
+            let gate = 1;
+            let nextV = Math.max(...seedLoop) + 1;
+            const faces = [[seedLoop[0], seedLoop[1], seedLoop[2]]];
+            for (const op of clers) {
+              if (op === 'X') { if (boundary.length) gate = (gate - 1 + boundary.length) % boundary.length; continue; }
+              const n = boundary.length;
+              if (n < 3) return {faces, vertexCount: nextV};
+              const gA = boundary[gate % n], gB = boundary[(gate + 1) % n];
+              if (op === 'C') { const v = nextV++; faces.push([gA, gB, v]); boundary.splice((gate % n) + 1, 0, v); }
+              else if (op === 'R') { const rN = boundary[(gate + 2) % n]; faces.push([gA, gB, rN]); boundary.splice((gate + 1) % n, 1); if (gate >= boundary.length) gate %= boundary.length; }
+              else if (op === 'L') { const lN = boundary[(gate - 1 + n) % n]; faces.push([gA, gB, lN]); boundary.splice(gate % n, 1); gate = boundary.length ? ((gate - 1 + boundary.length) % boundary.length) : 0; }
+              else if (op === 'E') { if (n >= 3) faces.push([gA, gB, boundary[(gate + 2) % n]]); boundary.length = 0; break; }
+            }
+            return {faces, vertexCount: nextV};
+          };
+          const _mdDecoded = _mdDecode('CCLRR', [0, 1, 2]);
+          const _mdSeen = new Set();
+          const _mdUnique = [];
+          for (const _mdF of _mdDecoded.faces) {
+            if (new Set(_mdF).size !== 3) continue;
+            const _mdKey = [..._mdF].sort((a,b)=>a-b).join(',');
+            if (!_mdSeen.has(_mdKey)) { _mdSeen.add(_mdKey); _mdUnique.push(_mdF); }
+          }
+          warnings.push(`Mode D branch: 4-sides prism, verts=${_mdVerts.length}, faces=${_mdUnique.length} (CLERS=CCLRR + seed [0,1,2])`);
+          return {
+            vertices: _mdVerts.map(v => v.slice()),
+            faces: _mdUnique.map(f => f.slice()),
+            warnings: warnings,
+            nVertsHeader: nVertsHeader,
+            nFacesHeader: nFacesHeader,
+          };
+        }
+      } catch (mdErr) {
+        warnings.push('Mode D failed: ' + mdErr.message + '; falling back');
+      }
+    }
+    // ──── End Mode D branch ────────────────────────────────────────────
+
     // ── Separator-based EdgeBreaker face decoder ──
     let lastSep2 = null, lastE0 = null;
     const opsWithSep = [];

@@ -410,6 +410,13 @@ def assign_axes(groups: List[CoordGroup]) -> None:
         if g.forced_axis >= 0:
             best_ax = g.forced_axis
         else:
+            # NOTE TEST-070: Tried IDELTA→STAY rule for hexhole G6 (val=1000
+            # with prev X=1000 — looked like axis reuse). Even narrowed to
+            # "value within 0.5 of prev_axis value", it regressed SPHERE/
+            # BigGrid/Hexhole vert counts because some legitimate IDELTAs
+            # produce near-duplicate values across axes (e.g. SPHERE has X
+            # and Y in similar ranges). Reverted — axis-assignment for these
+            # files needs a different approach than IDELTA-based heuristic.
             # Try state machine first. Use the FIRST E0 tag in prev_g (4-prism's
             # G4 has multiple E0 tags; the first one carries the transition
             # signal, not the last). Use the LAST sep (cube1 G4 has multiple

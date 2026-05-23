@@ -814,6 +814,16 @@ function parseOOT(arrayBuffer) {
     for (let i = 0; i < groups.length; i++) groups[i].axis = i;
   }
 
+  // TEST-080: Post-axis pin for escape-emitted FULLs (rotated cubes).
+  // TEST-076/078/079 produce FULLs with nBytes ∈ {9, 10}; they're inner-Y
+  // values. Override axis to Y after the state machine completes — this
+  // doesn't cascade into other groups.
+  for (const g of groups) {
+    if (g.kind === 'FULL' && (g.nBytes === 9 || g.nBytes === 10) && g.axis !== 1) {
+      g.axis = 1;
+    }
+  }
+
 
   // ── 8. Extract vertex assignments ──
   const assignerClasses = new Set(['C0', '40', '80', '60', 'A0', '20']);

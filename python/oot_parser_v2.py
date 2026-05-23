@@ -1595,6 +1595,20 @@ def parse_oot_v2(filepath: str) -> OotResult:
     assign_axes(groups)
     extract_c0_assignments(groups)
 
+    # TEST-080: Post-assign_axes pin for escape-emitted FULLs (rotated cubes).
+    # Escape patterns from TEST-076/078/079 produce FULLs with n_bytes ∈ {9, 10}
+    # that carry "inner-Y" coord values (cube2: 83.22, 62.09; cube3: 80.62,
+    # 32.32). The closest-delta state machine misassigns them. We override the
+    # axis to Y after assign_axes completes. This doesn't cascade into other
+    # groups (their axes are already set by the time we override). Empirical:
+    # every escape-emitted FULL in cube2 and cube3 is a GT Y value.
+    # Hybrid approach (forced_axis BEFORE assign_axes + skip current update)
+    # was tried and dropped cube2 8v → 6v due to closest-delta misclassifying
+    # downstream values against a stale current[Y]; post-process is cleaner.
+    for g in groups:
+        if g.kind == 'FULL' and g.n_bytes in (9, 10) and g.axis != 1:
+            g.axis = 1  # Y
+
     # Store raw coord values
     for g in groups:
         result.coord_values.append(g.value)

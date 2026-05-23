@@ -94,6 +94,14 @@ Each entry: the rule, byte signature, where it lives, the test that found it.
 - **Test:** TEST-079. cube3 +079 has count=0x03 followed by 0x6A 0x40 — without this rule the parser took DELTA(nb=4) and emitted junk 210.0078; with the rule it correctly emits FULL 32.3223 (GT Y_inner).
 - **Discriminator:** Scanned all 17 files for `count(0–6) + 0x6A + FULL_IND` producing sane FULL value: only cube3 has it.
 
+### W14. Escape-FULL axis pin to Y (post-assign_axes)
+- **What:** All escape-emitted FULLs (n_bytes ∈ {9, 10}) carry inner-Y coord values. The closest-delta state machine misassigns them to X or Z. Pinning their axis to Y *after* `assign_axes` finishes avoids the cascade that pre-assignment forced_axis triggers.
+- **Rule:** After `assign_axes(groups)`, iterate groups: if `kind == 'FULL'` AND `n_bytes ∈ {9, 10}`, set `axis = 1` (Y). Doesn't update `current[]` because assign_axes has already finished — no cascade.
+- **Where:** `python/oot_parser_v2.py` immediately after `extract_c0_assignments(groups)`, mirrored in `js/oot-compare.html`.
+- **Test:** TEST-080. cube3: 0/8 → 1/8 GT corners (V0 = (44.38, 67.68, 10.25) now matches). cube2: GT corner count unchanged (1/8) but 83.22 and 62.09 are now correctly classified as Y in groups (no longer misassigned X/Z).
+- **Why hybrid pre-assign + skip-current failed:** Setting `forced_axis` before assign_axes lets the state machine use the right prev axis for CYCLE BACK/FORWARD on the NEXT group, but the skip-current update strands closest-delta with a stale Y. cube2 went 8v → 6v. Post-process is the safer formulation.
+- **Generalization:** Universal byte-grammar rule (gates on n_bytes from the escape paths). Both cube2 and cube3 escape FULLs are GT Y values; rule fires only for those byte patterns.
+
 ## Solved File Formats
 
 | File | Verts | Faces | DXF Match | Mode | Structural mode |
@@ -113,7 +121,7 @@ Each entry: the rule, byte signature, where it lives, the test that found it.
 |---|---|---|---|
 | cube1 (axis-aligned) | 5/8 corners (after TEST-060 revert) | All 6 unique coord values decoded; axis state machine assigns 5/8 correctly | Slot-assignment phase doesn't generate 3 missing corners from existing values |
 | cube2 (-25°) | 1/8 corners, 9 coord values (post TEST-076), 8 verts | Decoder emits ALL 8 GT XY values: X={41.78, 62.91, 87.09, 108.22}, Y={16.78, 37.91, 62.09, 83.22}. V1 = (62.91, 37.91, 10.25) matches GT corner exactly | 1 missing value (Z=60.25 — not in coord region as IEEE double, must be DELTA-encoded somewhere we're not parsing); axis state machine misclassifies 83.22/87.09/62.09 onto wrong axes |
-| cube3 (-75°) | 0/8 corners, 11 coord values, ALL GT X/Y values decoded (post TEST-078/079) | Decoder emits 44.38, 67.68, 10.25, 57.32, 19.38, 92.67, 80.62, 105.61, 32.32 — all X and Y GT values from byte stream. Two 1-byte/2-byte escapes (`0x6A FULL_IND` and `?? 6A FULL_IND`) unlocked 80.62 and 32.32 | Z=60.25 missing (not in bytes); axis state machine misassigns multiple values onto wrong axes — no GT corners match yet; vertex assembly produces 11 verts (vs header 8) |
+| cube3 (-75°) | 1/8 corners (post TEST-080), 11 coord values, ALL GT X/Y values decoded | Decoder emits all 8 GT X/Y values + base Z. V0 = (44.38, 67.68, 10.25) matches GT after axis pin. | Z=60.25 missing (not in bytes); X axis stuck at 44.38 because state machine doesn't promote subsequent X candidates; vertex assembly produces 10 verts vs header 8 |
 | Hexhole | 3/12 | Some decode | Multi-section unhandled |
 | NonRound | 2/16 | Same encoding family as fan; 3-byte short FULL + DELTA snap apply but X-reuse rule unknown | Pairing |
 | SPHERE | 3/50 | TEST-058 axis state machine helped | Multi-section + axis overlap |

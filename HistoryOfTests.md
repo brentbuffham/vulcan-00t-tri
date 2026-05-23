@@ -1555,3 +1555,33 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
 - **Pattern across cubes 2 and 3:** Both rotated cubes embed their inner-Y values via single-byte or 2-byte escapes that the standard parser misinterprets as TAGs/DELTAs. cube2 uses `08:E? + FULL` (2-byte escape, byte2 hi-nib=0xE); cube3 uses `0x6A + FULL` (1-byte escape) and `count + 0x6A + FULL` (2-byte escape with count prefix). Each cube file appears to use a slightly different escape encoding — possibly per-file based on the structure the encoder chose. cube4/5 likely have their own variants.
 
 - **What's not a cheat:** All scans verify the discriminator (0x6A, byte2 hi-nib=0xE, count+0x6A+FULL_IND) is UNIQUE to the cube file in question. No filename/signature gating. Sanity range 1..1e4 same as other FULL guards. Rules apply universally; they just happen to only match in cube2/cube3 byte streams.
+
+---
+
+### TEST-080: Post-assign_axes pin for escape FULLs → cube3 first GT corner match
+- **Status:** Committed. cube3: 0/8 → 1/8 GT corners (V0 = (44.38, 67.68, 10.25)). cube2: 1/8 GT corners (unchanged count, but escape FULLs 83.22 and 62.09 now correctly classified as Y in groups; before, they were assigned X or Z). Zero regression on solved files.
+
+- **Problem:** TEST-076/078/079 unlocked all 8 GT X/Y values for cube2 and cube3 in `coord_values`, but the axis state machine (`assign_axes`) misclassified the escape-emitted FULLs:
+  - cube2 G4 (83.22) → assigned X, expected Y ✗
+  - cube2 G8 (62.09) → assigned Z, expected Y ✗
+  - cube3 G6 (80.62) → assigned Y (correct via state machine luck) ✓
+  - cube3 G9 (32.32) → assigned Y (correct) ✓
+  
+  These misassignments cause `extract_c0_assignments` and downstream vertex assembly to produce wrong corner combinations.
+
+- **Attempted fix #1 (rejected):** Set `forced_axis=1` BEFORE `assign_axes` runs. **Result:** cascade — when the state machine accepts the forced axis, it also updates `current[1] = g.value`. cube2's G4 (forced Y=83.22) overwrote `current[Y]=37.91`. Subsequent groups fell into closest-delta using the new Y=83.22 baseline, pulling 16.78 onto Z and 108.22 onto Y. Net: cube2 8v → 6v.
+
+- **Attempted fix #2 (rejected):** Hybrid — `forced_axis=1` before `assign_axes`, plus modify `assign_axes` to skip `current[best_ax] = g.value` for groups with `forced_axis >= 0`. **Result:** state machine still propagated via prev_g.axis correctly for the IMMEDIATELY next group (G5 cycle-back from Y to X — correct), but downstream closest-delta fallback for G6 (16.78) compared against stale current[Y]=37.91, again picking Z (16.78 is closer to Z=10.25 than to Y=37.91). cube2 stayed at 6v.
+
+- **Adopted fix (TEST-080):** Pure post-process. After `assign_axes` finishes, iterate groups and override `g.axis = 1` for any `kind == 'FULL'` with `n_bytes ∈ {9, 10}` (the escape paths). Doesn't touch `current[]` because the state machine is already done. No cascade.
+
+- **Discriminator:** `n_bytes ∈ {9, 10}` is exact: TEST-076 emits with n_bytes=10 (2-byte `08:E?` prefix + 8-byte FULL), TEST-078 emits with n_bytes=9 (1-byte `0x6A` prefix + 8-byte FULL), TEST-079 emits with n_bytes=10 (2-byte `count 0x6A` prefix + 8-byte FULL). Standard FULLs have n_bytes ∈ {2, 3, 8}.
+
+- **Result:**
+  - cube2 9v: V1 = (62.91, 37.91, 10.25) matches GT corner 1; V2 = (62.91, 83.22, 10.25) — close to GT but X wrong (GT has X=41.78 for Y=83.22). Other verts still have axis errors on G5 (87.09 — should be X, still assigned Z).
+  - cube3 10v: V0 = (44.38, 67.68, 10.25) matches GT corner 1. Remaining 9 verts have X stuck at 44.38 (state machine doesn't promote subsequent X candidates).
+
+- **What's still missing for cube2/cube3 full solve:**
+  1. G5 in cube2 (87.09, long-FULL): expected X, assigned Z. The state machine rule "SEP 17 + first E0:lo=0 → CYCLE BACK" sends G4(now Y) → X for G5, but G5 actually gets axis from G5's own state machine run with G4 still at old axis X (before post-pin), so cycle-back is X→Z. The pin needs to be DURING state machine, not after, but without cascading current[].
+  2. cube3 X axis stuck: G3 (57.32 X), G5 (92.67 X), G8 (105.61 X) are all misclassified to Y or Z. Multiple cascading errors.
+  3. Z=60.25 still missing from byte stream.

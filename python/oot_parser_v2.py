@@ -83,6 +83,17 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
     # block the greedy FULL fall-throughs (0x40-prefix and long-FULL marker)
     # until the next SEP or standard-class TAG re-anchors us.
     misaligned = False
+    # TEST-075: After a DELTA in full_run_active mode, the encoder emits a
+    # trailing TAG cluster (sometimes with misaligned bytes) before the block
+    # ends with a SEP that re-anchors the parser. Verified:
+    #   - cube2 off 75 DELTA 108.22 → 10+ TAGs → SEPs at off 92/95 (no FULL)
+    #   - fan off 47 DELTA 600 → TAGs → SEPs at off 55/58 → FULL 202.34 at 59
+    #   - fan off 105 DELTA 467.4 → TAGs+SEPs to end (no FULL)
+    # Track post-DELTA state as STICKY until the next SEP: greedy/long-FULL
+    # paths are blocked while in this state. cube2's legitimate FULLs at
+    # off 51 (87.09) and off 59 (16.78) sit after SEP-reset, so they survive;
+    # cube2's junk byte cluster after DELTA off 75 is correctly suppressed.
+    post_delta_block = False
     # Trigger A: leading byte is non-tag/non-sep/non-count (Fan/NonRound classic case
     #   region[0] is a "FULL-run start marker" of values like 0x12, 0x14, etc.)
     # Trigger B (TEST-048): leading byte IS a separator (cube4 0x17, cube5 0x1f,
@@ -233,10 +244,13 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
                 etype='COORD', offset=pos, value=val, kind=kind, n_bytes=nb,
                 forced_axis=fa,
             ))
+            if kind in ('DELTA', 'IDELTA'):
+                post_delta_block = True
             pos += 1 + raw_nb  # advance by original byte count, not stripped
         elif is_separator(b):
             elements.append(CoordElement(etype='SEP', offset=pos, sep_byte=b))
             misaligned = False  # SEP re-anchors the parser
+            post_delta_block = False  # SEP re-anchors greedy-FULL eligibility
             pos += 1
         elif pos + 1 < len(region):
             b2 = region[pos + 1]
@@ -253,7 +267,8 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
             # implied as 0x40). Both gated on `full_run_active` so files
             # without the FULL-run marker (i.e. all solved files except
             # Fan/NonRound) are unaffected.
-            if full_run_active and pos + 8 <= len(region) and not misaligned:
+            if (full_run_active and pos + 8 <= len(region) and not misaligned
+                    and not post_delta_block):
                 # TEST-057: After consuming 8 bytes as FULL, the byte at pos+8
                 # should be a "sane" parser-recognizable byte: a count (0-6), a
                 # separator, a standard TAG class indicator, or another FULL_IND.
@@ -1830,6 +1845,13 @@ def parse_oot_v2(filepath: str) -> OotResult:
                 )
                 return result
         # ──── End Mode E branch ─────────────────────────────────────────
+
+        # Mode F (rotated cube) attempted in scratch — reverted as geometric
+        # inference (Z_upper = Z_lower + 50, square cross-section, symmetric
+        # rotation) repeats the TEST-060 anti-pattern: the decoder doesn't
+        # actually emit the missing corners from the bytes. The real fix is in
+        # parse_coord_elements — cube2's junk 92.14 and missing Z=60.25 are
+        # decoder bugs, not vertex-table problems. See TEST-075.
 
         # Parse face elements for separator context
         face_elements = []

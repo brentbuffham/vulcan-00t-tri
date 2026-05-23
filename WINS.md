@@ -65,6 +65,13 @@ Each entry: the rule, byte signature, where it lives, the test that found it.
 ### W9. ~~Gate `prism_pattern_post` dedup-drop on `not _fan_pattern_post`~~ (REVERTED — was a fingerprint cheat)
 - **Reverted:** This was a per-file pattern gate (Z-flat + ≥4 Y-axis groups), not a universal byte-level rule. Per the "winners do hard yards" rule, removed. See HistoryOfTests TEST-063.
 
+### W10. Post-DELTA block: greedy/long-FULL must be SEP-anchored
+- **What:** In `full_run_active` mode, after a DELTA the encoder emits a TAG cluster (some bytes possibly misaligned) that ends with a SEP re-anchoring the parser. Greedy 8-byte FULL and long-FULL marker (0x08–0x0e) must NOT fire while inside this post-DELTA region.
+- **Rule:** Track `post_delta_block`. Set to True when emitting a DELTA/IDELTA, reset to False on the next SEP. Guard greedy/long-FULL paths on `not post_delta_block`.
+- **Where:** `python/oot_parser_v2.py` `parse_coord_elements()` and mirrored in `js/oot-compare.html`.
+- **Test:** TEST-075. cube2's junk 92.14 from bytes [40 57 08 e8 40 4f 0b ce] right after DELTA 108.22 is correctly suppressed — those bytes are TAGs (40:57, 08:e8, 40:4f, 0b:ce; the 08/0b are non-standard/misaligned) followed by the block-end marker, not a FULL. NonRound's only post-DELTA artifact dropped (49v → 48v); cube3 went 10 coords → 9.
+- **Generalization:** Universal full_run_active rule. Verified to not regress fan (all deep FULLs are SEP- or FULL-preceded), SPHERE (no DELTA→FULL), Stepped Pyramid (only compact 2-byte FULL after DELTA — unaffected). Encoder grammar discovery.
+
 ## Solved File Formats
 
 | File | Verts | Faces | DXF Match | Mode | Structural mode |
@@ -83,8 +90,8 @@ Each entry: the rule, byte signature, where it lives, the test that found it.
 | File | Status | What's working | What's missing |
 |---|---|---|---|
 | cube1 (axis-aligned) | 5/8 corners (after TEST-060 revert) | All 6 unique coord values decoded; axis state machine assigns 5/8 correctly | Slot-assignment phase doesn't generate 3 missing corners from existing values |
-| cube2 (-25°) | 1/8 corners, 8/10 distinct values | Decoder emits 41.78, 62.91, 87.09, 16.78, 37.91, 108.23 (rotated coords) | 2 missing values (Y=62.09, Y=83.22), Z=60 missing, axis assignment wrong |
-| cube3 (-75°) | 1/8 corners, 7/10 distinct values | Similar — most rotated values decoded | Y=19.38, Y=80.62 missing, Z=60 missing |
+| cube2 (-25°) | 1/8 corners, 7 clean coord values (post TEST-075) | Decoder emits 41.78, 37.91, 10.25, 62.91, 87.09, 16.78, 108.23 — all GT-matching, no junk artifact | 3 missing values (Y=62.09, Y=83.22, Z=60.25), axis assignment misclassifies 87.09 as Z |
+| cube3 (-75°) | 1/8 corners, 9 coord values (was 10 with TEST-075) | Most rotated values decoded; one junk artifact eliminated | 2 missing values (Y=80.62 + 1 more), Z=60 missing, residual junk in decoder output |
 | Hexhole | 3/12 | Some decode | Multi-section unhandled |
 | NonRound | 2/16 | Same encoding family as fan; 3-byte short FULL + DELTA snap apply but X-reuse rule unknown | Pairing |
 | SPHERE | 3/50 | TEST-058 axis state machine helped | Multi-section + axis overlap |

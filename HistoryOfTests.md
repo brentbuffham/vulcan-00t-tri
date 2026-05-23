@@ -1411,3 +1411,49 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
   - Maybe `lo_nib` encodes which group's value to use as the slot's missing axes (e.g. lo=F → use most recent X-axis group, lo=7 → use base X)
   - Maybe the slot's missing axes come from the immediately-preceding pair of (X, Y) groups
   - Maybe each c0_slot[N] references vertex N in the encoder's local layout, with N implying a specific position relative to the apex
+
+---
+
+### TEST-075: Post-DELTA block — remove cube2's junk 92.14 artifact
+- **Status:** Committed. cube2 went 8 coord_values → 7 (junk 92.14 eliminated). NonRound dropped 1 junk vert (49 → 48). cube3 dropped 1 junk (10 → 9). Zero regression on all solved files (TRIANGLE/PLANE/LINEAR/CUBE/FAN/PRISM/4-SIDES-PRISM/cube1/SPHERE).
+
+- **Setup — investigate cube2 junk:** cube2 partial decode emitted 8 coord_values [41.78, 37.91, 10.25, 62.91, 87.09, 16.78, 108.22, **92.14**]. The 92.14 doesn't match any GT value for the -25° rotated 50×50×50 cube. Goal: find the byte-grammar rule that distinguishes 92.14 (junk) from the legitimate deep FULLs 87.09 and 16.78.
+
+- **Byte trace cube2 coord region (98 bytes, offsets relative to coord_start):**
+  - Off 1-24: 3 initial FULLs (41.78 X, 37.91 Y, 10.25 Z) via FULL-run init loop
+  - Off 25-50: TAGs + SEPs + DELTA at off 28 (62.91); block ends with `e0 00 2f e0 07 17 c0 2f`
+  - Off 51-67: long-FULL marker `0e ...` → 87.09; greedy FULL `40 ...` → 16.78; block end
+  - Off 73-77: TAG `c0 2f` + DELTA `01 5b 0e` → 108.22 (n_bytes=2)
+  - Off 78-97: bytes `40 57 08 e8 40 4f 0b ce 74 eb 85 1d e0 00 2f e0 07 17 a0 2f`
+
+  The old parser at off 78 saw `b=0x40`, `b2=0x57`, treated full_run_active as license to greedy-read 8 bytes → 92.14 (junk). Pre-TEST-075 fallthrough produced 92.14; under prev_emit_kind variant the long-FULL at off 80 produced 49666.47; both wrong.
+
+- **Discriminator search:** Bytes 78-85 = `40 57 08 e8 40 4f 0b ce`. Reading as TAG pairs alternates standard/non-standard:
+  - 40:57 standard
+  - 08:e8 non-standard (hi-cls 0x00) → misaligned indicator
+  - 40:4f standard
+  - 0b:ce non-standard
+  The trailing 4 bytes `74 eb 85 1d` are TAG 60:eb + TAG 80:1d, then block-end marker `e0 00 2f e0 07 17` at off 90-95, then TAG A0:2F. So the entire span 78-95 is a TAG cluster, not a FULL.
+
+- **Survey of legitimate deep FULL patterns:**
+  - Fan: 6 deep FULLs (E5/E6/E18/E19/E26/E27). Each preceded by SEP or another FULL. NONE preceded by DELTA or TAG-immediately.
+  - SPHERE: no DELTA→FULL transitions.
+  - Stepped Pyramid: 1 DELTA→FULL but the FULL is a compact 2-byte (gated separately, unaffected by greedy guard).
+  - NonRound: has DELTA→FULL transitions but file is already broken (2/16).
+  - cube2 legitimate FULLs at off 51 (long) and off 59 (greedy) are reached AFTER the block-end SEPs from the previous block, so by the time the parser arrives at off 51 a SEP has re-anchored it.
+
+- **Rule (TEST-075):** Add `post_delta_block` flag in `parse_coord_elements()`. Set True when a DELTA or IDELTA is emitted. Reset to False at the next SEP. Block greedy/long-FULL paths on `not post_delta_block`. This means: after a DELTA, the encoder is in a TAG-cluster region and the parser must not interpret embedded `0x40 ...` or `0x08–0x0e ...` bytes as FULLs until a SEP re-anchors.
+
+- **Result:**
+  - cube2: coord_values went 8 → 7. The junk 92.14 is gone. Decoder now produces only GT-matching values: [41.78, 37.91, 10.25, 62.91, 87.09, 16.78, 108.22]. Vertex count stays 7 (the structural fixes for missing 62.09, 83.22, 60.25 and the 87.09-as-X misclassification are unrelated decoder issues).
+  - cube3: 10 → 9 coord values (one junk eliminated).
+  - NonRound: 49 → 48 vertices (one junk eliminated); still 2/16.
+  - All solved files unchanged.
+
+- **JS mirror:** `js/oot-compare.html` `postDeltaBlock` flag mirrors Python. Same set/reset semantics on DELTA and SEP.
+
+- **Why this is a real win, not a fingerprint cheat:** The rule is derived from the encoder grammar (after a DELTA the encoder emits TAGs/SEPs, not FULLs) and was verified against ALL files in the corpus before being applied. It has no per-file gating, no signature matching, no geometric inference. It's the same kind of rule as TEST-056 (misalignment detection) and TEST-057 (sane-sequel lookahead) — a universal constraint on FULL-emission inside `full_run_active` mode.
+
+- **What's still missing for cube2:** (1) The decoder doesn't emit values 62.09 (Y), 83.22 (Y), or 60.25 (Z=Z_base+50). These must be encoded in the bytes somewhere not yet recognized — possibly in compressed form or in a section the parser doesn't visit. (2) Axis state machine misclassifies 87.09 as Z (it's an X). These are separate problems for future tests.
+
+- **Anti-pattern check:** This branch is NOT a per-file gate (it operates on byte-emit-kind state inside the parser loop, not on filename or signature). It does not pre-compute or look up GT values. It applies uniformly wherever `full_run_active` is True. Honest decoder rule.

@@ -424,6 +424,12 @@ function parseOOT(arrayBuffer) {
   // TAGs — i.e., we're misaligned. Block greedy FULL fall-throughs until a
   // SEP or standard-class TAG re-anchors us.
   let misaligned = false;
+  // TEST-075: Post-DELTA block. After a DELTA in full_run_active mode the
+  // encoder emits a trailing TAG cluster before the block ends with a SEP
+  // that re-anchors. Greedy/long-FULL paths are blocked until the next SEP.
+  // cube2 had a junk 92.14 from bytes immediately following DELTA 108.22 —
+  // those bytes are actually TAGs (some misaligned), not a FULL.
+  let postDeltaBlock = false;
   if (coordRegion.length > 0) {
     const fb = coordRegion[0];
     const fbIsSep = (fb & 0x07) === 0x07 && fb >= 0x07;
@@ -583,16 +589,18 @@ function parseOOT(arrayBuffer) {
       for (let i = 0; i < 8; i++) prev[i] = r8[i];
       const fa = (kind === 'DELTA') ? forcedAxisForThis : -1;
       elements.push({ etype: 'COORD', value: val, kind: kind, nBytes: nb, forcedAxis: fa });
+      if (kind === 'DELTA' || kind === 'IDELTA') postDeltaBlock = true;
       pos += 1 + rawNb;
     } else if (isSep(b)) {
       elements.push({ etype: 'SEP', sepByte: b });
       misaligned = false;  // SEP re-anchors the parser
+      postDeltaBlock = false;  // SEP re-anchors greedy-FULL eligibility (TEST-075)
       pos += 1;
     } else if (pos + 1 < coordRegion.length) {
       const b2 = coordRegion[pos + 1];
       // Fan-only extended-FULL detection: gated on fullRunActive, only fires
       // when the resulting double has positive magnitude in [10, 1e6].
-      if (fullRunActive && pos + 8 <= coordRegion.length && !misaligned) {
+      if (fullRunActive && pos + 8 <= coordRegion.length && !misaligned && !postDeltaBlock) {
         // TEST-057: sane-sequel lookahead. After consuming 8 bytes as FULL, the
         // byte at pos+8 should be a count/sep/standard-TAG-class/FULL_IND.
         // Otherwise we're consuming TAG bytes that weren't meant as a FULL.

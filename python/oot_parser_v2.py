@@ -148,6 +148,26 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
 
     while pos < len(region):
         b = region[pos]
+        # TEST-079: count-prefixed escape `?? 6A FULL_IND ... (8 bytes)`.
+        # cube3 +079 has count=0x03 followed by 0x6A 0x40 that introduces a
+        # real GT FULL value (32.3223). Without this pre-emption the count-
+        # byte path takes the DELTA interpretation and produces junk 210.0078.
+        # Discriminator: only cube3 has count(0-6) + 0x6A + FULL_IND producing
+        # a sane 1..1e4 value across the entire corpus.
+        if (full_run_active and pos + 10 <= len(region)
+                and b <= 0x06
+                and region[pos + 1] == 0x6A
+                and region[pos + 2] in (0x40, 0x41, 0xC0, 0xC1)):
+            cand = list(region[pos + 2:pos + 10])
+            cval = read_be_double(bytes(cand))
+            if cval == cval and 1.0 < abs(cval) < 1e4:
+                elements.append(CoordElement(
+                    etype='COORD', offset=pos, value=cval, kind='FULL', n_bytes=10,
+                ))
+                full_values.append(abs(cval))
+                prev = cand
+                pos += 10
+                continue
         # New-format count=0x07 (8-byte FULL) is ambiguous because 0x07 is also
         # is_separator(). Only accept it as count when the next byte looks like
         # an IEEE byte 0 (0x40/0x41/0xC0/0xC1). Stepped Pyramid has many 0x07
@@ -279,6 +299,30 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
                     full_values.append(abs(cval))
                     prev = cand
                     pos += 10
+                    continue
+            # TEST-078: 1-byte escape `0x6A FULL_IND ... (8 bytes)` — cube3.
+            # cube3 embeds its Y_inner FULL values via a single 0x6A escape
+            # byte followed by an explicit 0x40-prefixed 8-byte FULL:
+            #   +058 [6A 40 54 27 97 7F 55 D6 E0] → FULL 80.6186 (GT Y_inner)
+            #   +080 [6A 40 40 29 40 67 00 2D E0] → FULL 32.3223 (GT Y_inner)
+            # Discriminator: `0x6A` followed by FULL_INDICATOR (0x40/41/C0/C1)
+            # is unique to cube3 in the entire corpus — scanned all 12 solved
+            # files + cube1-5 and only cube3 has this pattern producing sane
+            # FULL values in 1.0..1e4 range.
+            # Note: 0x6A naturally parses as TAG class 0x60 with byte2 from
+            # the next position; this escape interpretation pre-empts that.
+            if (full_run_active and pos + 9 <= len(region)
+                    and b == 0x6A
+                    and region[pos + 1] in (0x40, 0x41, 0xC0, 0xC1)):
+                cand = list(region[pos + 1:pos + 9])
+                cval = read_be_double(bytes(cand))
+                if cval == cval and 1.0 < abs(cval) < 1e4:
+                    elements.append(CoordElement(
+                        etype='COORD', offset=pos, value=cval, kind='FULL', n_bytes=9,
+                    ))
+                    full_values.append(abs(cval))
+                    prev = cand
+                    pos += 9
                     continue
             # Compact FULL detection (Stepped Pyramid): byte0 = FULL indicator
             # (0x40/0x41/0xC0/0xC1) AND byte1 is in clean compact-FULL byte2

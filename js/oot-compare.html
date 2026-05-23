@@ -481,6 +481,25 @@ function parseOOT(arrayBuffer) {
 
   while (pos < coordRegion.length) {
     const b = coordRegion[pos];
+    // TEST-079: count-prefixed escape `?? 6A FULL_IND ... (8 bytes)` — cube3.
+    // count(0-6) + 0x6A + FULL_IND introduces a real FULL value (32.3223 at
+    // cube3 +079) and pre-empts the would-be junk DELTA (210.0078).
+    if (fullRunActive && pos + 10 <= coordRegion.length
+        && b <= 0x06
+        && coordRegion[pos + 1] === 0x6A
+        && (coordRegion[pos + 2] === 0x40 || coordRegion[pos + 2] === 0x41
+            || coordRegion[pos + 2] === 0xC0 || coordRegion[pos + 2] === 0xC1)) {
+      const cand = new Uint8Array(8);
+      for (let i = 0; i < 8; i++) cand[i] = coordRegion[pos + 2 + i];
+      const cval = readBE64(cand);
+      if (cval === cval && Math.abs(cval) > 1.0 && Math.abs(cval) < 1e4) {
+        elements.push({ etype: 'COORD', value: cval, kind: 'FULL', nBytes: 10 });
+        fullValues.push(Math.abs(cval));
+        for (let i = 0; i < 8; i++) prev[i] = cand[i];
+        pos += 10;
+        continue;
+      }
+    }
     // New-format count=0x07 is ambiguous with separator 0x07. Only treat
     // 0x07 as count when next byte is an IEEE byte 0 (0x40/0x41/0xC0/0xC1).
     // Stepped Pyramid has many 0x07 SEP bytes that would otherwise cause
@@ -615,6 +634,23 @@ function parseOOT(arrayBuffer) {
           fullValues.push(Math.abs(cval));
           for (let i = 0; i < 8; i++) prev[i] = cand[i];
           pos += 10;
+          continue;
+        }
+      }
+      // TEST-078: 1-byte escape `0x6A FULL_IND ... (8 bytes)` — cube3 inner-Y.
+      // 0x6A is unique to cube3 across the corpus; embeds 80.62 and 32.32.
+      if (fullRunActive && pos + 9 <= coordRegion.length
+          && b === 0x6A
+          && (coordRegion[pos + 1] === 0x40 || coordRegion[pos + 1] === 0x41
+              || coordRegion[pos + 1] === 0xC0 || coordRegion[pos + 1] === 0xC1)) {
+        const cand = new Uint8Array(8);
+        for (let i = 0; i < 8; i++) cand[i] = coordRegion[pos + 1 + i];
+        const cval = readBE64(cand);
+        if (cval === cval && Math.abs(cval) > 1.0 && Math.abs(cval) < 1e4) {
+          elements.push({ etype: 'COORD', value: cval, kind: 'FULL', nBytes: 9 });
+          fullValues.push(Math.abs(cval));
+          for (let i = 0; i < 8; i++) prev[i] = cand[i];
+          pos += 9;
           continue;
         }
       }

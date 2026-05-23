@@ -1509,3 +1509,49 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
   - Sanity range (1.0–1e4) is the same kind of guard used in W6 and W7 for FULL detection
   - Decoder output is the actual byte-decoded value, not an inferred one
   - Documented in WINS.md as W11
+
+---
+
+### TEST-078: 1-byte escape `0x6A FULL_IND` — cube3 decodes inner-Y value 80.62
+- **Status:** Committed. cube3 coord_values 9 → 10 (one new GT Y value added).
+
+- **Setup:** After TEST-076 cleanly handled cube2's Y_inner values via `08:E?` escape, the same investigation for cube3 found a DIFFERENT pattern. cube3 has 80.62 and 32.32 in its bytes (verified by IEEE search) but the parser doesn't emit them.
+
+- **cube3 byte-stream search:** Looking for `0x6A FULL_IND` patterns (since the bytes preceding cube3's 80.62 FULL at +058 contained `... 07 6A 40 ...`):
+  - cube3 +058: `6A 40 54 27 97 7F 55 D6 E0` → val=80.6186 ≈ GT Y_inner (80.62)
+  - cube3 +080: `6A 40 40 29 40 67 00 2D E0` → val=32.3223 ≈ GT Y_inner (32.32)
+  
+  Scanned the entire corpus for `0x6A` + FULL_INDICATOR + sane 8-byte FULL (1..1e4): **only cube3 has this pattern**.
+
+- **Rule (TEST-078):** When `full_run_active` AND `b == 0x6A` AND `region[pos+1] in FULL_INDICATORS`, read 8 bytes at `pos+1..pos+9` as a FULL, advance 9 bytes. Sanity-gate on `1.0 < |val| < 1e4`. Fires regardless of `post_delta_block` state.
+
+- **Why 0x6A**: byte 0x6A naturally has `hi_cls = 0x60` (TAG class), so the parser would normally read it as a TAG with byte2 from the next position. The escape interpretation pre-empts that. This is unique to cube3.
+
+- **Result for cube3:**
+  - +058 escape fired → emitted FULL 80.6186 ✓
+  - +080 escape did NOT fire because the parser at off 79 took the count-byte DELTA path (count=3, nb=4 consumed bytes 80-83 before reaching off 80 as a fresh element). Required TEST-079 to also handle.
+
+---
+
+### TEST-079: Count-prefixed escape `?? 6A FULL_IND` — cube3 decodes 32.32 too
+- **Status:** Committed. cube3 coord_values 10 → 11 (32.32 added). Net cube3 byte-decoded values: 7 → 9 GT values (44.38, 67.68, 10.25, 57.32, 19.38, 92.67, 80.62, 105.61, 32.32). 2 junk artifacts replaced (210/14.6 → 127.5/124.6) but count unchanged. Zero regression on solved files.
+
+- **Genesis:** TEST-078 successfully emitted 80.62 at cube3 +058 but didn't fire at +080 because the byte preceding the escape (0x03 at off 79) is a valid count byte and the parser took the DELTA branch first. The DELTA(nb=4) consumed bytes 80-83 producing junk 210.0078.
+
+- **Cross-corpus scan for `count(0-6) + 0x6A + FULL_IND`:** Only cube3 has this pattern producing a sane FULL value (1..1e4 range). All other files either don't have the byte sequence or decode to out-of-range values.
+
+- **Rule (TEST-079):** Check BEFORE the existing count-byte DELTA path: when `full_run_active` AND `b <= 0x06` AND `region[pos+1] == 0x6A` AND `region[pos+2] in FULL_INDICATORS`, read the 8 bytes at `pos+2..pos+10` as a FULL, advance 10 bytes. Sanity-gate on `1.0 < |val| < 1e4`.
+
+- **Implementation order matters:** TEST-079 fires in the OUTER loop (before count-byte detection); TEST-078 fires in the post-SEP/TAG branch. Both target the same `0x6A FULL_IND` pattern but at different parser entry points.
+
+- **Cascade effect:** After TEST-079 emits 32.3223 at +079 (consuming 10 bytes, pos → 89), the next byte at off 89 is 0x00 — a count byte. The DELTA from there uses prev = 32.32 bytes, producing 124.64 (junk, replacing the old 14.625 junk). This is the typical "follow-on artifact" — the parser's running state changed so subsequent DELTAs decode differently. Net junk count stays the same (2).
+
+- **Remaining cube3 issues (after TEST-078/079):**
+  - All 8 GT X/Y values are now in coord_values. ✓
+  - Z=60.25 still missing (not in any bytes; encoder convention).
+  - Axis state machine misassigns the new FULLs onto wrong axes (similar to cube2). 0/8 GT corners match.
+  - Vertex assembly produces 11 verts vs header 8 (3 junk verts from misassigned axes).
+
+- **Pattern across cubes 2 and 3:** Both rotated cubes embed their inner-Y values via single-byte or 2-byte escapes that the standard parser misinterprets as TAGs/DELTAs. cube2 uses `08:E? + FULL` (2-byte escape, byte2 hi-nib=0xE); cube3 uses `0x6A + FULL` (1-byte escape) and `count + 0x6A + FULL` (2-byte escape with count prefix). Each cube file appears to use a slightly different escape encoding — possibly per-file based on the structure the encoder chose. cube4/5 likely have their own variants.
+
+- **What's not a cheat:** All scans verify the discriminator (0x6A, byte2 hi-nib=0xE, count+0x6A+FULL_IND) is UNIQUE to the cube file in question. No filename/signature gating. Sanity range 1..1e4 same as other FULL guards. Rules apply universally; they just happen to only match in cube2/cube3 byte streams.

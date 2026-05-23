@@ -80,6 +80,20 @@ Each entry: the rule, byte signature, where it lives, the test that found it.
 - **Discriminator:** The byte2 high-nibble == 0xE separates cube2's FULL escapes from `08:XX` patterns in other files (triangle/plane/solid/prism: byte2=0x02; linear/cube1: byte2=0x2F; Stepped: byte2=0x47; NonRound: byte2=0x97/0x33/0x43). All non-cube2 instances decode to junk values when read as FULLs.
 - **Generalization:** Encoder grammar for embedding `inner-Y` (or any non-DELTA) FULL inside the trailing TAG cluster after a DELTA. Zero regression on solved files. cube2 coord_values went 7 → 9; verts went 7 → 8 (matching n_verts_header).
 
+### W12. Escape-prefixed FULL: `0x6A FULL_IND` (1-byte escape) — cube3
+- **What:** Inside `full_run_active` mode the encoder also emits a 1-byte escape `0x6A` followed by an explicit 0x40-prefixed 8-byte FULL.
+- **Rule:** When `b == 0x6A` AND `region[pos+1] in FULL_INDICATORS`, read 8 bytes at `pos+1..pos+9` as a FULL with `n_bytes=9`. Sanity-gate on `1.0 < |val| < 1e4`.
+- **Where:** `python/oot_parser_v2.py` `parse_coord_elements()` and mirrored in `js/oot-compare.html`.
+- **Test:** TEST-078. cube3 +058 [6A 40 54 27 97 7F 55 D6 E0] → FULL 80.6186 (GT Y_inner); +080 [6A 40 40 29 40 67 00 2D E0] → FULL 32.3223 (GT Y_inner). 0x6A is unique to cube3 in the corpus.
+- **Discriminator:** Scanned all 17 files for `0x6A` + FULL_IND producing sane 1..1e4 FULL: only cube3 has it (2 hits, both GT Y_inner).
+
+### W13. Count-prefixed escape: `?? 6A FULL_IND` pre-empts count-byte DELTA
+- **What:** When a count byte (0–6) is followed by `0x6A` + FULL_IND, the encoder is escaping a FULL rather than indicating a DELTA. The 2-byte prefix `count 6A` introduces an explicit 8-byte 0x40-prefixed FULL.
+- **Rule:** Check this pattern BEFORE the count-byte DELTA path. When `b <= 0x06` AND `region[pos+1] == 0x6A` AND `region[pos+2] in FULL_INDICATORS`, read the 8 bytes at `pos+2..pos+10` as FULL with `n_bytes=10`.
+- **Where:** `python/oot_parser_v2.py` `parse_coord_elements()` and mirrored in `js/oot-compare.html`.
+- **Test:** TEST-079. cube3 +079 has count=0x03 followed by 0x6A 0x40 — without this rule the parser took DELTA(nb=4) and emitted junk 210.0078; with the rule it correctly emits FULL 32.3223 (GT Y_inner).
+- **Discriminator:** Scanned all 17 files for `count(0–6) + 0x6A + FULL_IND` producing sane FULL value: only cube3 has it.
+
 ## Solved File Formats
 
 | File | Verts | Faces | DXF Match | Mode | Structural mode |
@@ -99,7 +113,7 @@ Each entry: the rule, byte signature, where it lives, the test that found it.
 |---|---|---|---|
 | cube1 (axis-aligned) | 5/8 corners (after TEST-060 revert) | All 6 unique coord values decoded; axis state machine assigns 5/8 correctly | Slot-assignment phase doesn't generate 3 missing corners from existing values |
 | cube2 (-25°) | 1/8 corners, 9 coord values (post TEST-076), 8 verts | Decoder emits ALL 8 GT XY values: X={41.78, 62.91, 87.09, 108.22}, Y={16.78, 37.91, 62.09, 83.22}. V1 = (62.91, 37.91, 10.25) matches GT corner exactly | 1 missing value (Z=60.25 — not in coord region as IEEE double, must be DELTA-encoded somewhere we're not parsing); axis state machine misclassifies 83.22/87.09/62.09 onto wrong axes |
-| cube3 (-75°) | 1/8 corners, 9 coord values (was 10 with TEST-075) | Most rotated values decoded; one junk artifact eliminated | 2 missing values (Y=80.62 + 1 more), Z=60 missing, residual junk in decoder output |
+| cube3 (-75°) | 0/8 corners, 11 coord values, ALL GT X/Y values decoded (post TEST-078/079) | Decoder emits 44.38, 67.68, 10.25, 57.32, 19.38, 92.67, 80.62, 105.61, 32.32 — all X and Y GT values from byte stream. Two 1-byte/2-byte escapes (`0x6A FULL_IND` and `?? 6A FULL_IND`) unlocked 80.62 and 32.32 | Z=60.25 missing (not in bytes); axis state machine misassigns multiple values onto wrong axes — no GT corners match yet; vertex assembly produces 11 verts (vs header 8) |
 | Hexhole | 3/12 | Some decode | Multi-section unhandled |
 | NonRound | 2/16 | Same encoding family as fan; 3-byte short FULL + DELTA snap apply but X-reuse rule unknown | Pairing |
 | SPHERE | 3/50 | TEST-058 axis state machine helped | Multi-section + axis overlap |

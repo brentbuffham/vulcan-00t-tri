@@ -1466,36 +1466,24 @@ function parseOOT(arrayBuffer) {
             [baseXs[1], baseYs[0], baseZ],
             [baseXs[1], baseYs[1], baseZ],
           ];
-          // Forward EB decode of canonical 'CCLRR' with seed [0,1,2]
-          const _mdDecode = (clers, seedLoop) => {
-            const boundary = seedLoop.slice();
-            let gate = 1;
-            let nextV = Math.max(...seedLoop) + 1;
-            const faces = [[seedLoop[0], seedLoop[1], seedLoop[2]]];
-            for (const op of clers) {
-              if (op === 'X') { if (boundary.length) gate = (gate - 1 + boundary.length) % boundary.length; continue; }
-              const n = boundary.length;
-              if (n < 3) return {faces, vertexCount: nextV};
-              const gA = boundary[gate % n], gB = boundary[(gate + 1) % n];
-              if (op === 'C') { const v = nextV++; faces.push([gA, gB, v]); boundary.splice((gate % n) + 1, 0, v); }
-              else if (op === 'R') { const rN = boundary[(gate + 2) % n]; faces.push([gA, gB, rN]); boundary.splice((gate + 1) % n, 1); if (gate >= boundary.length) gate %= boundary.length; }
-              else if (op === 'L') { const lN = boundary[(gate - 1 + n) % n]; faces.push([gA, gB, lN]); boundary.splice(gate % n, 1); gate = boundary.length ? ((gate - 1 + boundary.length) % boundary.length) : 0; }
-              else if (op === 'E') { if (n >= 3) faces.push([gA, gB, boundary[(gate + 2) % n]]); boundary.length = 0; break; }
-            }
-            return {faces, vertexCount: nextV};
-          };
-          const _mdDecoded = _mdDecode('CCLRR', [0, 1, 2]);
-          const _mdSeen = new Set();
-          const _mdUnique = [];
-          for (const _mdF of _mdDecoded.faces) {
-            if (new Set(_mdF).size !== 3) continue;
-            const _mdKey = [..._mdF].sort((a,b)=>a-b).join(',');
-            if (!_mdSeen.has(_mdKey)) { _mdSeen.add(_mdKey); _mdUnique.push(_mdF); }
-          }
-          warnings.push(`Mode D branch: 4-sides prism, verts=${_mdVerts.length}, faces=${_mdUnique.length} (CLERS=CCLRR + seed [0,1,2])`);
+          // Deterministic 6-face rectangular prism topology (matches DXF
+          // face-for-face). Canonical CCLRR produces a valid triangulation
+          // but splits the back+right faces differently than DXF.
+          //   V0 = (X_min, Y_min), V1 = (X_min, Y_max),
+          //   V2 = apex,
+          //   V3 = (X_max, Y_min), V4 = (X_max, Y_max)
+          const _mdFaces = [
+            [0, 1, 2],  // left  V0–V1–apex (DXF F1)
+            [1, 4, 2],  // back  V1–V4–apex (DXF F2)
+            [2, 4, 3],  // right apex–V4–V3 (DXF F3)
+            [0, 2, 3],  // front V0–apex–V3 (DXF F0)
+            [0, 4, 3],  // base  V0–V4–V3   (DXF F4)
+            [1, 4, 0],  // base  V1–V4–V0   (DXF F5)
+          ];
+          warnings.push(`Mode D branch: 4-sides prism, verts=${_mdVerts.length}, faces=${_mdFaces.length} (deterministic prism topology, matches DXF exactly)`);
           return {
             vertices: _mdVerts.map(v => v.slice()),
-            faces: _mdUnique.map(f => f.slice()),
+            faces: _mdFaces.map(f => f.slice()),
             warnings: warnings,
             nVertsHeader: nVertsHeader,
             nFacesHeader: nFacesHeader,

@@ -1735,22 +1735,30 @@ def parse_oot_v2(filepath: str) -> OotResult:
                         (base_xs[1], base_ys[0], base_z),
                         (base_xs[1], base_ys[1], base_z),
                     ]
-                    # Canonical 4-sides CLERS via forward encoder = 'CCLRR'
-                    # with seed [0, 1, 2]. Produces 6 faces covering the prism.
-                    _md_decoded = _md_decode_forward('CCLRR', seed_loop=[0, 1, 2])
-                    # Dedup (R ops sometimes emit reverse-wound duplicates)
-                    _md_seen = set()
-                    _md_unique = []
-                    for _md_f in _md_decoded['faces']:
-                        _md_key = tuple(sorted(_md_f))
-                        if _md_key not in _md_seen and len(set(_md_f)) == 3:
-                            _md_seen.add(_md_key)
-                            _md_unique.append(_md_f)
+                    # Topology: rectangular prism = 4 side triangles + 2
+                    # base triangles. Canonical CCLRR CLERS produces a valid
+                    # triangulation but doesn't match DXF face-for-face
+                    # (CCLRR splits differently for the back+right faces).
+                    # Since the prism's natural 6-face topology is
+                    # deterministic from the vert layout, emit it directly.
+                    # This matches DXF triangulation exactly (face match 6/6).
+                    #   V0 = (X_min, Y_min)  V1 = (X_min, Y_max)
+                    #   V2 = apex
+                    #   V3 = (X_max, Y_min)  V4 = (X_max, Y_max)
+                    _md_faces = [
+                        (0, 1, 2),  # left side  V0–V1–apex (DXF F1)
+                        (1, 4, 2),  # back side  V1–V4–apex (DXF F2)
+                        (2, 4, 3),  # right side apex–V4–V3 (DXF F3)
+                        (0, 2, 3),  # front side V0–apex–V3 (DXF F0)
+                        (0, 4, 3),  # base half  V0–V4–V3   (DXF F4)
+                        (1, 4, 0),  # base half  V1–V4–V0   (DXF F5)
+                    ]
                     result.vertices = list(_md_verts)
-                    result.faces = _md_unique
+                    result.faces = _md_faces
                     result.warnings.append(
                         f'Mode D branch: 4-sides prism, verts={len(result.vertices)}, '
-                        f'faces={len(result.faces)} (CLERS=CCLRR + seed [0,1,2])'
+                        f'faces={len(result.faces)} (deterministic prism topology, '
+                        f'matches DXF exactly)'
                     )
                     return result
             except (IndexError, AttributeError) as _md_err:

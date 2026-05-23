@@ -51,7 +51,8 @@
       "Bash(grep -E \"^ 1[0-3]$|^ 2[0-3]$|^ 3[0-3]$\" -A1 exampleFiles/tri-crack-fan.dxf)",
       "Bash(grep -v \"^--$\")",
       "Bash(grep -v \"^ [0-9]*$\")",
-      "Bash(awk '/regressions=0/{print; getline; while\\($0 !~ /^  lo_map/ && $0 !~ /^$/\\){print; getline}; print \"---\"}' /private/tmp/claude-501/-Volumes-2TBSSD-BB-GIT-vulcan-00t-tri/aa9aaffb-7f98-4c56-9636-22f7bd22a4da/tasks/bicrugoj7.output)"
+      "Bash(awk '/regressions=0/{print; getline; while\\($0 !~ /^  lo_map/ && $0 !~ /^$/\\){print; getline}; print \"---\"}' /private/tmp/claude-501/-Volumes-2TBSSD-BB-GIT-vulcan-00t-tri/aa9aaffb-7f98-4c56-9636-22f7bd22a4da/tasks/bicrugoj7.output)",
+      "Bash(awk '/===/{getline name; getline; print name}; /Vertex match/{print \"  \"$0}; /OOT: /{print \"  \"$0}')"
     ]
   }
 }

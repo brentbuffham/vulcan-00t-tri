@@ -710,7 +710,9 @@ function parseOOT(arrayBuffer) {
           for (let i = 1; i < 8; i++) ieee[i] = coordRegion[pos + i];
           const lval = readBE64(ieee);
           if (lval === lval && lval > 10 && lval < 1e6) {
-            elements.push({ etype: 'COORD', value: lval, kind: 'FULL', nBytes: 8 });
+            // TEST-081: nBytes=18 sentinel marks long-FULL emits for the
+            // post-process axis pin (cube2/cube3 long-FULLs are X values).
+            elements.push({ etype: 'COORD', value: lval, kind: 'FULL', nBytes: 18 });
             fullValues.push(Math.abs(lval));
             for (let i = 0; i < 8; i++) prev[i] = ieee[i];
             pos += 8;
@@ -816,11 +818,21 @@ function parseOOT(arrayBuffer) {
 
   // TEST-080: Post-axis pin for escape-emitted FULLs (rotated cubes).
   // TEST-076/078/079 produce FULLs with nBytes ∈ {9, 10}; they're inner-Y
-  // values. Override axis to Y after the state machine completes — this
-  // doesn't cascade into other groups.
+  // values. Override axis to Y after the state machine completes.
+  let hasEscapeFull = false;
   for (const g of groups) {
-    if (g.kind === 'FULL' && (g.nBytes === 9 || g.nBytes === 10) && g.axis !== 1) {
-      g.axis = 1;
+    if (g.kind === 'FULL' && (g.nBytes === 9 || g.nBytes === 10)) {
+      hasEscapeFull = true;
+      if (g.axis !== 1) g.axis = 1;
+    }
+  }
+  // TEST-081: when the file has escape FULLs (rotated cube structure), the
+  // long-FULL emits (nBytes=18 sentinel) are X-axis values.
+  if (hasEscapeFull) {
+    for (const g of groups) {
+      if (g.kind === 'FULL' && g.nBytes === 18 && g.axis !== 0) {
+        g.axis = 0;
+      }
     }
   }
 

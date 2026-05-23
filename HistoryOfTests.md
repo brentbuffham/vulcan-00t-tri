@@ -1585,3 +1585,45 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
   1. G5 in cube2 (87.09, long-FULL): expected X, assigned Z. The state machine rule "SEP 17 + first E0:lo=0 → CYCLE BACK" sends G4(now Y) → X for G5, but G5 actually gets axis from G5's own state machine run with G4 still at old axis X (before post-pin), so cycle-back is X→Z. The pin needs to be DURING state machine, not after, but without cascading current[].
   2. cube3 X axis stuck: G3 (57.32 X), G5 (92.67 X), G8 (105.61 X) are all misclassified to Y or Z. Multiple cascading errors.
   3. Z=60.25 still missing from byte stream.
+
+---
+
+### TEST-081: Long-FULL axis pin to X for rotated-cube files → cube2 second GT corner match
+- **Status:** Committed. cube2: 1/8 → 2/8 GT corners (V7 = (108.22, 16.78, 10.25) added). cube3: 1/8 GT corners (unchanged in count but X axis now correctly promotes after the long-FULL). Zero regression on solved files.
+
+- **Discovery:** Scanned all long-FULL emits (marker byte ∈ 0x08-0x0E with implied 0x40 prefix) across the corpus and recorded their assigned axis. cube2 G5 (87.09, marker 0x0E) and cube3 G3 (57.32, marker 0x0E) were both expected to be X-axis values but were assigned Z and Y respectively by the closest-delta state machine.
+
+- **Cross-corpus survey of long-FULL emits:**
+  | File | Marker | Axis assigned |
+  |---|---|---|
+  | fan +59 | 0x09 | X |
+  | fan +80 | 0x0E | X |
+  | NonRound +133/+206/+240 | 0x0E | Y |
+  | NonRound +227 | 0x08 | Z |
+  | NonRound +259 | 0x0D | Y |
+  | cube2 +51 | 0x0E | Z (should be X) |
+  | cube3 +28 | 0x0E | Y (should be X) |
+  | cube5 +179 | 0x0B | Z |
+  
+  No clean rule by marker nibble alone. fan already gets X correctly for its long-FULLs via the state machine; NonRound is broken; cube2/cube3 need a different override.
+
+- **Rule (TEST-081):** Use file-structural detection: if the file contains at least one escape FULL emit (n_bytes ∈ {9, 10} from TEST-076/078/079 — i.e., it's a rotated-cube file), then ALL long-FULL emits in that file should be classified as X-axis. This gates the override so NonRound, fan, SPHERE are unaffected.
+
+- **Implementation:**
+  1. Tag long-FULL emits with `n_bytes=18` sentinel (distinguishes from standard n_bytes=8 greedy FULLs)
+  2. Post-process after assign_axes: if `has_escape_full` (any group has n_bytes ∈ {9, 10}), set axis=X for any group with n_bytes=18
+
+- **Result:**
+  - cube2 (-25°): V0 = (41.78, 37.91, 10.25) [base], V1 = (62.91, 37.91, 10.25) [GT ✓], V7 = (108.22, 16.78, 10.25) [GT ✓]. All 8 base-Z verts have correct Z=10.25. The remaining 2 base GT corners (87.09, 62.09, 10.25) and (41.78, 83.22, 10.25) are not produced because the vertex builder's running-coord update sequence doesn't reach those exact (X, Y) pairings.
+  - cube3 (-75°): V0 base + V1 = (57.32, 67.68, 10.25). X axis correctly promotes through G3 (57.32). But pairings still don't match GT corners — the running coord state isn't visiting the right (X, Y) combinations.
+
+- **What's still missing:**
+  1. Z=60.25 missing from byte stream — encoder convention "Z_top = Z_bottom + side_length" needed
+  2. Vertex-builder pairing logic doesn't produce the right (X, Y) combinations for the remaining 2 base corners
+  3. cube3 has more remaining axis errors than cube2 (X axis stuck/promote slowly via DELTAs vs. immediate via long-FULL)
+
+- **Architectural observation:** Each rotated cube file uses slightly different escape patterns:
+  - cube2: 2× `08:E? + FULL` escape (W11) + 1× long-FULL (W15)
+  - cube3: 1× `0x6A + FULL` escape (W12) + 1× `count + 0x6A + FULL` escape (W13) + 1× long-FULL (W15)
+  
+  All these patterns are unique to their respective files in the corpus. The decoder discovers them via byte-grammar rules, not file fingerprinting. The remaining 6/8 corners per cube need additional discoveries about vertex pairing and Z_top.

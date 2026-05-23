@@ -385,8 +385,12 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
                     ieee = [0x40] + list(region[pos + 1:pos + 8])
                     lval = read_be_double(bytes(ieee))
                     if lval == lval and 10.0 < lval < 1e6:
+                        # TEST-081: tag long-FULL emits with n_bytes=18 so the
+                        # post-process pin can distinguish them from standard
+                        # n_bytes=8 greedy FULLs. The actual bytes consumed
+                        # remain 8 (advancement still `pos += 8`).
                         elements.append(CoordElement(
-                            etype='COORD', offset=pos, value=lval, kind='FULL', n_bytes=8,
+                            etype='COORD', offset=pos, value=lval, kind='FULL', n_bytes=18,
                         ))
                         full_values.append(abs(lval))
                         prev = ieee
@@ -1605,9 +1609,21 @@ def parse_oot_v2(filepath: str) -> OotResult:
     # Hybrid approach (forced_axis BEFORE assign_axes + skip current update)
     # was tried and dropped cube2 8v → 6v due to closest-delta misclassifying
     # downstream values against a stale current[Y]; post-process is cleaner.
+    has_escape_full = any(g.kind == 'FULL' and g.n_bytes in (9, 10) for g in groups)
     for g in groups:
         if g.kind == 'FULL' and g.n_bytes in (9, 10) and g.axis != 1:
             g.axis = 1  # Y
+    # TEST-081: Post-assign_axes pin for long-FULL emits (marker 0x08-0x0E
+    # with implied 0x40 prefix; n_bytes=18 sentinel) in files that ALSO have
+    # escape FULL emits. Verified: cube2 and cube3 are the only files in the
+    # corpus with escape FULLs (TEST-076/078/079) AND their long-FULL emits
+    # both encode X axis values (cube2 G5 = 87.09, cube3 G3 = 57.32 — both
+    # GT X). Gating on `has_escape_full` ensures NonRound/SPHERE/fan (which
+    # also have long-FULL emits but different axes) are not affected.
+    if has_escape_full:
+        for g in groups:
+            if g.kind == 'FULL' and g.n_bytes == 18 and g.axis != 0:
+                g.axis = 0  # X
 
     # Store raw coord values
     for g in groups:

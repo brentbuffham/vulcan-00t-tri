@@ -598,6 +598,26 @@ function parseOOT(arrayBuffer) {
       pos += 1;
     } else if (pos + 1 < coordRegion.length) {
       const b2 = coordRegion[pos + 1];
+      // TEST-076: Escape-prefixed FULL — `08:E? 40 ... (8 bytes)`. cube2's
+      // post-DELTA TAG cluster embeds Y values 83.22 and 62.09 via this
+      // pattern. Byte2 high-nibble == 0xE distinguishes from other files'
+      // `08:XX` byte sequences which produce junk values. Fires inside
+      // postDeltaBlock — must come before the post-DELTA gated greedy block.
+      if (fullRunActive && pos + 10 <= coordRegion.length
+          && b === 0x08 && (b2 & 0xF0) === 0xE0
+          && (coordRegion[pos + 2] === 0x40 || coordRegion[pos + 2] === 0x41
+              || coordRegion[pos + 2] === 0xC0 || coordRegion[pos + 2] === 0xC1)) {
+        const cand = new Uint8Array(8);
+        for (let i = 0; i < 8; i++) cand[i] = coordRegion[pos + 2 + i];
+        const cval = readBE64(cand);
+        if (cval === cval && Math.abs(cval) > 1.0 && Math.abs(cval) < 1e4) {
+          elements.push({ etype: 'COORD', value: cval, kind: 'FULL', nBytes: 10 });
+          fullValues.push(Math.abs(cval));
+          for (let i = 0; i < 8; i++) prev[i] = cand[i];
+          pos += 10;
+          continue;
+        }
+      }
       // Fan-only extended-FULL detection: gated on fullRunActive, only fires
       // when the resulting double has positive magnitude in [10, 1e6].
       if (fullRunActive && pos + 8 <= coordRegion.length && !misaligned && !postDeltaBlock) {

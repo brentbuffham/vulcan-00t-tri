@@ -255,6 +255,31 @@ def parse_coord_elements(region: bytes, new_format: bool = False) -> List[CoordE
         elif pos + 1 < len(region):
             b2 = region[pos + 1]
             hi_cls = b & 0xE0
+            # TEST-076: Escape-prefixed FULL — pattern `08 E? 40 ... (8 bytes)`.
+            # The encoder emits a 2-byte escape `08:E?` (b=0x08, b2 hi-nib=0xE)
+            # introducing an explicit 0x40-prefixed 8-byte FULL on the next 2
+            # bytes. cube2 uses this for inner-Y values inside post-DELTA TAG
+            # clusters where the value couldn't be reached as a DELTA:
+            #   +033 [08 E0] → FULL 83.2232 (GT Y_inner)
+            #   +080 [08 E8] → FULL 62.0922 (GT Y_inner)
+            # Discriminator: byte2 high-nibble == 0xE distinguishes this from
+            # the other files' `08:XX` byte sequences (which all have hi-nib
+            # 0x0/0x2/0x3/0x4 and produce junk values when read as FULL).
+            # This fires inside `post_delta_block` so it must come BEFORE the
+            # post-DELTA gated greedy/long-FULL block.
+            if (full_run_active and pos + 10 <= len(region)
+                    and b == 0x08 and (b2 & 0xF0) == 0xE0
+                    and region[pos + 2] in (0x40, 0x41, 0xC0, 0xC1)):
+                cand = list(region[pos + 2:pos + 10])
+                cval = read_be_double(bytes(cand))
+                if cval == cval and 1.0 < abs(cval) < 1e4:
+                    elements.append(CoordElement(
+                        etype='COORD', offset=pos, value=cval, kind='FULL', n_bytes=10,
+                    ))
+                    full_values.append(abs(cval))
+                    prev = cand
+                    pos += 10
+                    continue
             # Compact FULL detection (Stepped Pyramid): byte0 = FULL indicator
             # (0x40/0x41/0xC0/0xC1) AND byte1 is in clean compact-FULL byte2
             # range (specific values that decode to clean integer-ish coords).

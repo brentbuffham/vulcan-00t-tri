@@ -1457,3 +1457,55 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
 - **What's still missing for cube2:** (1) The decoder doesn't emit values 62.09 (Y), 83.22 (Y), or 60.25 (Z=Z_base+50). These must be encoded in the bytes somewhere not yet recognized — possibly in compressed form or in a section the parser doesn't visit. (2) Axis state machine misclassifies 87.09 as Z (it's an X). These are separate problems for future tests.
 
 - **Anti-pattern check:** This branch is NOT a per-file gate (it operates on byte-emit-kind state inside the parser loop, not on filename or signature). It does not pre-compute or look up GT values. It applies uniformly wherever `full_run_active` is True. Honest decoder rule.
+
+---
+
+### TEST-076: Escape-prefixed FULL `08:E? 40 ...` — cube2 decodes inner-Y values 83.22 and 62.09
+- **Status:** Committed. cube2 coord_values 7 → 9; verts 7 → 8 (matches header). cube2 V1 = (62.91, 37.91, 10.25) is the first true GT corner match (1/8). Zero regression on all solved files.
+
+- **Genesis:** TEST-075 cleanly eliminated cube2's junk 92.14 but the decoder still produced only 7 of the 9-10 GT values. byte-stream search for IEEE BE encodings of the missing Y values (62.09, 83.22) found them BOTH in the cube2 coord region:
+  - off 0x209B (+35): `40 54 CE 48 1C 2A 0C EA` → 83.2232 ≈ Y_inner2
+  - off 0x20CA (+82): `40 4F 0B CE 74 EB 85 1D` → 62.0922 ≈ Y_inner1
+
+- **Pattern recognition:** Both FULLs are preceded by a 2-byte `08:E?` escape:
+  - +33-34: `08 E0` → FULL at +35
+  - +80-81: `08 E8` → FULL at +82
+  
+  Both appear inside post-DELTA TAG clusters (after DELTA 62.91 and DELTA 108.22 respectively). The parser's existing rules treated `08:XX` as a misaligned TAG (non-standard hi-class 0x00), setting misaligned=True and blocking the FULL emission at the next position.
+
+- **Discriminator search across corpus:** Scanned all files for `08:XX 40 ... (8 sane bytes)` patterns:
+  | File | Position | b2 hi-nib | Decoded val | Real value? |
+  |---|---|---|---|---|
+  | cube2 +33 | [08 E0] | **0xE** | 83.2232 | YES (GT Y_inner) |
+  | cube2 +80 | [08 E8] | **0xE** | 62.0922 | YES (GT Y_inner) |
+  | triangle +10 | [08 02] | 0x0 | 900.0625 | NO (close to 900 but mantissa-noisy) |
+  | plane/solid/prism +10 | [08 02] | 0x0 | 900.06 / 5000.5 | NO |
+  | linear +27 | [0d 2f] | 0x2 | -5.94 | NO (negative) |
+  | Stepped +26 | [0e 47] | 0x4 | -5.97 | NO |
+  | cube1 +31 | [08 2f] | 0x2 | -5.94 | NO |
+  | NonRound +139/154/227 | [09 97]/[08 33]/[08 43] | 0x9/0x3/0x4 | 1025/1308/1283 | NO (out of file's GT range) |
+  
+  The cube2 hits are the ONLY ones with byte2 hi-nibble == 0xE.
+
+- **Rule (TEST-076):** When in `full_run_active` mode and `b == 0x08` AND `(b2 & 0xF0) == 0xE0` AND `region[pos+2] in FULL_INDICATORS`, read the 8 bytes at `pos+2..pos+10` as an explicit FULL with `n_bytes=10` (2-byte prefix + 8-byte FULL). Sanity-gate on `1.0 < |val| < 1e4`. Fires inside `post_delta_block` (it's the encoder's way of embedding a real FULL inside the trailing TAG cluster).
+
+- **Implementation:** Added before the existing post-DELTA gated greedy/long-FULL block in `parse_coord_elements()`. Same `n_bytes=10` advancement to skip the 2-byte prefix + 8-byte FULL.
+
+- **Result for cube2 verts:**
+  - V0: (41.78, 37.91, 10.25)
+  - V1: (62.91, 37.91, 10.25) — **GT corner ✓**
+  - V2: (83.22, 37.91, 10.25)
+  - V3: (108.22, 37.91, 10.25)
+  - V4-V7: combinations with wrong axis assignments (83.22 / 87.09 / 62.09 placed on X or Z instead of Y)
+
+- **What's still missing for cube2 full solve:**
+  1. **Z=60.25 not in coord region** as an IEEE double. Search of the whole file for `404e20` (leading-3 bytes of 60.25 / 60.2503) returned zero hits. Z=60.25 must be encoded as a DELTA from Z=10.25 (delta=50.0) somewhere, or in the face region's sub-sections (cube2 has multi-section warning: "3 sub-sections detected at offsets [8434, 8470]").
+  2. **Axis state machine** still misassigns 83.22 to X (it's Y), 87.09 to Z (it's X), 62.09 to Z (it's Y). Need to figure out the cube2 axis cycling rule for the new FULLs introduced by TEST-076.
+  3. **Vertex pairing** doesn't yet combine the 4 X values × 4 Y values into the 4 base corners (then × 2 Z planes = 8 GT corners).
+
+- **Why this is a clean byte-grammar discovery (not a fingerprint cheat):**
+  - The rule operates on byte patterns (`08`, `(b2 & 0xF0) == 0xE0`, FULL_IND at pos+2), not on filename or signature
+  - Verified empirically that no other file has byte2 hi-nib == 0xE in this context
+  - Sanity range (1.0–1e4) is the same kind of guard used in W6 and W7 for FULL detection
+  - Decoder output is the actual byte-decoded value, not an inferred one
+  - Documented in WINS.md as W11

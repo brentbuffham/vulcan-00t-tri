@@ -72,6 +72,14 @@ Each entry: the rule, byte signature, where it lives, the test that found it.
 - **Test:** TEST-075. cube2's junk 92.14 from bytes [40 57 08 e8 40 4f 0b ce] right after DELTA 108.22 is correctly suppressed — those bytes are TAGs (40:57, 08:e8, 40:4f, 0b:ce; the 08/0b are non-standard/misaligned) followed by the block-end marker, not a FULL. NonRound's only post-DELTA artifact dropped (49v → 48v); cube3 went 10 coords → 9.
 - **Generalization:** Universal full_run_active rule. Verified to not regress fan (all deep FULLs are SEP- or FULL-preceded), SPHERE (no DELTA→FULL), Stepped Pyramid (only compact 2-byte FULL after DELTA — unaffected). Encoder grammar discovery.
 
+### W11. Escape-prefixed FULL: `08:E? 40 ...` inside post-DELTA TAG cluster
+- **What:** Inside `full_run_active` mode and the post-DELTA region, the encoder embeds explicit 8-byte 0x40-prefixed FULLs by writing a 2-byte escape `08:E?` (where the second byte's high nibble == 0xE) followed by the 8 FULL bytes.
+- **Rule:** When `b == 0x08` AND `(b2 & 0xF0) == 0xE0` AND `region[pos+2] in FULL_INDICATORS`, read the 8 bytes at `pos+2..pos+10` as a FULL with `n_bytes=10` (accounting for the 2-byte prefix). Sanity-gate on `1.0 < |val| < 1e4`. Fires regardless of `post_delta_block`.
+- **Where:** `python/oot_parser_v2.py` `parse_coord_elements()` and mirrored in `js/oot-compare.html`.
+- **Test:** TEST-076. cube2 +033 [08 E0] decodes to 83.2232 (= GT Y_inner); +080 [08 E8] decodes to 62.0922 (= GT Y_inner). Both real GT values previously masked by the W10 post_delta_block guard.
+- **Discriminator:** The byte2 high-nibble == 0xE separates cube2's FULL escapes from `08:XX` patterns in other files (triangle/plane/solid/prism: byte2=0x02; linear/cube1: byte2=0x2F; Stepped: byte2=0x47; NonRound: byte2=0x97/0x33/0x43). All non-cube2 instances decode to junk values when read as FULLs.
+- **Generalization:** Encoder grammar for embedding `inner-Y` (or any non-DELTA) FULL inside the trailing TAG cluster after a DELTA. Zero regression on solved files. cube2 coord_values went 7 → 9; verts went 7 → 8 (matching n_verts_header).
+
 ## Solved File Formats
 
 | File | Verts | Faces | DXF Match | Mode | Structural mode |
@@ -90,7 +98,7 @@ Each entry: the rule, byte signature, where it lives, the test that found it.
 | File | Status | What's working | What's missing |
 |---|---|---|---|
 | cube1 (axis-aligned) | 5/8 corners (after TEST-060 revert) | All 6 unique coord values decoded; axis state machine assigns 5/8 correctly | Slot-assignment phase doesn't generate 3 missing corners from existing values |
-| cube2 (-25°) | 1/8 corners, 7 clean coord values (post TEST-075) | Decoder emits 41.78, 37.91, 10.25, 62.91, 87.09, 16.78, 108.23 — all GT-matching, no junk artifact | 3 missing values (Y=62.09, Y=83.22, Z=60.25), axis assignment misclassifies 87.09 as Z |
+| cube2 (-25°) | 1/8 corners, 9 coord values (post TEST-076), 8 verts | Decoder emits ALL 8 GT XY values: X={41.78, 62.91, 87.09, 108.22}, Y={16.78, 37.91, 62.09, 83.22}. V1 = (62.91, 37.91, 10.25) matches GT corner exactly | 1 missing value (Z=60.25 — not in coord region as IEEE double, must be DELTA-encoded somewhere we're not parsing); axis state machine misclassifies 83.22/87.09/62.09 onto wrong axes |
 | cube3 (-75°) | 1/8 corners, 9 coord values (was 10 with TEST-075) | Most rotated values decoded; one junk artifact eliminated | 2 missing values (Y=80.62 + 1 more), Z=60 missing, residual junk in decoder output |
 | Hexhole | 3/12 | Some decode | Multi-section unhandled |
 | NonRound | 2/16 | Same encoding family as fan; 3-byte short FULL + DELTA snap apply but X-reuse rule unknown | Pairing |

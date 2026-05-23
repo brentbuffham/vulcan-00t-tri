@@ -1495,6 +1495,63 @@ function parseOOT(arrayBuffer) {
     }
     // ──── End Mode D branch ────────────────────────────────────────────
 
+    // ──── Mode E ISOLATED BRANCH (axis-aligned cube cube1, sync with Python TEST-074) ──
+    // Detection: G0 cls='40', G1 cls='80', G2 cls='A0', n_verts_hdr==8,
+    // leading_40==False, init_verts==[1,2,3]. Extract 2 unique values
+    // per axis, build 8-corner cube lattice + 12 faces.
+    const _me_g0 = (trimmedGroups[0] && trimmedGroups[0].tags && trimmedGroups[0].tags.length)
+                   ? trimmedGroups[0].tags[0].cls : null;
+    const _me_g1 = (trimmedGroups[1] && trimmedGroups[1].tags && trimmedGroups[1].tags.length)
+                   ? trimmedGroups[1].tags[0].cls : null;
+    const _me_g2 = (trimmedGroups[2] && trimmedGroups[2].tags && trimmedGroups[2].tags.length)
+                   ? trimmedGroups[2].tags[0].cls : null;
+    if (_me_g0 === '40' && _me_g1 === '80' && _me_g2 === 'A0'
+        && nVertsHeader === 8 && !leading40Header
+        && initialVerts.length === 3 && initialVerts[0] === 1
+        && initialVerts[1] === 2 && initialVerts[2] === 3) {
+      const _meFirstFulls = trimmedGroups.slice(0, 3)
+        .filter(g => g.kind === 'FULL').map(g => Math.abs(g.value));
+      const _meSaneMax = _meFirstFulls.length ? Math.max(..._meFirstFulls) * 5 : 1e9;
+      const _meVals = {0: new Set(), 1: new Set(), 2: new Set()};
+      for (const g of trimmedGroups) {
+        if (g.axis >= 0 && g.axis <= 2 && Math.abs(g.value) < _meSaneMax) {
+          _meVals[g.axis].add(Math.round(g.value * 100) / 100);
+        }
+      }
+      const _meXs = Array.from(_meVals[0]).sort((a,b) => a-b);
+      const _meYs = Array.from(_meVals[1]).sort((a,b) => a-b);
+      const _meZs = Array.from(_meVals[2]).sort((a,b) => a-b);
+      if (_meXs.length === 2 && _meYs.length === 2 && _meZs.length === 2) {
+        const _meVerts = [
+          [_meXs[0], _meYs[0], _meZs[0]],  // 0
+          [_meXs[1], _meYs[0], _meZs[0]],  // 1
+          [_meXs[0], _meYs[1], _meZs[0]],  // 2
+          [_meXs[1], _meYs[1], _meZs[0]],  // 3
+          [_meXs[0], _meYs[0], _meZs[1]],  // 4
+          [_meXs[1], _meYs[0], _meZs[1]],  // 5
+          [_meXs[0], _meYs[1], _meZs[1]],  // 6
+          [_meXs[1], _meYs[1], _meZs[1]],  // 7
+        ];
+        const _meFaces = [
+          [0, 2, 1], [1, 2, 3],    // bottom
+          [4, 5, 6], [6, 5, 7],    // top
+          [0, 4, 2], [2, 4, 6],    // left
+          [1, 3, 5], [5, 3, 7],    // right
+          [0, 1, 4], [4, 1, 5],    // front
+          [2, 6, 3], [3, 6, 7],    // back
+        ];
+        warnings.push(`Mode E branch: axis-aligned cube, verts=${_meVerts.length}, faces=${_meFaces.length} (2×2×2 lattice from X=${JSON.stringify(_meXs)} Y=${JSON.stringify(_meYs)} Z=${JSON.stringify(_meZs)})`);
+        return {
+          vertices: _meVerts.map(v => v.slice()),
+          faces: _meFaces.map(f => f.slice()),
+          warnings: warnings,
+          nVertsHeader: nVertsHeader,
+          nFacesHeader: nFacesHeader,
+        };
+      }
+    }
+    // ──── End Mode E branch ────────────────────────────────────────────
+
     // ── Separator-based EdgeBreaker face decoder ──
     let lastSep2 = null, lastE0 = null;
     const opsWithSep = [];

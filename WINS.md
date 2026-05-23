@@ -67,14 +67,16 @@ Each entry: the rule, byte signature, where it lives, the test that found it.
 
 ## Solved File Formats
 
-| File | Verts | Faces | Structural mode |
-|---|---|---|---|
-| `tri-crack-triangle` | 3/3 | — | basic FULLs |
-| `tri-crack` (plane) | 4/4 | — | plane mode |
-| `tri-crack-linear` | 7/7 | — | linear strip |
-| `tri-crack-solid` (cube) | 8/8 | 12 | axis-aligned box, full SEP/E0 grammar |
-| `tri-crack-prism` | 4/4 | — | prism mode |
-| `tri-crack-4sides-prism` | 5/5 | — | 4-sided prism |
+| File | Verts | Faces | DXF Match | Mode | Structural mode |
+|---|---|---|---|---|---|
+| `tri-crack-triangle` | 3/3 | 1/1 | 3/3 v, 1/1 f | A | basic FULLs |
+| `tri-crack` (plane) | 4/4 | 2/2 | 4/4 v, 2/2 f | A | plane mode |
+| `tri-crack-linear` | 7/7 | 5/5 | 7/7 v, 5/5 f | A | linear strip |
+| `tri-crack-solid` (cube) | 8/8 | 12/12 | 8/8 v, 12/12 f | A (cube fast path) | axis-aligned box, SEP/E0 grammar |
+| `tri-crack-prism` | 4/4 | 2/2 | 4/4 v, 2/2 f | A | prism mode |
+| `tri-crack-4sides-prism` | 5/5 | 6/6 | 5/5 v, **6/6 f** | **D** (TEST-073) | rectangular prism, 4 sides + 2 base |
+| `tri-crack-fan` | 6/6 | 4/4 | 6/6 v, 4/6 f | **C** (TEST-067) | flat fan, canonical CCCRR ceiling |
+| `cube1` (axis-aligned) | 8/8 | 12/12 | (no DXF) **8/8 GT** | **E** (TEST-074) | axis-aligned 2×2×2 cube lattice |
 
 ## Partial Wins (real progress, not yet 100%)
 

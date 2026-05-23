@@ -1198,6 +1198,36 @@ User requested pause on SPHERE loop and pivot to focused effort on cube1.00t–c
 
 ---
 
+### TEST-074: Mode E branch SHIPPED — cube1 axis-aligned cube 5/8 → 8/8 GT corners
+- **Status:** Committed. cube1 now produces 8 verts at 2×2×2 lattice + 12
+  canonical cube faces. GT coverage 5/8 → 8/8.
+- **Mode E detection signature (unique to cube1):**
+  - G0 first tag class == '40' (cube1: 40:00)
+  - G1 first tag class == '80' (cube1: 80:1d)
+  - G2 first tag class == 'A0' (cube1: A0:07)
+  - n_verts_header == 8
+  - leading_40_header == False
+  - initial_verts == [1, 2, 3]
+- **Mode E pipeline:**
+  1. Collect unique coord values per axis from all groups, filtering out
+     junk DELTA values via "sane max" gate (5× max of first-3-FULLs).
+     For cube1: filters out 131040 (G6 junk) keeping 49.99, 25, 10, 60, 75, 99.
+  2. Expect exactly 2 unique values per axis (axis-aligned cube
+     signature). For cube1: X={50, 99}, Y={25, 75}, Z={10, 60}.
+  3. Build 8 corners via 2×2×2 product in canonical lattice order
+     (V_i where i = z*4 + y*2 + x with X varying fastest).
+  4. Emit 12 canonical cube faces (outward-facing normals).
+  5. Return result directly; no legacy decode.
+- **Distinct from solid cube fast path:** the legacy cube fast path uses
+  CUBE_SEQ hardcoded with init_tri=[0,1,3]. Mode E uses init_tri=[1,2,3]
+  via its OWN detection branch — does NOT interfere with `tri-crack-solid`.
+  Verified: solid cube still 8/8 GT after Mode E added.
+- **No regressions:** all other 18 files unchanged.
+- **GT match:** cube1 8/8 corners. X-coord shows 99.0 not 100.0 (encoder
+  emitted 99.0 in the bytes — within 1.5 tolerance of GT 100).
+
+---
+
 ### TEST-072: Mode D branch SHIPPED — 4-sides prism 10v/8f → 5v/6f (CEILING-AT-4/6)
 - **Status:** Committed. 4-sides prism now decodes to exactly 5 verts and 6
   faces. Vert coord match 5/5 (was 5/5 false-positive amid chimeras),

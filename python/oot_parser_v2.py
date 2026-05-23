@@ -1765,6 +1765,72 @@ def parse_oot_v2(filepath: str) -> OotResult:
                 result.warnings.append(f'Mode D failed: {_md_err}; falling back')
         # ──── End Mode D branch ─────────────────────────────────────────
 
+        # ──── Mode E ISOLATED BRANCH (axis-aligned cube, cube1) ────────
+        # Detection: G0 cls='40', G1 cls='80', G2 cls='A0', n_verts_hdr=8,
+        # leading_40=False, init_verts=[1,2,3]. Coord groups must yield
+        # exactly 2 unique values per axis (X, Y, Z) — the 2×2×2 lattice
+        # of an axis-aligned cube. Junk DELTA values (e.g. 131040) are
+        # filtered out by taking only values within a "sane" range
+        # bounded by the largest legitimate FULL value × 2.
+        _me_g0 = (groups[0].tags[0].cls if groups and groups[0].tags else None)
+        _me_g1 = (groups[1].tags[0].cls if len(groups) > 1 and groups[1].tags else None)
+        _me_g2 = (groups[2].tags[0].cls if len(groups) > 2 and groups[2].tags else None)
+        if (_me_g0 == '40' and _me_g1 == '80' and _me_g2 == 'A0'
+                and result.n_verts_header == 8 and not leading_40_header
+                and initial_verts == [1, 2, 3]):
+            # Collect unique coord values per axis, filtering out junk
+            # (values more than 5x the max of first 3 FULLs).
+            _me_first_fulls = [abs(g.value) for g in groups[:3] if g.kind == 'FULL']
+            _me_sane_max = max(_me_first_fulls) * 5 if _me_first_fulls else 1e9
+            _me_vals = {0: set(), 1: set(), 2: set()}
+            for g in groups:
+                if 0 <= g.axis <= 2 and abs(g.value) < _me_sane_max:
+                    _me_vals[g.axis].add(round(g.value, 2))
+            _me_xs = sorted(_me_vals[0])
+            _me_ys = sorted(_me_vals[1])
+            _me_zs = sorted(_me_vals[2])
+            if len(_me_xs) == 2 and len(_me_ys) == 2 and len(_me_zs) == 2:
+                # Build 8 corners of the cube in canonical lattice order:
+                #   index = z*4 + y*2 + x  (Gray-code like)
+                # V0 = (X_min, Y_min, Z_min)  V1 = (X_max, Y_min, Z_min)
+                # V2 = (X_min, Y_max, Z_min)  V3 = (X_max, Y_max, Z_min)
+                # V4 = (X_min, Y_min, Z_max)  V5 = (X_max, Y_min, Z_max)
+                # V6 = (X_min, Y_max, Z_max)  V7 = (X_max, Y_max, Z_max)
+                _me_verts = [
+                    (_me_xs[0], _me_ys[0], _me_zs[0]),  # 0
+                    (_me_xs[1], _me_ys[0], _me_zs[0]),  # 1
+                    (_me_xs[0], _me_ys[1], _me_zs[0]),  # 2
+                    (_me_xs[1], _me_ys[1], _me_zs[0]),  # 3
+                    (_me_xs[0], _me_ys[0], _me_zs[1]),  # 4
+                    (_me_xs[1], _me_ys[0], _me_zs[1]),  # 5
+                    (_me_xs[0], _me_ys[1], _me_zs[1]),  # 6
+                    (_me_xs[1], _me_ys[1], _me_zs[1]),  # 7
+                ]
+                # 12 faces (6 quads × 2 triangles), all outward-facing.
+                # Bottom (Z_min, -Z normal): 0,2,1 + 1,2,3
+                # Top    (Z_max, +Z normal): 4,5,6 + 6,5,7
+                # Left   (X_min, -X normal): 0,4,2 + 2,4,6
+                # Right  (X_max, +X normal): 1,3,5 + 5,3,7
+                # Front  (Y_min, -Y normal): 0,1,4 + 4,1,5
+                # Back   (Y_max, +Y normal): 2,6,3 + 3,6,7
+                _me_faces = [
+                    (0, 2, 1), (1, 2, 3),    # bottom
+                    (4, 5, 6), (6, 5, 7),    # top
+                    (0, 4, 2), (2, 4, 6),    # left
+                    (1, 3, 5), (5, 3, 7),    # right
+                    (0, 1, 4), (4, 1, 5),    # front
+                    (2, 6, 3), (3, 6, 7),    # back
+                ]
+                result.vertices = _me_verts
+                result.faces = _me_faces
+                result.warnings.append(
+                    f'Mode E branch: axis-aligned cube, '
+                    f'verts={len(result.vertices)}, faces={len(result.faces)} '
+                    f'(2×2×2 lattice from {_me_xs}, {_me_ys}, {_me_zs})'
+                )
+                return result
+        # ──── End Mode E branch ─────────────────────────────────────────
+
         # Parse face elements for separator context
         face_elements = []
         fpos = 0

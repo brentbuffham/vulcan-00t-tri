@@ -52,7 +52,13 @@
       "Bash(grep -v \"^--$\")",
       "Bash(grep -v \"^ [0-9]*$\")",
       "Bash(awk '/regressions=0/{print; getline; while\\($0 !~ /^  lo_map/ && $0 !~ /^$/\\){print; getline}; print \"---\"}' /private/tmp/claude-501/-Volumes-2TBSSD-BB-GIT-vulcan-00t-tri/aa9aaffb-7f98-4c56-9636-22f7bd22a4da/tasks/bicrugoj7.output)",
-      "Bash(awk '/===/{getline name; getline; print name}; /Vertex match/{print \"  \"$0}; /OOT: /{print \"  \"$0}')"
+      "Bash(awk '/===/{getline name; getline; print name}; /Vertex match/{print \"  \"$0}; /OOT: /{print \"  \"$0}')",
+      "Bash(python python/fixed_width_probe.py tri-crack-solid)",
+      "Bash(python python/prefix_probe.py tri-crack-solid)",
+      "Bash(python python/layout_map.py tri-crack-solid)",
+      "Bash(python python/page_detect.py)",
+      "Bash(python -c \"import sys; d=open\\('exampleFiles/tri-crack-solid.00t','rb'\\).read\\(\\); print\\('HEADER 0..60:'\\); print\\(' '.join\\(f'{b:02x}' for b in d[:60]\\)\\); print\\(\\); print\\('PAGE4 geometry 8252..8420:'\\); print\\(' '.join\\(f'{b:02x}' for b in d[8252:8420]\\)\\)\")",
+      "Bash(python -c \"import sys; print\\(sys.stdin.read\\(\\)\\)\")"
     ]
   }
 }

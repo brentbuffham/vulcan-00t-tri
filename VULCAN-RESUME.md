@@ -32,6 +32,23 @@ The earlier "recall 0.00%" was misleading. New, validated diagnosis:
   `0c e4 f5 c3 03 b5 40 80 1d 29 0e 58 e6 f9` sit at SPARSE-ROW boundaries and carry
   FULL-precision coords (`40 80` = Z-double prefix). Prime candidate for row-advance.
 
+## SESSION UPDATE 2026-06-25 (part 4) — L6 started: it IS EdgeBreaker, C = 0xE0-class
+
+Topology section `[~25.0M .. header[11]]` characterized:
+- Sharp regime change ~25–26M (entropy 7.4→6.0). **3,182,837 records ≈ 3,232,403
+  triangles = 1 record/triangle.**
+- **Lead TAG = CLERS opcode. 0xE0-class = 55.6% ≈ vertex count = C (create).**
+  0x20-class+no-lead ≈ 28% = candidate R; 0x40/60/80/F0 tail = L/E/S. Textbook
+  EdgeBreaker distribution (C≈50%, R≈30%, rest L/E/S).
+- The 0xE0 record's trailing bytes embed tag/sep sub-structure (not flat payload) —
+  the per-op sub-grammar (vertex ref / edge selector) is the next thing to reverse.
+- `js/spirale-reversi-sketch.js` is the ready CLERS stack decoder.
+- **L6 may unlock Y**: CLERS traversal = the vertex C-order = coord-group order, so
+  topology should pin per-vertex Y. New scripts: `topo_probe.py`, `topo_values.py`,
+  `topo_tokens.py`, `e0_payloads.py`.
+
+---
+
 ## SESSION UPDATE 2026-06-25 (part 3) — vertex = GROUP; X+Z solved; Y is the only wall
 
 Cracked the framing. Supersedes the "dense codec" worry in part 2:

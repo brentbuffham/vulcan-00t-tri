@@ -32,6 +32,31 @@ The earlier "recall 0.00%" was misleading. New, validated diagnosis:
   `0c e4 f5 c3 03 b5 40 80 1d 29 0e 58 e6 f9` sit at SPARSE-ROW boundaries and carry
   FULL-precision coords (`40 80` = Z-double prefix). Prime candidate for row-advance.
 
+## SESSION UPDATE 2026-06-25 (part 3) — vertex = GROUP; X+Z solved; Y is the only wall
+
+Cracked the framing. Supersedes the "dense codec" worry in part 2:
+
+- **A VERTEX = a GROUP of records** (~2.8 rec/vertex), typically
+  `[0x20 primary][0x20 primary][0x60 refine]`. The 1-record-per-vertex assumption
+  was wrong and corrupted all prior delta/codec analysis.
+- **The two primaries are Z then X.** Second primary SPLICE-decodes X EXACTLY
+  (clean grid values); first primary splices Z (refine fixes low bytes to 0.01).
+  **X and Z are SOLVED** by splice given correct grouping + per-axis prev update +
+  refine.
+- **The "dense codec" was a mirage** — two bugs: (1) OFF-BY-ONE emit (emitting on
+  the Z record before that vertex's X primary was read → wrong pairing; this is why
+  decode_v4/2d hit 24% and not higher), (2) fabricated-Z (force-splicing seed Z high
+  bytes onto unclassified records → fake 515.6 plateau; also fabricated the fake
+  "constant-X column"). Both fixed in `decode_v5.py`/`decode_v6.py`.
+- **Y is the SOLE remaining blocker.** Carried (implicit) along a segment; with X+Z+
+  group correct it resolves ONLY the top row (recall 4 verts). Traversal is
+  mesh-ordered (top row, then jumps) so the Y sequence likely tracks the EdgeBreaker
+  traversal. Next: decode L6 topology to recover vertex order → derive Y, OR find the
+  explicit Y-row-marker. New scripts: `tag_pattern.py`, `group_align.py`,
+  `decode_group_values.py`, `decode_v5.py`, `decode_v6.py`.
+
+---
+
 ## SESSION UPDATE 2026-06-25 (part 2) — traversal is COLUMN-MAJOR + delta-coded
 
 Pushed on Y. Major reframe (supersedes the row-major assumption above):

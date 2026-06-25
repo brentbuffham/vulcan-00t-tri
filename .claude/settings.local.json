@@ -58,7 +58,10 @@
       "Bash(python python/layout_map.py tri-crack-solid)",
       "Bash(python python/page_detect.py)",
       "Bash(python -c \"import sys; d=open\\('exampleFiles/tri-crack-solid.00t','rb'\\).read\\(\\); print\\('HEADER 0..60:'\\); print\\(' '.join\\(f'{b:02x}' for b in d[:60]\\)\\); print\\(\\); print\\('PAGE4 geometry 8252..8420:'\\); print\\(' '.join\\(f'{b:02x}' for b in d[8252:8420]\\)\\)\")",
-      "Bash(python -c \"import sys; print\\(sys.stdin.read\\(\\)\\)\")"
+      "Bash(python -c \"import sys; print\\(sys.stdin.read\\(\\)\\)\")",
+      "Bash(git *)",
+      "Bash(python python/page_detect.py tri-crack-solid tri-crack tri-crack-SPHERE tri-crack-Hexhole tri-crack-NonRound cube cube2)",
+      "Read(//c/Users/brent/OneDrive/Test Files/POINTCLOUDS/**)"
     ]
   }
 }

@@ -1,9 +1,88 @@
 # VULCAN-RESUME — Production .00t decode (hold point)
 
-**Date:** 2026-06-25
-**Status:** Container + coordinate VALUE model cracked on a real 50 MB production
-triangulation. Vertex ASSEMBLY is NOT solved (recall 0.00% — see below). This
-document is the pick-up point.
+**Date:** 2026-06-25 (updated)
+**Status:** Container + coordinate VALUE model cracked. Vertex ASSEMBLY now
+DIAGNOSED: the 0% 3D wall is caused by Y-row advancement, NOT the value model —
+**2D (X,Z) recall = 23.65%** proves X/Z assembly is substantially correct. The
+blocker is Y. This document is the pick-up point.
+
+---
+
+## SESSION UPDATE 2026-06-25 (read this first)
+
+The earlier "recall 0.00%" was misleading. New, validated diagnosis:
+
+- **Drop Y, test 2D (X,Z) pairs → recall 23.65%, precision 41.9%** (`decode_2d.py`,
+  163k of 690k GT (X,Z) pairs). So the X/Z value model AND pairing are mostly right;
+  **Y-row advancement is the dominant blocker.** Crack Y → 3D recall should approach
+  the 2D ceiling.
+- **Surface = gridded DTM**: X step ~0.15 m, Y step 0.25 m, ONE Z per (X,Y) column
+  (1,206,979 columns ≈ 1.21M verts), ROW-MAJOR scanline, irregular boundary. (The
+  prior "0.45 m X step" was every-3rd column; true grid is 0.15.)
+- **Clean grammar:** record = `TAG · SEP · count · payload(count+1 bytes)`.
+  `TAG 0x20` = NEW primary coord; `TAG 0x60` = REFINE the previous primary's axis.
+  SEP constant 0x17 in clean runs. ~3.43M coord records ≈ 3 per vertex.
+- **Refine-binding bug fixed:** a 0x60 Z-refine, prepended with X high bytes, hits the
+  X grid → greedy "try X first" mis-tagged it. Bind 0x60 to last primary axis
+  (`decode_v3.py`).
+- **Y is IMPLICIT / marker-driven**, not a per-row coord (only 1,086/2,907 rows
+  recovered greedily, with many false positives — see `profile_y.py`). The
+  X/Y/Z primary selector is NOT in the record's own bytes; it is structural/stateful.
+- **Escapes ARE present** (contradicts §4 "absent"): clusters like
+  `0c e4 f5 c3 03 b5 40 80 1d 29 0e 58 e6 f9` sit at SPARSE-ROW boundaries and carry
+  FULL-precision coords (`40 80` = Z-double prefix). Prime candidate for row-advance.
+
+## SESSION UPDATE 2026-06-25 (part 2) — traversal is COLUMN-MAJOR + delta-coded
+
+Pushed on Y. Major reframe (supersedes the row-major assumption above):
+
+- **Traversal is COLUMN-MAJOR.** X is the SLOW axis = exactly **3134 columns**
+  (= the unique-X count). The decoded stream shows long runs of CONSTANT X
+  (e.g. pos 8904–8983 all X=60660.69) while Z/Y vary. Each GT column has ~387 pts
+  (median 99) spanning the full Y range; within a column **Y is irregular** (steps
+  0.25/0.5/1.0/2.0 — sparse 0.25 grid, a TIN). So Y must be encoded per-vertex.
+- **My 3D recall stays ~0% because of two coupled bugs:**
+  1. Within a column the decoder can't classify the per-vertex records, so it
+     **fabricates a fake Z ≈ 515.6** by force-splicing the seed Z high-bytes
+     (`40 80 1c`) onto them. The ~515.6 plateau in the output is this artifact, not
+     real Z. (This is why 2D recall was only 24% — it mostly caught top-of-column
+     points where real Z really is ~515.6, plus the sparse header records.)
+  2. Y never advances inside the column (no Y record is recognized), so every
+     vertex gets the stale entry-Y.
+- **The splice value model is only PARTIALLY right.** It reproduces the sparse
+  column-header / boundary coords, but the DENSE within-column records do NOT
+  splice to GT Y or Z (off by ~0.07 on Z; Y nowhere close). Their **first payload
+  byte is centered on 0x80** (Gaussian-ish, high nibbles 5–12 dominant) = the
+  signature of **signed DELTA coding**, not byte-splicing. The bulk of the 3.43M
+  records are delta-coded and this model is NOT yet cracked.
+- SEP byte does NOT cleanly encode the Y-step (tested on an aligned column run:
+  SEP 0x17 appears with Y-steps 0.25 / 0.5 / 1.0). The Y-step is likely in the
+  delta payload itself.
+
+**Honest status now:** SOLVED = container, sectioning, vertex 0, column-major
+traversal structure (X = 3134 columns), sparse/header coord splice model.
+OPEN (the real bulk) = the within-column **delta value model** (Y-step + Z per
+vertex) — crack this and recall should jump. The earlier "coordinate VALUE model
+cracked" claim was over-stated: it's the sparse records only.
+
+**Do next (revised):** crack the within-column signed-delta encoding. Use
+`brute_payload.py` / `align_sep_ystep.py` on a clean constant-X run (e.g.
+8904–8983) against the GT column (`debug_colmajor.py`). Determine: is the 5-byte
+payload a single signed delta (added to prev Z?), or packed (dY,dZ)? What is the
+scale/zero-point (0x80=0)? New scripts this part: `debug_colmajor.py`,
+`brute_payload.py`, `align_sep_ystep.py`, `trace_y_truth.py`, `boundary_hunt.py`,
+`marker_census.py`, `y_changes.py`, `decode_v4.py`.
+
+---
+
+(Earlier part-1 note — partly superseded by the column-major finding above:)
+**Do next:** decode the Y-row-advance / escape-cluster grammar at row boundaries
+(use `debug_tokens.py <start> <end>` across a boundary like 8412..8470, and
+`debug_gtrows.py` for the GT row structure). New scripts this session: `decode_2d.py`,
+`decode_v3.py`, `profile_y.py`, `debug_tokens.py`, `debug_gtrows.py`, `debug_column.py`,
+`debug_emit.py`, `count_markers.py`, `decode_recall_snap.py`, `sanity_v0.py`.
+GT caches regenerate via `csv_axis_cache.py` + `gt_tupleset.py` (scratchpad is wiped
+between sessions). Below is the original (pre-diagnosis) hold-point.
 
 ---
 

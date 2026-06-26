@@ -155,6 +155,94 @@ function indexOfSeq(hay, needle, from = 0) {
   return -1;
 }
 
+// ---- robust geometry-end (old-format files have header[11]=0) -----------------
+function robustGeoEnd(u8, hdr) {
+  const raw = hdr.geoEnd;
+  if (raw > COORD_START && raw <= u8.length) return raw;
+  // old format: scan for the attribute section ("SHADED") else fall back to EOF
+  const sh = indexOfSeq(u8, [0x53, 0x48, 0x41, 0x44, 0x45, 0x44]); // "SHADED"
+  return sh > COORD_START ? sh : u8.length;
+}
+
+// ---- single-pass geometry analyzer (SOLID structural facts) -------------------
+// Walks [COORD_START..geoEnd], classifies each data-record by its lead-tag high
+// nibble, finds the coord/topology split (where 0xE0-lead density jumps), and
+// tallies the topology opcode histogram. Counters only — scales to 50 MB.
+function analyzeGeometry(u8, geoEnd) {
+  const WIN = 1 << 20; // 1 MB windows for split detection
+  let pos = COORD_START + 24; // past vertex 0
+  let curTag = null;
+  let coordRecs = 0, topoRecs = 0, split = -1;
+  let winRecs = 0, winE0 = 0, winStart = pos;
+  const hi = new Array(16).fill(0); // topo lead-tag high-nibble histogram
+  let noLead = 0;
+  const inTopo = () => split >= 0;
+  while (pos < geoEnd) {
+    const b = u8[pos];
+    if (b <= 0x06) {
+      const nb = b + 1;
+      const leadHi = curTag === null ? -1 : (curTag >> 4);
+      if (!inTopo()) {
+        coordRecs++; winRecs++;
+        if (leadHi === 0xe) winE0++;
+        if (pos - winStart >= WIN) {
+          if (winRecs > 200 && winE0 / winRecs > 0.40) split = winStart; // topology begins
+          winStart = pos; winRecs = 0; winE0 = 0;
+        }
+      } else {
+        topoRecs++;
+        if (leadHi < 0) noLead++; else hi[leadHi]++;
+      }
+      pos += 1 + nb; curTag = null;
+    } else if (isSep(b)) {
+      pos++;
+    } else if (TAG_CLASSES.has(b & 0xe0)) {
+      curTag = b; pos++;
+    } else { pos++; }
+  }
+  const cCount = hi[0xe]; // 0xE0-class lead = C opcode
+  return {
+    coordTopoSplit: split, coordRecords: coordRecs, topoRecords: topoRecs,
+    topoLeadHiHist: hi, topoNoLead: noLead, cCount,
+    triEstimate: topoRecs, // ~1 data-record per triangle
+  };
+}
+
+// ---- full inspector: everything SOLID + gated/labelled geometry ---------------
+function inspect(arrayBuffer, opts = {}) {
+  const u8 = new Uint8Array(arrayBuffer);
+  const out = { fileSize: u8.length };
+  out.magicOk = MAGIC.every((m, i) => u8[i] === m);
+  if (!out.magicOk) { out.error = 'Bad magic — not a Vulcan .00t'; return out; }
+  const hdr = readHeader(u8);
+  out.header = { dir: hdr.dir, geoEndRaw: hdr.geoEnd };
+  const geoEnd = robustGeoEnd(u8, hdr);
+  out.geoEnd = geoEnd;
+  out.oldFormat = !(hdr.geoEnd > COORD_START && hdr.geoEnd <= u8.length);
+  // vertex 0 (three full BE doubles) — only if geometry region is present
+  if (u8.length > COORD_START + 24) {
+    out.vertex0 = [readBEDouble(u8, 8328), readBEDouble(u8, 8336), readBEDouble(u8, 8344)];
+  }
+  out.geometry = analyzeGeometry(u8, geoEnd);
+  out.sections = {
+    coordStart: COORD_START,
+    coordTopoSplit: out.geometry.coordTopoSplit,
+    topoEnd: geoEnd,
+    attrStart: geoEnd,
+  };
+  out.attributes = parseAttributes(u8, geoEnd);
+  // gated partial coord decode (clearly unverified), capped for rendering
+  if (opts.partialCoords) {
+    try {
+      const verts = decodeCoords(u8, { coordStart: COORD_START, topoEnd: geoEnd }, { allowUnverifiedCoords: true });
+      const cap = opts.maxPoints || 200000;
+      out.partialVertices = verts.length > cap ? verts.filter((_, i) => i % Math.ceil(verts.length / cap) === 0) : verts;
+      out.partialVertexCount = verts.length;
+    } catch (e) { out.partialError = e.message; }
+  }
+  return out;
+}
+
 // ---- top-level ---------------------------------------------------------------
 function parse00t(arrayBuffer, opts = {}) {
   const u8 = new Uint8Array(arrayBuffer);
@@ -170,6 +258,7 @@ function parse00t(arrayBuffer, opts = {}) {
 }
 
 export {
-  parse00t, readHeader, boundSections, records, decodeCoords, decodeTopology,
-  parseAttributes, spliceDouble, isSep, isTag, MAGIC,
+  parse00t, inspect, analyzeGeometry, robustGeoEnd, readHeader, boundSections,
+  records, decodeCoords, decodeTopology, parseAttributes, spliceDouble,
+  isSep, isTag, MAGIC,
 };

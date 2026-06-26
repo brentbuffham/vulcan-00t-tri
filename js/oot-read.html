@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Vulcan .00t Reader — vulcan00TParser.js</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:13px/1.5 ui-monospace,Menlo,Consolas,monospace; background:#14141f; color:#e6e6ee; }
+  header { padding:10px 14px; background:#1d1d2e; border-bottom:1px solid #333; display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  select,button,label.btn { background:#2a2a3e; color:#eee; border:1px solid #444; padding:5px 9px; font:inherit; border-radius:4px; cursor:pointer; }
+  input[type=file]{ display:none; }
+  main { display:grid; grid-template-columns: 480px 1fr; height: calc(100vh - 49px); }
+  #report { overflow:auto; padding:14px; border-right:1px solid #333; }
+  #viewport { position:relative; }
+  #gl { width:100%; height:100%; display:block; }
+  #overlay { position:absolute; top:10px; left:10px; right:10px; pointer-events:none; }
+  .badge { display:inline-block; padding:2px 7px; border-radius:10px; font-size:11px; font-weight:600; }
+  .solid { background:#14532d; color:#a7f3d0; }
+  .gated { background:#7c2d12; color:#fed7aa; }
+  .open  { background:#3b3b52; color:#c7c7e0; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:#9aa; margin:16px 0 6px; border-bottom:1px solid #2a2a3e; padding-bottom:3px; }
+  table { border-collapse:collapse; width:100%; }
+  td { padding:2px 6px; vertical-align:top; }
+  td.k { color:#8ab; white-space:nowrap; width:42%; }
+  td.v { color:#e6e6ee; word-break:break-all; }
+  .hist { display:flex; align-items:center; gap:6px; margin:1px 0; }
+  .hist .lbl { width:46px; color:#9aa; }
+  .hist .bar { height:10px; background:#4f46e5; border-radius:2px; }
+  .hist .cnt { color:#aab; }
+  .drop { border:2px dashed #444; border-radius:8px; padding:24px; text-align:center; color:#889; margin-bottom:12px; }
+  .drop.hot { border-color:#6366f1; color:#c7d2fe; background:#1e1e33; }
+  .note { color:#889; font-size:11.5px; margin:6px 0; }
+  .thumb { margin-top:6px; border:1px solid #333; border-radius:4px; max-width:100%; image-rendering:pixelated; background:#000; }
+  code { background:#22223a; padding:1px 4px; border-radius:3px; }
+  .err { color:#fca5a5; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Vulcan .00t Reader</h1>
+  <span class="note">structural read via <code>vulcan00TParser.js</code></span>
+  <select id="picker"><option value="">— load bundled test file —</option></select>
+  <label class="btn" for="fileinp">Open .00t…</label>
+  <input type="file" id="fileinp" accept=".00t">
+  <label><input type="checkbox" id="showpts" checked> partial point cloud</label>
+</header>
+<main>
+  <div id="report">
+    <div class="drop" id="drop">Drop any <b>.00t</b> here (incl. the 50 MB production file)</div>
+    <div class="note">Reads ANY file's container with no ground truth. Labels what is
+      <span class="badge solid">SOLID</span>,
+      <span class="badge gated">GATED/UNVERIFIED</span>, and
+      <span class="badge open">OPEN</span>.</div>
+    <div id="out"></div>
+  </div>
+  <div id="viewport">
+    <canvas id="gl"></canvas>
+    <div id="overlay"></div>
+  </div>
+</main>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js" } }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { inspect } from './vulcan00TParser.js';
+
+const BUNDLED = ['cube.00t','cube1.00t','cube2.00t','cube3.00t','cube4.00t','cube5.00t',
+  'tri-crack-triangle.00t','tri-crack.00t','tri-crack-linear.00t','tri-crack-solid.00t',
+  'tri-crack-prism.00t','tri-crack-4sides-prism.00t','tri-crack-fan.00t',
+  'tri-crack-Stepped-pyramid.00t','tri-crack-L-SHAPE.00t','tri-crack-Hexhole.00t',
+  'tri-crack-NonRound.00t','tri-crack-SPHERE.00t','tri-crack-BigGrid.00t'];
+const picker = document.getElementById('picker');
+for (const f of BUNDLED) { const o=document.createElement('option'); o.value=f; o.textContent=f; picker.appendChild(o); }
+
+const out = document.getElementById('out');
+const fmt = n => typeof n==='number' ? n.toLocaleString() : n;
+const f3  = v => v==null ? '—' : (+v).toFixed(3);
+
+function row(k,v){ return `<tr><td class="k">${k}</td><td class="v">${v}</td></tr>`; }
+
+function render(r, name){
+  if (r.error){ out.innerHTML = `<div class="err">✗ ${r.error}</div>`; clearPoints(); return; }
+  const g = r.geometry;
+  const triBadge = r.oldFormat ? '<span class="badge open">old/small layout</span>' : '';
+  let h = `<h2>File ${triBadge}</h2><table>`;
+  h += row('name', name||'(dropped)');
+  h += row('size', `${fmt(r.fileSize)} bytes`);
+  h += row('magic', r.magicOk ? '<span class="badge solid">vulZ OK</span>' : '<span class="err">BAD</span>');
+  h += row('format', r.oldFormat ? 'old (header[11]=0 → geoEnd scanned)' : 'new (header[11] pointer)');
+  h += '</table>';
+
+  h += `<h2>Container <span class="badge solid">SOLID</span></h2><table>`;
+  h += row('header[11] geoEnd', `${fmt(r.header.geoEndRaw)} → using ${fmt(r.geoEnd)}`);
+  h += row('header dir[0..14]', r.header.dir.join(', '));
+  h += row('vertex 0 (X,Y,Z)', r.vertex0 ? r.vertex0.map(f3).join(',  ') : '—');
+  h += '</table>';
+
+  h += `<h2>Sections <span class="badge solid">SOLID</span></h2><table>`;
+  h += row('coord start', fmt(r.sections.coordStart));
+  h += row('coord/topo split', r.sections.coordTopoSplit>=0 ? fmt(r.sections.coordTopoSplit) : '— (no topology regime found)');
+  h += row('topology end', fmt(r.sections.topoEnd));
+  h += row('attributes + PNG', fmt(r.sections.attrStart)+' → EOF');
+  h += '</table>';
+
+  h += `<h2>Coordinates <span class="badge solid">SOLID counts</span> <span class="badge gated">GATED decode</span></h2><table>`;
+  h += row('coord records', fmt(g.coordRecords));
+  h += '</table>';
+
+  h += `<h2>Topology / faces <span class="badge solid">SOLID counts</span> <span class="badge open">decode OPEN</span></h2><table>`;
+  h += row('topo records ≈ triangles', fmt(g.topoRecords));
+  h += row('C ops (0xE0-class)', `${fmt(g.cCount)}  <span class="note">≈ vertex count</span>`);
+  h += '</table>';
+  if (g.topoRecords>0){
+    const max = Math.max(...g.topoLeadHiHist);
+    const names = {0xe:'C', 0x2:'R?', 0x4:'L?', 0xc:'S?', 0xf:'E?'};
+    h += '<div class="note">lead-tag opcode histogram (high nibble):</div>';
+    g.topoLeadHiHist.forEach((c,i)=>{ if(!c) return;
+      h += `<div class="hist"><span class="lbl">${i.toString(16)}0 ${names[i]||''}</span>`+
+           `<span class="bar" style="width:${Math.max(2,200*c/max)}px"></span>`+
+           `<span class="cnt">${fmt(c)}</span></div>`; });
+  }
+
+  h += `<h2>Embedded preview <span class="badge solid">SOLID</span></h2>`;
+  if (r.attributes.thumbnail){
+    const blob = new Blob([r.attributes.thumbnail], {type:'image/png'});
+    h += `<div class="note">Vulcan's own rendered thumbnail (${fmt(r.attributes.thumbnail.length)} bytes):</div>`;
+    h += `<img class="thumb" id="thumb">`;
+    setTimeout(()=>{ const im=document.getElementById('thumb'); if(im) im.src=URL.createObjectURL(blob); },0);
+  } else h += `<div class="note">no PNG thumbnail found</div>`;
+
+  h += `<h2>Partial geometry <span class="badge gated">UNVERIFIED</span></h2>`;
+  h += `<div class="note">The point cloud at right is the GATED splice decode — X & Z are
+        solid, <b>Y/axis pairing is OPEN</b> (see skill). This is a research view, NOT a
+        validated mesh. For proven toy meshes use <code>oot-compare.html</code>.</div>`;
+  h += `<table>${row('decoded points (unverified)', r.partialVertexCount!=null?fmt(r.partialVertexCount):(r.partialError||'—'))}`;
+  h += `${row('rendered (sampled)', r.partialVertices?fmt(r.partialVertices.length):'—')}</table>`;
+
+  out.innerHTML = h;
+  drawPoints(r.partialVertices);
+}
+
+// ---------- three.js point cloud ----------
+const canvas = document.getElementById('gl');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x14141f);
+scene.add(new THREE.AxesHelper(50));
+let camera = new THREE.PerspectiveCamera(60, 1, 0.01, 1e7);
+camera.position.set(60,60,60);
+let pts=null, theta=0.6, phi=1.0, dist=300, target=new THREE.Vector3();
+function resize(){ const w=canvas.clientWidth,h=canvas.clientHeight; if(canvas.width!==w||canvas.height!==h){renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();} }
+function clearPoints(){ if(pts){scene.remove(pts);pts.geometry.dispose();pts.material.dispose();pts=null;} document.getElementById('overlay').textContent=''; }
+function drawPoints(verts){
+  clearPoints();
+  document.getElementById('showpts').checked || (verts=null);
+  if(!verts||!verts.length){ return; }
+  const pos=new Float32Array(verts.length*3), col=new Float32Array(verts.length*3);
+  let zmin=Infinity,zmax=-Infinity; for(const v of verts){ if(v[2]<zmin)zmin=v[2]; if(v[2]>zmax)zmax=v[2]; }
+  const box=new THREE.Box3();
+  verts.forEach((v,i)=>{ pos[i*3]=v[0];pos[i*3+1]=v[2];pos[i*3+2]=v[1]; // Y-up swap for view
+    const t=(v[2]-zmin)/((zmax-zmin)||1); col[i*3]=t;col[i*3+1]=0.4;col[i*3+2]=1-t;
+    box.expandByPoint(new THREE.Vector3(v[0],v[2],v[1])); });
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+  geo.setAttribute('color',new THREE.Float32BufferAttribute(col,3));
+  pts=new THREE.Points(geo,new THREE.PointsMaterial({size:1,vertexColors:true,sizeAttenuation:false}));
+  scene.add(pts);
+  box.getCenter(target); const sz=box.getSize(new THREE.Vector3()); dist=Math.max(sz.x,sz.y,sz.z)*1.6||300;
+  document.getElementById('overlay').innerHTML='<span class="badge gated">UNVERIFIED point cloud — X,Z solid · Y open</span>';
+}
+let drag=false,px=0,py=0;
+canvas.addEventListener('pointerdown',e=>{drag=true;px=e.clientX;py=e.clientY;});
+addEventListener('pointerup',()=>drag=false);
+addEventListener('pointermove',e=>{ if(!drag)return; theta-=(e.clientX-px)*0.01; phi=Math.max(0.05,Math.min(3.09,phi-(e.clientY-py)*0.01)); px=e.clientX;py=e.clientY; });
+canvas.addEventListener('wheel',e=>{e.preventDefault();dist*=(1+Math.sign(e.deltaY)*0.1);},{passive:false});
+document.getElementById('showpts').addEventListener('change',()=>{ if(pts)pts.visible=document.getElementById('showpts').checked; });
+function loop(){ resize();
+  camera.position.set(target.x+dist*Math.sin(phi)*Math.cos(theta), target.y+dist*Math.cos(phi), target.z+dist*Math.sin(phi)*Math.sin(theta));
+  camera.lookAt(target); renderer.render(scene,camera); requestAnimationFrame(loop); }
+loop();
+
+// ---------- loading ----------
+async function loadBuf(ab, name){
+  out.innerHTML='<div class="note">parsing…</div>';
+  await new Promise(r=>setTimeout(r,10));
+  try { render(inspect(ab, {partialCoords:true, maxPoints:200000}), name); }
+  catch(e){ out.innerHTML=`<div class="err">✗ ${e.message}</div>`; clearPoints(); }
+}
+picker.addEventListener('change', async ()=>{ if(!picker.value)return;
+  const ab=await (await fetch('../exampleFiles/'+picker.value)).arrayBuffer(); loadBuf(ab, picker.value); });
+document.getElementById('fileinp').addEventListener('change', e=>{ const f=e.target.files[0]; if(!f)return;
+  const rd=new FileReader(); rd.onload=()=>loadBuf(rd.result, f.name); rd.readAsArrayBuffer(f); });
+const drop=document.getElementById('drop');
+['dragover','dragenter'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('hot');}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hot');}));
+addEventListener('dragover',e=>e.preventDefault());
+addEventListener('drop',e=>{ e.preventDefault(); const f=e.dataTransfer.files[0]; if(!f)return;
+  const rd=new FileReader(); rd.onload=()=>loadBuf(rd.result, f.name); rd.readAsArrayBuffer(f); });
+</script>
+</body>
+</html>

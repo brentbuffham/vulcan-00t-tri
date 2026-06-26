@@ -192,7 +192,7 @@ function drawPoints(verts){
   pts=new THREE.Points(geo,new THREE.PointsMaterial({size:1,vertexColors:true,sizeAttenuation:false}));
   scene.add(pts);
   box.getCenter(target); const sz=box.getSize(new THREE.Vector3()); dist=Math.max(sz.x,sz.y,sz.z)*1.6||300;
-  document.getElementById('overlay').innerHTML='<span class="badge gated">UNVERIFIED point cloud — X,Z solid · Y open</span>';
+  document.getElementById('overlay').innerHTML=`<span class="badge gated">FULL decode: ${verts.length.toLocaleString()} points · X,Z decoded · Y NOT decoded (flat) — this is the unsolved state, not a render limit</span>`;
 }
 let drag=false,px=0,py=0;
 canvas.addEventListener('pointerdown',e=>{drag=true;px=e.clientX;py=e.clientY;});
@@ -209,7 +209,7 @@ loop();
 async function loadBuf(ab, name){
   out.innerHTML='<div class="note">parsing…</div>';
   await new Promise(r=>setTimeout(r,10));
-  try { render(inspect(ab, {partialCoords:true, maxPoints:200000}), name); }
+  try { render(inspect(ab, {partialCoords:true, maxPoints:Infinity}), name); }
   catch(e){ out.innerHTML=`<div class="err">✗ ${e.message}</div>`; clearPoints(); }
 }
 picker.addEventListener('change', async ()=>{ if(!picker.value)return;

@@ -82,11 +82,29 @@ const f3  = v => v==null ? '—' : (+v).toFixed(3);
 
 function row(k,v){ return `<tr><td class="k">${k}</td><td class="v">${v}</td></tr>`; }
 
+// validate an embedded PNG: real IHDR dims must be sane (paging splits these files'
+// thumbnails, producing garbage dims like 537329764x1073938696).
+function pngDims(bytes){
+  if (!bytes || bytes.length < 24) return null;
+  const sig=[0x89,0x50,0x4e,0x47]; for(let i=0;i<4;i++) if(bytes[i]!==sig[i]) return null;
+  const dv=new DataView(bytes.buffer, bytes.byteOffset+16, 8);
+  const w=dv.getUint32(0,false), h=dv.getUint32(4,false);
+  return (w>0&&w<=8192&&h>0&&h<=8192) ? {w,h} : {w,h,bad:true};
+}
+
 function render(r, name){
   if (r.error){ out.innerHTML = `<div class="err">✗ ${r.error}</div>`; clearPoints(); return; }
   const g = r.geometry;
+  // Is this a file this (production) parser can actually decode geometry for?
+  const v0zero = !r.vertex0 || r.vertex0.every(x=>x===0);
+  const wrongTool = r.oldFormat || g.coordTopoSplit<0 || v0zero;
+  let banner='';
+  if (wrongTool) banner = `<div class="drop" style="border-color:#7c2d12;color:#fed7aa">
+    ⚠ This file uses the small/old layout — the production parser can't decode its
+    geometry. You'll see container facts only. <b>Open it in <code>oot-compare.html</code></b>
+    for the actual decoded mesh.</div>`;
   const triBadge = r.oldFormat ? '<span class="badge open">old/small layout</span>' : '';
-  let h = `<h2>File ${triBadge}</h2><table>`;
+  let h = banner + `<h2>File ${triBadge}</h2><table>`;
   h += row('name', name||'(dropped)');
   h += row('size', `${fmt(r.fileSize)} bytes`);
   h += row('magic', r.magicOk ? '<span class="badge solid">vulZ OK</span>' : '<span class="err">BAD</span>');
@@ -124,12 +142,17 @@ function render(r, name){
            `<span class="cnt">${fmt(c)}</span></div>`; });
   }
 
-  h += `<h2>Embedded preview <span class="badge solid">SOLID</span></h2>`;
-  if (r.attributes.thumbnail){
+  h += `<h2>Embedded preview <span class="badge open">paged/split</span></h2>`;
+  const dims = pngDims(r.attributes.thumbnail);
+  if (dims && !dims.bad){
     const blob = new Blob([r.attributes.thumbnail], {type:'image/png'});
-    h += `<div class="note">Vulcan's own rendered thumbnail (${fmt(r.attributes.thumbnail.length)} bytes):</div>`;
+    h += `<div class="note">embedded PNG ${dims.w}×${dims.h} (${fmt(r.attributes.thumbnail.length)} bytes):</div>`;
     h += `<img class="thumb" id="thumb">`;
     setTimeout(()=>{ const im=document.getElementById('thumb'); if(im) im.src=URL.createObjectURL(blob); },0);
+  } else if (dims && dims.bad){
+    h += `<div class="note">PNG signature found but IHDR is corrupt (dims ${dims.w}×${dims.h}) —
+      the thumbnail is split across 2048-byte container page boundaries. De-paging the
+      tail is needed to reassemble it (OPEN).</div>`;
   } else h += `<div class="note">no PNG thumbnail found</div>`;
 
   h += `<h2>Partial geometry <span class="badge gated">UNVERIFIED</span></h2>`;

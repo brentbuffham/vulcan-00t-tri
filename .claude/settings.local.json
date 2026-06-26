@@ -61,7 +61,19 @@
       "Bash(python -c \"import sys; print\\(sys.stdin.read\\(\\)\\)\")",
       "Bash(git *)",
       "Bash(python python/page_detect.py tri-crack-solid tri-crack tri-crack-SPHERE tri-crack-Hexhole tri-crack-NonRound cube cube2)",
-      "Read(//c/Users/brent/OneDrive/Test Files/POINTCLOUDS/**)"
+      "Read(//c/Users/brent/OneDrive/Test Files/POINTCLOUDS/**)",
+      "Bash(python -m http.server 8765)",
+      "Bash(curl -s -o /dev/null -w \"server status: %{http_code}\\\\n\" http://localhost:8765/js/oot-read.html)",
+      "Bash(curl -s -o /dev/null -w \"module status: %{http_code}\\\\n\" http://localhost:8765/js/vulcan00TParser.js)",
+      "Bash(curl -s -o /dev/null -w \"example status: %{http_code}\\\\n\" http://localhost:8765/exampleFiles/cube1.00t)",
+      "Bash(curl -s -o /dev/null -w \"served: %{http_code}\\\\n\" http://localhost:8765/exampleFiles/_tmp_heave.00t)",
+      "Bash(curl -s -o /dev/null -w \"oot-compare.html: %{http_code}\\\\n\" http://localhost:8765/js/oot-compare.html)",
+      "Bash(curl -s -o /dev/null -w \"oot-viewer.html: %{http_code}\\\\n\" http://localhost:8765/js/oot-viewer.html)",
+      "Bash(xargs -n1 basename)",
+      "Bash(PYTHONIOENCODING=utf-8 python3 python/axis_supervised.py exampleFiles/tri-crack-SPHERE.00t exampleFiles/tri-crack-Sphere.dxf)",
+      "Bash(PYTHONIOENCODING=utf-8 python3 python/axis_supervised.py exampleFiles/tri-crack-Hexhole.00t exampleFiles/tri-crack-HexHole.dxf)",
+      "Bash(cd *)",
+      "Bash(python *)"
     ]
   }
 }

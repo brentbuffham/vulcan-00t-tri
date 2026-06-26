@@ -107,6 +107,17 @@ testing live in this repo — stand on it.**
   local byte selects axis. 8+ approaches failed (TEST-001..008). Production Y is the
   same wall: X+Z decode (~24% 2D) but per-vertex Y/axis needs encoder STATE, not
   local bytes.
+  - **REFRAMED 2026-06-26 (`[[project_coord_order_breakthrough]]`):** axis is
+    POSITIONAL — coords stream vertex-major in **X→Y→Z** order; axis = cycle position,
+    never a local byte. That's WHY T001-008 failed. PROVEN on toys via
+    `python/order_probe.py` (triangle `XYZXY`, fan, prism `XYZXYZ`, 4-prism). Toy
+    files DEDUP repeated coords (origin/axis-aligned), which scrambled the visible
+    cycle. Value-based axis labelling is impossible (splice keeps high bytes → all
+    axes in-band; `decode_label.py`). The wall is now CONCRETE engineering, not a
+    mystery: (1) robust record framing `[tag][sep][count][payload]` through the ~17%
+    escape/FULL records (`frame_check.py` = 83% clean), (2) exact tag→axis grammar +
+    dedup/skip detection. New decoders: `decode_v7.py`, `decode_pos.py`. v6's
+    `b<=0x06` gate MISFRAMED every long record — abandon it.
 
 ## Solved scoreboard (toy)
 SOLVED: triangle, plane, linear strip, cube (hardcoded seq), prism, 4-sides prism.

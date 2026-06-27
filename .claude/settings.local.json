@@ -73,7 +73,8 @@
       "Bash(PYTHONIOENCODING=utf-8 python3 python/axis_supervised.py exampleFiles/tri-crack-SPHERE.00t exampleFiles/tri-crack-Sphere.dxf)",
       "Bash(PYTHONIOENCODING=utf-8 python3 python/axis_supervised.py exampleFiles/tri-crack-Hexhole.00t exampleFiles/tri-crack-HexHole.dxf)",
       "Bash(cd *)",
-      "Bash(python *)"
+      "Bash(python *)",
+      "Bash(npm ls *)"
     ]
   }
 }

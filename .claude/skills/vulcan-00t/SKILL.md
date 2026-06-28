@@ -15,6 +15,12 @@ description: >-
 **Read this FIRST. Do not re-derive what is already known. Nine months of
 testing live in this repo — stand on it.**
 
+> **▶ RESUMING? READ `reference/RESUME-2026-06-28.md` FIRST.** Latest state (GT/DXF now
+> available → SUPERVISED problem): coord VALUES decode EXACTLY (splice, no transform);
+> the lock is (a) per-delta AXIS — partly cracked via the COUNT byte (count=3→Z) — and
+> (b) point ORDER, which is a mesh traversal stored in the undecoded `e0 03` connectivity
+> block. Next: decode connectivity. Splice exact; additive/per-page/inversion all RULED OUT.
+
 ## THE PRIME DIRECTIVE (read before anything)
 1. **We do NOT make things up.** No invented values, no plausible-sounding decode.
 2. **No hero jobs. No ground-truth cheating.** Using the DXF/CSV to place vertices

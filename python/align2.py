@@ -16,7 +16,13 @@ def snap(v,a,tol):
     b=min(c,key=lambda x:abs(x-v)); return b if abs(b-v)<=tol else None
 def in_gt(x,y,z): return (round(x*100),round(y*100),round(z*100)) in gset
 d=open(oot,'rb').read()
-face_start=next((i for i in range(8326,len(d)-2) if d[i]==0xE0 and d[i+1]==0x03), len(d))
+# face block = the DENSE run of short e0 03 records (not the lone coord-section marker).
+occ=[i for i in range(8326,len(d)-2) if d[i]==0xE0 and d[i+1]==0x03]
+face_start=len(d)
+for k in range(len(occ)-3):
+    if occ[k+3]-occ[k] < 90:  # 3 e0 03 within 90 bytes = dense face run
+        face_start=occ[k]; break
+print(f'[coord section 8326..{face_start}]')
 def be(b): return struct.unpack('>d',(bytes(b)+b'\x00'*8)[:8])[0]
 def band(v):
     a=abs(v); return 2 if a<5000 else (0 if a<100000 else 1)

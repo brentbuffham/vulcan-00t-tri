@@ -39,6 +39,9 @@ def band(v):
 toks=[];pos=8350;lastT=None
 while pos<face_start:
     b=d[pos]
+    if b==0 and pos+6<=face_start and d[pos:pos+6]==b'\x00'*6:
+        while pos<face_start and d[pos]==0: pos+=1  # W3 zero-strip (padding)
+        continue
     if b in (0x40,0x41,0xC0,0xC1) and pos+8<=face_start and sane(be(d[pos:pos+8])):
         toks.append(('F',d[pos:pos+8],lastT,None)); lastT=None; pos+=8; continue
     if b<0x20 and pos+1+(b&7)+1<=face_start:
@@ -48,11 +51,33 @@ while pos<face_start:
     if b>=0x20 and pos+2<=face_start: lastT=(d[pos],d[pos+1]); pos+=2; continue
     pos+=1
 N=len(toks)
-labels=np.load(sp+r'\fp2_labels.npy',allow_pickle=True)
+# inline fingerprint anchors (same tokenization)
+u64v=[vals_a.copy().view(np.uint64) for vals_a in
+      [np.sort(np.unique(np.round(Gu[:,a],3))) for a in range(3)]]
+valsA=[np.sort(np.unique(np.round(Gu[:,a],3))) for a in range(3)]
 anchors={}
-for i,(t,l) in enumerate(zip(toks,labels)):
-    if t[0]=='F': anchors[i]=(band(be(t[1])),round(be(t[1]),3))
-    elif l[0]=='U': anchors[i]=(l[1],l[2])
+for i,t in enumerate(toks):
+    if t[0]=='F':
+        anchors[i]=(band(be(t[1])),round(be(t[1]),3)); continue
+    payload=t[1]; nb=len(payload); pI=int.from_bytes(payload,'big')
+    hits=set()
+    for a in range(3):
+        base=u64v[a]
+        for k in range(max(0,8-nb-3),8-nb+1):
+            sh=8*(8-k-nb)
+            mask=((1<<(8*nb))-1)<<sh
+            cand=(base & ~np.uint64(mask)) | np.uint64(pI<<sh)
+            vv=cand.view(np.float64)
+            arr=valsA[a]
+            idx=np.searchsorted(arr,vv)
+            for jj in (idx-1,idx):
+                jj2=np.clip(jj,0,len(arr)-1)
+                ok=np.abs(arr[jj2]-vv)<=0.0006
+                for tgt in np.unique(jj2[ok]): hits.add((a,round(arr[tgt],3)))
+            if len(hits)>1: break
+        if len(hits)>1: break
+    if len(hits)==1:
+        a,w=next(iter(hits)); anchors[i]=(a,w)
 anchor_idx=sorted(anchors)
 print(f'tokens {N}, initial anchors {len(anchors)}')
 
@@ -100,6 +125,17 @@ def split_fits(i,a1,t1v,a2,t2v,regs):
                 if abs(be(vb2)-t2v)<=TOL: return (vb1,vb2,k2)
     return None
 
+def two_tok_opts(i,a,regs):
+    """values reachable by applying token i THEN token i+1 to axis a."""
+    out=[]
+    if i+1>=N: return out
+    for v1,vb1,e1 in splice_opts(i,a,regs):
+        tmp=[bytearray(regs[0]),bytearray(regs[1]),bytearray(regs[2])]
+        tmp[a][:]=vb1
+        for v2,vb2,e2 in splice_opts(i+1,a,tmp):
+            out.append((v2,vb2))
+    return out
+
 def try_vertex(i,regs,used,lastvi):
     """try to commit ONE vertex starting at token i. Returns
     (vi, tokens_consumed, regupdates[(a,bytes)], kind) or None."""
@@ -135,6 +171,48 @@ def try_vertex(i,regs,used,lastvi):
                     if fy3 and fz3:
                         results.append((vi,4,[(0,xb),(1,fy3[0]),(2,fz3[0])],'refY'))
                         continue
+    # two-token X: tokens i,i+1 compose X; Y@i+2, Z@i+3
+    if i+3<N:
+        for xv,xb in two_tok_opts(i,0,regs):
+            xr=round(xv,3)
+            for vi in xmap.get(xr,[]):
+                if vi in used: continue
+                vx,vy,vz=Gu[vi]
+                fy=fits(i+2,1,vy,regs)
+                fz=fits(i+3,2,vz,regs) if fy else None
+                if fy and fz:
+                    results.append((vi,4,[(0,xb),(1,fy[0]),(2,fz[0])],'x2'))
+                    break
+    # two-token Y: X@i; Y=(i+1,i+2); Z@i+3
+    if i+3<N and not results:
+        for xv,xb,xe in splice_opts(i,0,regs):
+            xr=round(xv,3)
+            for vi in xmap.get(xr,[]):
+                if vi in used: continue
+                vx,vy,vz=Gu[vi]
+                hit=None
+                for yv,yb in two_tok_opts(i+1,1,regs):
+                    if abs(yv-vy)<=TOL: hit=yb; break
+                if hit is None: continue
+                fz=fits(i+3,2,vz,regs)
+                if fz:
+                    results.append((vi,4,[(0,xb),(1,hit),(2,fz[0])],'y2'))
+                    break
+    # two-token Z: X@i; Y@i+1; Z=(i+2,i+3)
+    if i+3<N and not results:
+        for xv,xb,xe in splice_opts(i,0,regs):
+            xr=round(xv,3)
+            for vi in xmap.get(xr,[]):
+                if vi in used: continue
+                vx,vy,vz=Gu[vi]
+                fy=fits(i+1,1,vy,regs)
+                if not fy: continue
+                hit=None
+                for zv,zb in two_tok_opts(i+2,2,regs):
+                    if abs(zv-vz)<=TOL: hit=zb; break
+                if hit is not None:
+                    results.append((vi,4,[(0,xb),(1,fy[0]),(2,hit)],'z2'))
+                    break
     # refine-before-X: token i refines prev Z (fits Z register to a GT-Z);
     # vertex is plain at i+1
     t0=toks[i]
@@ -194,7 +272,7 @@ def try_vertex(i,regs,used,lastvi):
                                 results.append((vi,2,[(0,xb),(1,yb),(2,fz[0])],'splitXY'))
     if not results: return None
     # prefer plain, then fewest tokens
-    results.sort(key=lambda r:{'plain':0,'splitYZ':1,'splitXY':1,'splitZX':2,'refX':2,'refY':2,'refZpre':3}[r[3]])
+    results.sort(key=lambda r:{'plain':0,'splitYZ':1,'splitXY':1,'splitZX':2,'refX':2,'refY':2,'x2':2,'y2':2,'z2':2,'refZpre':3}[r[3]])
     return results[0]
 
 def back_candidates(j,a,curbytes,vmap=None):

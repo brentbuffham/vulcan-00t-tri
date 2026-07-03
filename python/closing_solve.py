@@ -80,20 +80,47 @@ for i,t in enumerate(toks):
         a,w=next(iter(hits)); anchors[i]=(a,w)
 anchor_idx=sorted(anchors)
 print(f'tokens {N}, initial anchors {len(anchors)}')
+# register-free candidates per token for X and Y (fingerprint, capped)
+def build_fp(axis):
+    out=[[] for _ in range(N)]
+    base=u64v[axis]; arr=valsA[axis]
+    for i,t in enumerate(toks):
+        if t[0]!='V': continue
+        payload=t[1]; nb=len(payload); pI=int.from_bytes(payload,'big')
+        got=set()
+        for k in range(max(0,8-nb-3),8-nb+1):
+            sh=8*(8-k-nb)
+            mask=((1<<(8*nb))-1)<<sh
+            cand=(base & ~np.uint64(mask)) | np.uint64(pI<<sh)
+            vv=cand.view(np.float64)
+            idx=np.searchsorted(arr,vv)
+            for jj in (idx-1,idx):
+                jj2=np.clip(jj,0,len(arr)-1)
+                ok=np.abs(arr[jj2]-vv)<=0.0006
+                for tgt in np.unique(jj2[ok]): got.add(round(arr[tgt],3))
+            if len(got)>14: break
+        out[i]=sorted(got)[:14]
+    return out
+fpX=build_fp(0); fpY=build_fp(1)
+print('fpX/fpY built:',sum(1 for x in fpX if x),sum(1 for y in fpY if y))
 
 def splice_opts(i,a,regs):
-    """(value, newbytes, end) options for token i on axis a."""
+    """(value, newbytes, end) options for token i on axis a.
+    r = leading patch bytes skipped (they refine the PREVIOUS axis, sub-mm)."""
     t=toks[i]
     if t[0]=='F':
         v=be(t[1])
         return [(round(v,3),bytes(t[1]),None)] if band(v)==a else []
     payload=t[1]; nb=len(payload)
     out=[]
-    for end in (8,7,6):
-        k0=end-nb
-        if k0<0: continue
-        vb=bytes(regs[a][:k0])+payload+bytes(regs[a][end:])
-        out.append((be(vb),vb,end))
+    for r in (0,1,2):
+        if nb-r<1: break
+        pl=payload[r:]
+        for end in (8,7,6):
+            k0=end-(nb-r)
+            if k0<0: continue
+            vb=bytes(regs[a][:k0])+pl+bytes(regs[a][end:])
+            out.append((be(vb),vb,end))
     return out
 def fits(i,a,target,regs):
     for v,vb,end in splice_opts(i,a,regs):
@@ -141,8 +168,13 @@ def try_vertex(i,regs,used,lastvi):
     (vi, tokens_consumed, regupdates[(a,bytes)], kind) or None."""
     # gather X candidates from token i (plain) and split forms
     results=[]
-    # plain X at i
-    for xv,xb,xe in splice_opts(i,0,regs):
+    # plain X at i: register-based splices UNION register-free fingerprint candidates
+    xcands=[(xv,xb) for xv,xb,xe in splice_opts(i,0,regs)]
+    seenx=set(round(x,3) for x,_ in xcands)
+    for w in (fpX[i] if toks[i][0]=='V' else []):
+        if w not in seenx:
+            xcands.append((w,struct.pack('>d',w)))
+    for xv,xb in xcands:
         xr=round(xv,3)
         for vi in xmap.get(xr,[]):
             if vi in used: continue
@@ -154,6 +186,12 @@ def try_vertex(i,regs,used,lastvi):
                     fz=fits(i+2,2,vz,regs)
                     if fz:
                         results.append((vi,3,[(0,xb),(1,fy[0]),(2,fz[0])],'plain')); continue
+                    # X identified + Y verified, Z event: lenient commit
+                    results.append((vi,3,[(0,xb),(1,fy[0]),(2,struct.pack('>d',vz))],'lenZ'))
+                else:
+                    fz=fits(i+2,2,vz,regs)
+                    if fz:
+                        results.append((vi,3,[(0,xb),(1,struct.pack('>d',vy)),(2,fz[0])],'lenY'))
                 # split Y+Z at i+1 (vertex = 2 tokens)
                 sf=split_fits(i+1,1,vy,2,vz,regs)
                 if sf:
@@ -213,6 +251,26 @@ def try_vertex(i,regs,used,lastvi):
                 if hit is not None:
                     results.append((vi,4,[(0,xb),(1,fy[0]),(2,hit)],'z2'))
                     break
+    # Y-identified vertex: Y candidates at i+1 identify the vertex; X@i and Z@i+2 verify
+    if not results and i+2<N:
+        ycands=[(yv,yb) for yv,yb,ye in splice_opts(i+1,1,regs)]
+        seeny=set(round(y,3) for y,_ in ycands)
+        for w in (fpY[i+1] if toks[i+1][0]=='V' else []):
+            if w not in seeny: ycands.append((w,struct.pack('>d',w)))
+        for yv,yb in ycands:
+            yr=round(yv,3)
+            for vi in ymap.get(yr,[]):
+                if vi in used: continue
+                vx,vy,vz=Gu[vi]
+                fx=fits(i,0,vx,regs)
+                fz=fits(i+2,2,vz,regs)
+                if fx and fz:
+                    results.append((vi,3,[(0,fx[0]),(1,yb),(2,fz[0])],'yid'))
+                    break
+                if fx or fz:
+                    results.append((vi,3,[(0,fx[0] if fx else struct.pack('>d',vx)),(1,yb),
+                                          (2,fz[0] if fz else struct.pack('>d',vz))],'yid2'))
+            if results and results[-1][3]=='yid': break
     # refine-before-X: token i refines prev Z (fits Z register to a GT-Z);
     # vertex is plain at i+1
     t0=toks[i]
@@ -272,7 +330,7 @@ def try_vertex(i,regs,used,lastvi):
                                 results.append((vi,2,[(0,xb),(1,yb),(2,fz[0])],'splitXY'))
     if not results: return None
     # prefer plain, then fewest tokens
-    results.sort(key=lambda r:{'plain':0,'splitYZ':1,'splitXY':1,'splitZX':2,'refX':2,'refY':2,'x2':2,'y2':2,'z2':2,'refZpre':3}[r[3]])
+    results.sort(key=lambda r:{'plain':0,'splitYZ':1,'splitXY':1,'yid':1,'splitZX':2,'refX':2,'refY':2,'x2':2,'y2':2,'z2':2,'refZpre':3,'lenZ':4,'lenY':4,'yid2':5}[r[3]])
     return results[0]
 
 def back_candidates(j,a,curbytes,vmap=None):

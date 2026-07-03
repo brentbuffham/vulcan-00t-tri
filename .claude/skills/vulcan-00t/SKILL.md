@@ -15,11 +15,12 @@ description: >-
 **Read this FIRST. Do not re-derive what is already known. Nine months of
 testing live in this repo — stand on it.**
 
-> **▶ RESUMING? READ `reference/RESUME-2026-06-28.md` FIRST.** Latest state (GT/DXF now
-> available → SUPERVISED problem): coord VALUES decode EXACTLY (splice, no transform);
-> the lock is (a) per-delta AXIS — partly cracked via the COUNT byte (count=3→Z) — and
-> (b) point ORDER, which is a mesh traversal stored in the undecoded `e0 03` connectivity
-> block. Next: decode connectivity. Splice exact; additive/per-page/inversion all RULED OUT.
+> **▶ RESUMING? READ `reference/RESUME-2026-07-04.md` FIRST.** Coord codec fully
+> understood (unified token grammar, vertex-major XYZ cycle, prev1-splice reference,
+> placement locally signaled); 98.3% of intercepts vertices decode under supervision
+> (closing_solve.py = answer key). GT-free deterministic_v3 exists but collapses at
+> 2.4% — the placement/event bit-signal must be harvested from the solver's own
+> verified commits (Task 1 in the resume doc). Older context: RESUME-2026-07-03/06-28.
 
 ## THE PRIME DIRECTIVE (read before anything)
 1. **We do NOT make things up.** No invented values, no plausible-sounding decode.

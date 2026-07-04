@@ -104,6 +104,69 @@ def build_fp(axis):
 fpX=build_fp(0); fpY=build_fp(1)
 print('fpX/fpY built:',sum(1 for x in fpX if x),sum(1 for y in fpY if y))
 
+# ---- Task 1 instrumentation: exact per-token action labels at commit time ----
+LABELS=[]; CURPASS=[0]
+def label_tok(ti,axis,role,fb,regs,flag=''):
+    """Record one label for token ti: context (p,T1,T2,nb) + verified action.
+    fb = final register bytes committed for this token's axis (None if the
+    token wasn't byte-verified, e.g. refine/split/two-token halves).
+    matches = every (r,end) splice of the PRE-commit register that reproduces
+    fb byte-exactly. nmatch==0 with fb set => unmodeled event (GT-packed)."""
+    if ti<0 or ti>=N: return
+    t=toks[ti]
+    if t[0]!='V': return
+    payload=t[1]; nb=len(payload)
+    T=t[2] if t[2] else (-1,-1)
+    matches=[]
+    if fb is not None:
+        fbb=bytes(fb)
+        for r in (0,1,2):
+            if nb-r<1: break
+            pl=payload[r:]
+            for end in (8,7,6):
+                k0=end-(nb-r)
+                if k0<0: continue
+                vb=bytes(regs[axis][:k0])+pl+bytes(regs[axis][end:])
+                if vb==fbb: matches.append([r,end])
+    LABELS.append(dict(tok=ti,pas=CURPASS[0],axis=axis,role=role,flag=flag,
+                       p=t[3],nb=nb,T1=T[0],T2=T[1],
+                       verified=fb is not None,matches=matches,
+                       ref=bytes(regs[axis]).hex(),
+                       fb=bytes(fb).hex() if fb is not None else None))
+def lab_commit(i,vi,ntok,ups,kind,regs):
+    """Map a committed vertex (kind-specific token layout) to per-token labels.
+    Called BEFORE ups are applied, so regs = pre-commit register state."""
+    ub={a:bts for a,bts in ups}
+    L=label_tok
+    if kind in ('plain','yid','yid2','lenZ','lenY'):
+        L(i,0,'val',ub[0],regs,kind); L(i+1,1,'val',ub[1],regs,kind)
+        L(i+2,2,'val',ub[2],regs,kind)
+    elif kind=='splitYZ':
+        L(i,0,'val',ub[0],regs,kind); L(i+1,1,'split',None,regs,'YZ')
+    elif kind=='splitXY':
+        L(i,0,'split',None,regs,'XY'); L(i+1,2,'val',ub[2],regs,kind)
+    elif kind=='splitZX':
+        L(i,0,'split',None,regs,'ZX'); L(i+1,1,'val',ub[1],regs,kind)
+        L(i+2,2,'val',ub[2],regs,kind)
+    elif kind=='refX':
+        L(i,0,'val',ub[0],regs,kind); L(i+1,0,'refine',None,regs,kind)
+        L(i+2,1,'val',ub[1],regs,kind); L(i+3,2,'val',ub[2],regs,kind)
+    elif kind=='refY':
+        L(i,0,'val',ub[0],regs,kind); L(i+1,1,'val',ub[1],regs,kind)
+        L(i+2,1,'refine',None,regs,kind); L(i+3,2,'val',ub[2],regs,kind)
+    elif kind=='refZpre':
+        L(i,2,'refine',None,regs,kind); L(i+1,0,'val',ub[0],regs,kind)
+        L(i+2,1,'val',ub[1],regs,kind); L(i+3,2,'val',ub[2],regs,kind)
+    elif kind=='x2':
+        L(i,0,'two1',None,regs,kind); L(i+1,0,'two2',ub[0],regs,kind)
+        L(i+2,1,'val',ub[1],regs,kind); L(i+3,2,'val',ub[2],regs,kind)
+    elif kind=='y2':
+        L(i,0,'val',ub[0],regs,kind); L(i+1,1,'two1',None,regs,kind)
+        L(i+2,1,'two2',ub[1],regs,kind); L(i+3,2,'val',ub[2],regs,kind)
+    elif kind=='z2':
+        L(i,0,'val',ub[0],regs,kind); L(i+1,1,'val',ub[1],regs,kind)
+        L(i+2,2,'two1',None,regs,kind); L(i+3,2,'two2',ub[2],regs,kind)
+
 def splice_opts(i,a,regs):
     """(value, newbytes, end) options for token i on axis a.
     r = leading patch bytes skipped (they refine the PREVIOUS axis, sub-mm)."""
@@ -417,6 +480,7 @@ def run_pass(anchors,used,order):
         r=try_vertex(i,regs,used,lastvi)
         if r:
             vi,ntok,ups,kind=r
+            lab_commit(i,vi,ntok,ups,kind,regs)
             for a,bts in ups: regs[a][:]=bts
             if kind=='plain' and (i-3) not in dict(order).values() and i>=3:
                 kinds['backfilled']+=backfill(i,regs,used,order,0)
@@ -445,6 +509,7 @@ def run_pass(anchors,used,order):
                         for a2,tv in ((0,vx),(1,vy),(2,vz)):
                             ti2=x0+a2
                             f=fits(ti2,a2,tv,regs) if 0<=ti2<N else None
+                            if f: label_tok(ti2,a2,'val',f[0],regs,'resync')
                             regs[a2][:]=f[0] if f else struct.pack('>d',tv)
                         used.add(vi); order.append((vi,x0)); lastvi=vi
                         kinds['resync_commit']+=1
@@ -465,6 +530,7 @@ anch=dict(anchors)
 used=set(); order=[]
 prev_n=0
 for pas in range(1,6):
+    CURPASS[0]=pas
     kinds=run_pass(anch,used,order)
     print(f'pass {pas}: vertices {len(used)}/{NVG} ({len(used)/NVG*100:.1f}%)  kinds {dict(kinds)}')
     for vi,ti in order:
@@ -482,3 +548,16 @@ np.save(sp+r'\closing_order.npy',np.array(order,dtype=object),allow_pickle=True)
 recall=len(set(vi for vi,_ in order))/NVG*100
 print(f'FINAL: {len(order)} vertices decoded, distinct recall {recall:.1f}%')
 print('saved closing.xyz / closing_order.npy')
+# ---- Task 1 output: dedupe labels by token index (first pass wins) ----
+import json
+seen_ti=set(); out_labels=[]
+for lab in LABELS:
+    if lab['tok'] in seen_ti: continue
+    seen_ti.add(lab['tok']); out_labels.append(lab)
+with open(sp+r'\commit_labels.json','w') as f:
+    json.dump(out_labels,f)
+nver=sum(1 for l in out_labels if l['verified'] and l['matches'])
+nev=sum(1 for l in out_labels if l['verified'] and not l['matches'])
+nrole=Counter(l['role'] for l in out_labels)
+print(f'labels: {len(out_labels)} tokens ({nver} splice-verified, {nev} GT-packed/event, roles {dict(nrole)})')
+print('saved commit_labels.json')

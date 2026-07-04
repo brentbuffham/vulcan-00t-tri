@@ -100,7 +100,13 @@
       "PowerShell(python python\\\\relabel.py)",
       "PowerShell(python python\\\\mech_signal.py)",
       "PowerShell(Copy-Item *)",
-      "PowerShell(python python\\\\deterministic_v3e.py)"
+      "PowerShell(python python\\\\deterministic_v3e.py)",
+      "PowerShell(python python\\\\segment_exact.py)",
+      "PowerShell(python python\\\\hand_trace.py)",
+      "PowerShell(python python\\\\p_hi_fulls.py)",
+      "PowerShell(python python\\\\deterministic_v4.py)",
+      "PowerShell(python python\\\\v4_phase_check.py)",
+      "PowerShell(git *)"
     ]
   }
 }

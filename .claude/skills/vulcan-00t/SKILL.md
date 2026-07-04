@@ -15,12 +15,12 @@ description: >-
 **Read this FIRST. Do not re-derive what is already known. Nine months of
 testing live in this repo — stand on it.**
 
-> **▶ RESUMING? READ `reference/RESUME-2026-07-04.md` FIRST.** Coord codec fully
-> understood (unified token grammar, vertex-major XYZ cycle, prev1-splice reference,
-> placement locally signaled); 98.3% of intercepts vertices decode under supervision
-> (closing_solve.py = answer key). GT-free deterministic_v3 exists but collapses at
-> 2.4% — the placement/event bit-signal must be harvested from the solver's own
-> verified commits (Task 1 in the resume doc). Older context: RESUME-2026-07-03/06-28.
+> **▶ RESUMING? READ `reference/RESUME-2026-07-05.md` FIRST.** Grammar ~95%
+> mechanical: placement = exact changed-byte span, k0 signaled in T1, carry-splice,
+> escape-prefixed FULLs, and V-prefix hi-bits ANNOUNCE following FULLs (occupancy
+> signal). Sole parser deterministic_v4.py is structurally right except at 81
+> enumerable event sites (v4_phase_check.py lists offsets) — hand-trace those next
+> (hand_trace.py method). Older context: RESUME-2026-07-04/07-03/06-28.
 
 ## THE PRIME DIRECTIVE (read before anything)
 1. **We do NOT make things up.** No invented values, no plausible-sounding decode.

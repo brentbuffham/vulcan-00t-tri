@@ -48,7 +48,9 @@ while pos<face_start:
     if full_at(pos) is not None:
         toks.append(('F',d[pos:pos+8],lastT,None)); lastT=None; pos+=8; continue
     if b>=0x20 and full_at(pos+1) is not None:   # escape-prefixed FULL
-        toks.append(('Fe',d[pos+1:pos+9],lastT,None)); lastT=None; pos+=9; continue
+        # W13-production: [esc][FULL 8B][1 trailing byte] = 10 bytes total
+        # (trailing byte confirmed at break sites 29105/29262/66845 2026-07-04)
+        toks.append(('Fe',d[pos+1:pos+9],lastT,None)); lastT=None; pos+=10; continue
     if b<0x20:
         nb=(b&7)+1
         end=pos+1+nb

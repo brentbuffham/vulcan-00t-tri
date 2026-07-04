@@ -700,3 +700,215 @@ for off in range(-4,5):
 # baseline MI between c and a random field (own payload[1] hi):
 pairs=[(c,toks[gi][1][1]>>4) for gi,c,b2 in events if len(toks[gi][1])>1]
 print("  baseline (own pay[1]hi): n=%d MI=%.3f"%(len(pairs),mi(pairs)))
+
+print()
+print("---- T2 structure test: T2>>3 vs payload[0]>>3 (all V tokens with T) ----")
+tot=eq=0; offd=Counter()
+for t in toks:
+    if t[0]=='V' and t[2] is not None and len(t[1])>0:
+        T2=t[2][1]; p0=t[1][0]
+        tot+=1; eq+= (T2>>3)==(p0>>3)
+        offd[((p0>>3)-(T2>>3))&0x1f]+=1
+print("T2hi5 == payload[0]hi5: %d/%d = %.1f%%"%(eq,tot,eq/tot*100))
+print("distribution of (p0hi5 - T2hi5) mod 32:",offd.most_common(8))
+print()
+print("---- and at EVENT sites: byte2_new vs T2 ----")
+hit2=Counter()
+for gi,c,b2new in events:
+    t=toks[gi]
+    if t[0]=='V' and t[2] is not None:
+        T2=t[2][1]
+        hit2['b2new_hi5==T2hi5',(b2new>>3)==(T2>>3)]+=1
+print(dict(hit2))
+
+print()
+print("---- T-channel batch probe: q=(T1lo5<<5)|T2hi5 vs delta properties ----")
+import math
+rows2=[]
+for l in L:
+    if l['role']!='val' or not l['matches'] or l['T1']<0 or not l.get('fb'): continue
+    po=oldpos[l['tok']] if l['tok']<len(oldpos) else None
+    tt_=[x for x in toks if x[0]=='V' and x[4]==po]
+    if not tt_: continue
+    t=tt_[0]
+    ref=bytes.fromhex(l['ref']); fb=bytes.fromhex(l['fb'])
+    dv=be(fb)-be(ref)
+    if dv==0: continue
+    T1,T2=l['T1'],l['T2']
+    q=((T1&0x1f)<<5)|(T2>>3)
+    m,e=math.frexp(abs(dv))
+    rows2.append((q,T1&0x1f,T2>>3,1 if dv>0 else 0,e,int(m*1024)&0x3ff,l['axis'],l['nb']))
+print("rows:",len(rows2))
+def mi2(xs,ys,bx,by):
+    n=len(xs)
+    jx=Counter(xs); jy=Counter(ys); jj=Counter(zip(xs,ys))
+    s=0.0
+    for (x,y),c_ in jj.items():
+        s+=(c_/n)*math.log((c_/n)/((jx[x]/n)*(jy[y]/n))+1e-12)
+    bias=(bx-1)*(by-1)/(2*n)
+    return s,bias
+qs=[r[0] for r in rows2]
+tests=[('sign',[r[3] for r in rows2],2),('exp',[r[4] for r in rows2],20),
+       ('mant_top10',[r[5] for r in rows2],1024),('axis',[r[6] for r in rows2],3),
+       ('nb',[r[7] for r in rows2],5)]
+for nm,ys,by in tests:
+    s,bias=mi2(qs,ys,1024,by)
+    print("  MI(q ; %s) = %.3f  (bias~%.3f)"%(nm,s,bias))
+# is q literally delta mantissa bits? test equality with mant_top10 and shifted variants
+mt=[r[5] for r in rows2]
+eq=sum(1 for a,b in zip(qs,mt) if a==b)
+print("  q == mant_top10: %d/%d"%(eq,len(qs)))
+# T2hi5 autocorrelation: successive V tokens' T2hi5 (stream structure)
+seq=[t[2][1]>>3 for t in toks if t[0]=='V' and t[2] is not None]
+n=len(seq)
+ent=0.0
+cnt=Counter(seq)
+for v in cnt.values(): p=v/n; ent-=p*math.log2(p)
+print("  T2hi5 stream: n=%d entropy=%.2f bits (max 5)"%(n,ent))
+for lag in (1,2,3):
+    pairs=list(zip(seq,seq[lag:]))
+    s,bias=mi2([a for a,_ in pairs],[b for _,b in pairs],32,32)
+    print("  MI(T2hi5_t ; T2hi5_t+%d) = %.3f (bias~%.3f)"%(lag,s,bias))
+# differences mod 32 (counter test)
+diffs=Counter((b-a)&0x1f for a,b in zip(seq,seq[1:]))
+print("  top diffs mod32:",diffs.most_common(5))
+
+print()
+print("---- chewed-byte gap before token: events vs plain ----")
+# token start positions and end positions in the NEW stream
+def tok_span(t):
+    if t[0]=='F': return t[4],t[4]+8
+    if t[0]=='Fe': return t[4],t[4]+10
+    # V: prefix at t[4]... payload len
+    return t[4],t[4]+1+len(t[1])
+ends=[tok_span(t)[1] for t in toks]
+starts=[tok_span(t)[0] for t in toks]
+evset=set(gi for gi,c,b in events)
+gap_ev=Counter(); gap_pl=Counter()
+for gi in range(1,len(toks)):
+    if toks[gi][0]!='V': continue
+    gap=starts[gi]-ends[gi-1]
+    if gi in evset: gap_ev[gap]+=1
+    elif lab_by_pos.get(toks[gi][4]) and lab_by_pos[toks[gi][4]].get('matches'): gap_pl[gap]+=1
+print("event token gaps:",sorted(gap_ev.items()))
+print("plain token gaps:",sorted(gap_pl.items())[:8])
+# for events with gap>=4: the EARLIER pair bytes
+big=[gi for gi in evset if toks[gi][0]=='V' and starts[gi]-ends[gi-1]>=4]
+print("events with gap>=4: %d"%len(big))
+for gi in big[:8]:
+    lo=ends[gi-1]; hi=starts[gi]
+    c=[cc for g2,cc,b2 in events if g2==gi][0]
+    print("  gi%d c=%+d chewed=%s"%(gi,c,d[lo:hi].hex(' ')))
+
+print()
+print("---- full-history c=0 reference search for events ----")
+hist8={0:[],1:[],2:[]}
+found8=Counter(); backd=[]
+prev=-1
+for l in lab_sorted:
+    i=l['tok']
+    for j in range(prev+1,i):
+        if j in oldidx_full:
+            fbF=oldidx_full[j]; hist8[band(be(fbF))].append(('FULL',j,bytes(fbF)))
+    prev=i
+    a=l['axis']; fb=bytes.fromhex(l['fb']); fv=be(fb)
+    if i in gset:
+        gi,t,_=gset[i]
+        payload=t[1]; nb=len(payload)
+        hits=[]
+        for idx in range(len(hist8[a])-1,-1,-1):
+            kind,tokj,R=hist8[a][idx]
+            for k0 in (k0_rule(t[2],nb),3,2):
+                end=k0+nb
+                if k0<0 or end>8: continue
+                bb=bytes(R[:k0])+bytes(payload)+bytes(R[end:])
+                if abs(be(bb)-fv)<=1e-3:
+                    hits.append((len(hist8[a])-idx,kind,k0)); break
+            if hits: break     # nearest hit only
+        if hits:
+            db,kind,k0=hits[0]
+            found8['hit']+=1; backd.append(db)
+        else:
+            found8['none']+=1
+    hist8[a].append(('V',i,fb))
+print(dict(found8))
+if backd:
+    from collections import Counter as C
+    print("distance-back distribution:",sorted(C(backd).items())[:15])
+
+print()
+print("---- are event references FACE-ADJACENT vertices? (EdgeBreaker prediction test) ----")
+# parse DXF 3DFACE mesh
+lines=open(r'C:/Users/brent/Downloads/ac-653-221-inteceptsDXF.dxf','r',errors='ignore').read().split('\n')
+i2=0;n2=len(lines);tris=[];cur={};in3d=False
+def fn(s):
+    try:return float(s)
+    except:return None
+while i2<n2-1:
+    code=lines[i2].strip();val=lines[i2+1].strip() if i2+1<n2 else ''
+    if code=='0':
+        if in3d and len(cur)>=9: tris.append(cur.copy())
+        in3d=(val.upper()=='3DFACE');cur={}
+    elif in3d:
+        c_=fn(code);f_=fn(val)
+        if c_ is not None and f_ is not None and abs(f_)<1e8:
+            ci=int(c_)
+            for k in range(4):
+                if ci==10+k:cur[(k,0)]=f_
+                elif ci==20+k:cur[(k,1)]=f_
+                elif ci==30+k:cur[(k,2)]=f_
+    i2+=2
+if in3d and len(cur)>=9: tris.append(cur.copy())
+vindex={};adj={}
+def vid(p):
+    k=(round(p[0],3),round(p[1],3),round(p[2],3))
+    if k not in vindex: vindex[k]=len(vindex)
+    return vindex[k]
+edges=set()
+for t in tris:
+    ids=[]
+    for k in range(3):
+        if (k,0) in t: ids.append(vid((t[(k,0)],t[(k,1)],t[(k,2)])))
+    for a_ in ids:
+        for b_ in ids:
+            if a_!=b_: edges.add((a_,b_))
+print("mesh: %d verts, %d tris"%(len(vindex),len(tris)))
+# axis-value -> vertex ids maps (rounded 3dp)
+from collections import defaultdict
+axmap=[defaultdict(set) for _ in range(3)]
+for key,vi_ in vindex.items():
+    for a_ in range(3): axmap[a_][key[a_]].add(vi_)
+# for each event: event vertex ids (by fb value on that axis) x reference vertex ids
+hist9={0:[],1:[],2:[]}
+res9=Counter()
+prev=-1
+for l in lab_sorted:
+    i=l['tok']
+    for j in range(prev+1,i):
+        if j in oldidx_full:
+            fbF=oldidx_full[j]; hist9[band(be(fbF))].append(bytes(fbF))
+    prev=i
+    a=l['axis']; fb=bytes.fromhex(l['fb']); fv=be(fb)
+    if i in gset:
+        gi,t,_=gset[i]
+        payload=t[1]; nb=len(payload)
+        Rhit=None
+        for idx in range(len(hist9[a])-1,-1,-1):
+            R=hist9[a][idx]
+            for k0 in (k0_rule(t[2],nb),3,2):
+                end=k0+nb
+                if k0<0 or end>8: continue
+                bb=bytes(R[:k0])+bytes(payload)+bytes(R[end:])
+                if abs(be(bb)-fv)<=1e-3: Rhit=R; break
+            if Rhit is not None: break
+        if Rhit is not None:
+            ev_ids=axmap[a].get(round(fv,3),set())
+            rf_ids=axmap[a].get(round(be(Rhit),3),set())
+            if ev_ids and rf_ids:
+                adjacent=any((u,v) in edges for u in ev_ids for v in rf_ids)
+                same=bool(ev_ids & rf_ids)
+                res9['adjacent' if adjacent else ('samevert' if same else 'NOT_adjacent')]+=1
+            else: res9['value_not_in_mesh']+=1
+        else: res9['no_ref']+=1
+    hist9[a].append(fb)
+print(dict(res9.most_common()))

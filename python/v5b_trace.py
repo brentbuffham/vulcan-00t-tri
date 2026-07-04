@@ -559,3 +559,144 @@ for l in lab_sorted:
     hist5[a]=fb
 print(dict(addhit.most_common()))
 for e in addex: print("  gi%d nb=%d %s  prev=%.4f -> %.4f"%e)
+
+print()
+print("---- event carry vs ADJACENT context (Fe trailing, neighbor T2/p, hi-T1) ----")
+# rebuild events with their global token index and c
+hist6={0:None,1:None,2:None}
+events=[]  # (gi, c)
+prev=-1
+for l in lab_sorted:
+    i=l['tok']
+    for j in range(prev+1,i):
+        if j in oldidx_full:
+            fbF=oldidx_full[j]; hist6[band(be(fbF))]=bytes(fbF)
+    prev=i
+    a=l['axis']; fb=bytes.fromhex(l['fb']); fv=be(fb)
+    if i in gset:
+        gi,t,_=gset[i]
+        payload=t[1]; nb=len(payload)
+        R=hist6[a]
+        if R is not None and 3+nb<=8+1:
+            for c in range(-8,9):
+                if c==0: continue
+                k0=3; end=k0+nb
+                if end>8: continue
+                bb=bytearray(R[:k0])+bytearray(payload)+bytearray(R[end:])
+                nv=bb[2]+c
+                if not(0<=nv<=255): continue
+                bb[2]=nv
+                if abs(be(bytes(bb))-fv)<=1e-3:
+                    events.append((gi,c,bb[2])); break
+    hist6[a]=fb
+print("events located:",len(events))
+# Fe trailing byte: need Fe positions + trailing byte value
+fe_trail={}
+for gi,t in enumerate(toks):
+    if t[0]=='Fe':
+        tp=t[4]+9   # trailing byte position (esc at t[4], full 8, trail at +9)
+        fe_trail[gi]=d[tp]
+cors=Counter()
+det=[]
+for gi,c,b2new in events:
+    # nearest Fe within +-6 tokens
+    near=[(abs(g-gi),g) for g in fe_trail if abs(g-gi)<=6]
+    ftb=fe_trail[min(near)[1]] if near else None
+    tprev=toks[gi-1] if gi>0 else None
+    tnext=toks[gi+1] if gi+1<len(toks) else None
+    T2n = tnext[2][1] if (tnext and tnext[0]=='V' and tnext[2]) else None
+    T2p = tprev[2][1] if (tprev and tprev[0]=='V' and tprev[2]) else None
+    det.append((c,b2new,ftb,T2n,T2p))
+# does Fe trailing byte equal new byte2? or encode c?
+eq=sum(1 for c,b2,f,_,_ in det if f is not None and f==b2)
+have=sum(1 for c,b2,f,_,_ in det if f is not None)
+print("Fe-trailing == new byte2: %d/%d"%(eq,have))
+# c vs Fe trailing low bits
+tt=Counter((c,f&0x0f) for c,b2,f,_,_ in det if f is not None)
+print("c vs FeTrail&0x0f (top):",tt.most_common(10))
+# c vs next token T2>>3
+tt=Counter((c,t2>>3) for c,b2,f,t2,_ in det if t2 is not None)
+print("c vs nextT2>>3 (top):",tt.most_common(10))
+# c vs prev token T2>>3
+tt=Counter((c,t2>>3) for c,b2,f,_,t2 in det if t2 is not None)
+print("c vs prevT2>>3 (top):",tt.most_common(10))
+# does the EVENT token's own T2 hi5 == new byte2 low5? or c+8?
+own=Counter()
+for gi,c,b2new in events:
+    t=toks[gi]
+    if t[0]=='V' and t[2]:
+        T2=t[2][1]
+        own[('T2hi5==c+8',(T2>>3)==(c+8))]+=1
+        own[('T2hi5==b2lo5',(T2>>3)==(b2new&0x1f))]+=1
+print("own-token checks:",dict(own))
+
+print()
+print("---- is the event's new byte2 literally the T2 byte? ----")
+hit=Counter()
+for gi,c,b2new in events:
+    t=toks[gi]
+    if t[0]=='V' and t[2]:
+        T1,T2=t[2]
+        hit['T2==b2new',T2==b2new]+=1
+        hit['T1==b2new',T1==b2new]+=1
+print(dict(hit))
+
+print()
+print("---- event leading bytes from NEXT same-axis FULL/Fe lookahead? ----")
+# for each event: find next F/Fe token of same axis in the NEW token stream
+res2=Counter(); dists=[]
+hist7={0:None,1:None,2:None}
+prev=-1
+ev_fb={}
+for l in lab_sorted:
+    i=l['tok']
+    prev=i
+    if i in gset:
+        gi,t,_=gset[i]
+        ev_fb[gi]=(l['axis'],bytes.fromhex(l['fb']))
+for gi,c,b2new in events:
+    a,fb=ev_fb[gi]
+    nxt=None
+    for gj in range(gi+1,min(gi+80,len(toks))):
+        t=toks[gj]
+        if t[0] in ('F','Fe') and band(be(t[1]))==a:
+            nxt=(gj,bytes(t[1])); break
+    if nxt is None: res2['noFULL']+=1; continue
+    gj,F=nxt
+    dists.append(gj-gi)
+    res2['hi3_match',F[:3]==fb[:3]]+=1
+    res2['hi2_match',F[:2]==fb[:2]]+=1
+    if F[:3]!=fb[:3]:
+        # off by how much at byte2?
+        res2['b2diff_%+d'%(fb[2]-F[2])]+=1
+print(dict(res2.most_common()))
+import statistics
+if dists: print("lookahead distance tokens: median %d, max %d"%(statistics.median(dists),max(dists)))
+
+print()
+print("---- c vs T2hi5 at token offsets -4..+4 (mutual-information sweep) ----")
+import math
+def mi(pairs):
+    n=len(pairs)
+    if n<30: return 0.0
+    from collections import Counter as C
+    jx=C(); jy=C(); jj=C()
+    for x,y in pairs: jx[x]+=1; jy[y]+=1; jj[(x,y)]+=1
+    s=0.0
+    for (x,y),c_ in jj.items():
+        px=jx[x]/n; py=jy[y]/n; pxy=c_/n
+        s+=pxy*math.log(pxy/(px*py)+1e-12)
+    return s
+for off in range(-4,5):
+    if off==0: continue
+    pairs=[]
+    for gi,c,b2new in events:
+        gj=gi+off
+        if 0<=gj<len(toks):
+            t=toks[gj]
+            if t[0]=='V' and t[2] is not None:
+                pairs.append((c,t[2][1]>>3))
+    print("  offset %+d: n=%d MI=%.3f nats"%(off,len(pairs),mi(pairs)))
+# baseline MI between c and a random field (own payload[1] hi):
+pairs=[(c,toks[gi][1][1]>>4) for gi,c,b2 in events if len(toks[gi][1])>1]
+print("  baseline (own pay[1]hi): n=%d MI=%.3f"%(len(pairs),mi(pairs)))

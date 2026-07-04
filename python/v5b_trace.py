@@ -912,3 +912,62 @@ for l in lab_sorted:
         else: res9['no_ref']+=1
     hist9[a].append(fb)
 print(dict(res9.most_common()))
+
+print()
+print("---- GT-free chooser test at events: first in-band older register ----")
+histA2={0:[],1:[],2:[]}
+resA=Counter()
+prev=-1
+for l in lab_sorted:
+    i=l['tok']
+    for j in range(prev+1,i):
+        if j in oldidx_full:
+            fbF=oldidx_full[j]; histA2[band(be(fbF))].append(bytes(fbF))
+    prev=i
+    a=l['axis']; fb=bytes.fromhex(l['fb']); fv=be(fb)
+    if i in gset:
+        gi,t,_=gset[i]
+        payload=t[1]; nb=len(payload)
+        k0s=(k0_rule(t[2],nb),3,2)
+        # GT-free walk: newest->oldest, skip prev1 (it already failed plausibility),
+        # take first register giving an in-band value; also dedupe by byte2 slab
+        pick=None; seen_slab=set()
+        for idx in range(len(histA2[a])-2,-1,-1):   # exclude prev1 = last entry
+            R=histA2[a][idx]
+            if R[2] in seen_slab: continue
+            seen_slab.add(R[2])
+            for k0 in k0s:
+                end=k0+nb
+                if k0<0 or end>8: continue
+                bb=bytes(R[:k0])+bytes(payload)+bytes(R[end:])
+                if band(be(bb))==a:
+                    pick=be(bb); break
+            if pick is not None: break
+        if pick is None: resA['none']+=1
+        else: resA['ok' if abs(pick-fv)<=1e-3 else 'wrong']+=1
+    histA2[a].append(fb)
+print(dict(resA.most_common()))
+# also: how many DISTINCT slabs are in-band candidates per event (ambiguity size)?
+histB={0:[],1:[],2:[]}
+amb2=Counter()
+prev=-1
+for l in lab_sorted:
+    i=l['tok']
+    for j in range(prev+1,i):
+        if j in oldidx_full:
+            fbF=oldidx_full[j]; histB[band(be(fbF))].append(bytes(fbF))
+    prev=i
+    a=l['axis']; fb=bytes.fromhex(l['fb'])
+    if i in gset:
+        gi,t,_=gset[i]
+        payload=t[1]; nb=len(payload)
+        slabs=set()
+        for R in histB[a][:-1]:
+            for k0 in (k0_rule(t[2],nb),3,2):
+                end=k0+nb
+                if k0<0 or end>8: continue
+                bb=bytes(R[:k0])+bytes(payload)+bytes(R[end:])
+                if band(be(bb))==a: slabs.add(R[2]); break
+        amb2[min(len(slabs),9)]+=1
+    histB[a].append(fb)
+print("in-band slab candidates per event:",sorted(amb2.items()))

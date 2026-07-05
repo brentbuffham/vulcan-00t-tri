@@ -25,6 +25,20 @@ testing live in this repo — stand on it.**
 > sites = reference switches, slab info NOT local — topology edges are the
 > planned disambiguator. Older: RESUME-2026-07-06/05/04/03.
 
+## MODEL ROUTING (cost control — user directive 2026-07-05)
+Fable is expensive; use it ONLY for detective work. Route sessions:
+- **Fable**: cracking NEW grammar/structure (hypothesis space open), reframing
+  stuck walls, triaging ambiguous evidence, deciding what's a dead end.
+- **Opus** (`/model opus`): executing a WRITTEN spec — building/fitting a
+  decoder against a resume-doc model, running validation ladders, regression
+  tests, brute-force sweeps, porting to js/vulcan00TParser.js, cold-file runs.
+- To make this work, every resume doc MUST end with a spec-shaped next step
+  (state machine + validation ladder + file paths) so an Opus session can
+  execute without re-deriving. If an Opus session finds the spec is WRONG
+  (bookkeeping violations, model doesn't fit), it should STOP and write up
+  the failure precisely — that failure report is the input for a Fable
+  detective session, not something to push through.
+
 ## THE PRIME DIRECTIVE (read before anything)
 1. **We do NOT make things up.** No invented values, no plausible-sounding decode.
 2. **No hero jobs. No ground-truth cheating.** Using the DXF/CSV to place vertices

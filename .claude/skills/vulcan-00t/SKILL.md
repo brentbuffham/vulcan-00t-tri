@@ -15,13 +15,15 @@ description: >-
 **Read this FIRST. Do not re-derive what is already known. Nine months of
 testing live in this repo — stand on it.**
 
-> **▶ RESUMING? READ `reference/RESUME-2026-07-06.md` FIRST.** Coordinate VALUE
-> rule SOLVED (R2: T1→k0 splice onto prev same-axis, 98.55% deterministic —
-> the 07-05 doc's "73.6%" was a scoring artifact, carry is ~4 tokens not 606).
-> GT-free decoders: deterministic_v5.py (13.4%) / v5b segment phase-voting
-> (20.3%, was 2.2%). Remaining wall = PHASE/SLOT grammar at ~140 LOCAL,
-> self-healing event sites — hand-trace those. USER PATH: all vertices GT-free
-> → cold-file validation → only then faces. Older: RESUME-2026-07-05/04/03.
+> **▶ RESUMING? READ `reference/RESUME-2026-07-07.md` FIRST.** TOPOLOGY section
+> framing + vertex-reference encoding SOLVED on intercepts (2026-07-05): 5580
+> one-face-per-group records; refs = delta-SPLICED absolute indices into the
+> coord-emission table (same low-byte-splice trick as coords); op args carry a
+> 6-bit channel in bits[7:2] (lo2==11 — the toy-cube {3,7,B,F} lo_nib alphabet
+> = Mystery A's channel). Remaining topo wall: op state machine (gate/rails).
+> Coord side unchanged: R2 value rule 98.55%, GT-free 24.3% (v5b), ~180 event
+> sites = reference switches, slab info NOT local — topology edges are the
+> planned disambiguator. Older: RESUME-2026-07-06/05/04/03.
 
 ## THE PRIME DIRECTIVE (read before anything)
 1. **We do NOT make things up.** No invented values, no plausible-sounding decode.

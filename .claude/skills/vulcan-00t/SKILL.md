@@ -15,15 +15,14 @@ description: >-
 **Read this FIRST. Do not re-derive what is already known. Nine months of
 testing live in this repo — stand on it.**
 
-> **▶ RESUMING? READ `reference/RESUME-2026-07-07.md` FIRST.** TOPOLOGY section
-> framing + vertex-reference encoding SOLVED on intercepts (2026-07-05): 5580
-> one-face-per-group records; refs = delta-SPLICED absolute indices into the
-> coord-emission table (same low-byte-splice trick as coords); op args carry a
-> 6-bit channel in bits[7:2] (lo2==11 — the toy-cube {3,7,B,F} lo_nib alphabet
-> = Mystery A's channel). Remaining topo wall: op state machine (gate/rails).
-> Coord side unchanged: R2 value rule 98.55%, GT-free 24.3% (v5b), ~180 event
-> sites = reference switches, slab info NOT local — topology edges are the
-> planned disambiguator. Older: RESUME-2026-07-06/05/04/03.
+> **▶ RESUMING? READ `reference/RESUME-2026-07-08.md` FIRST.** ALLOCATION RULE
+> CRACKED (2026-07-05 Fable session): idless (C-face) new vertex = serpentine
+> MIRROR of its ref on the adjacent emission leg, `n = S − r` (per-strip
+> counter `n −= d`), verified 89.6% strict / ~93% with slips vs GT edges; 40%
+> of true mesh edges are slot-offset-1 (emission order IS a serpentine walk);
+> refs round-robin ~13 concurrent rails in mirror pairs. Residual wall: per-
+> strip INIT (n0 = fold slot, d) encoding. Next: densify answer key (Opus,
+> spec in doc) → read INIT bytes (Fable). Older: RESUME-2026-07-07/06/05/04.
 
 ## MODEL ROUTING (cost control — user directive 2026-07-05)
 Fable is expensive; use it ONLY for detective work. Route sessions:

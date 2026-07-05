@@ -106,7 +106,13 @@
       "PowerShell(python python\\\\p_hi_fulls.py)",
       "PowerShell(python python\\\\deterministic_v4.py)",
       "PowerShell(python python\\\\v4_phase_check.py)",
-      "PowerShell(git *)"
+      "PowerShell(git *)",
+      "Read(//c/Users/brent/AppData/Local/Temp/claude/C--Users-brent-desktop-git-vulcan-00t-tri/**)",
+      "Bash(awk '/^3DFACE/{f=1} f{print; n++} n>20{exit}' /c/Users/brent/Downloads/ac-653-221-inteceptsDXF.dxf)",
+      "Bash(awk '/^3DFACE/{c++} c==1{print NR\": \"$0} c==1 && /^AcDbFace/{p=1} p&&c==1{cnt++} cnt>28{exit}' /c/Users/brent/Downloads/ac-653-221-inteceptsDXF.dxf)",
+      "Bash(awk '{print $5\"\\\\t\"$9}')",
+      "Bash(awk '{print $5\"  \"$9}')",
+      "PowerShell(cd C:\\\\Users\\\\brent\\\\desktop\\\\git\\\\vulcan-00t-tri; git log --oneline -8 -- js/intercepts_compare.html | Out-String; git show ce22479:js/intercepts_compare.html | Select-String -Pattern '\"nmatch\":\\\\d+,?|\"npd\":\\\\d+' -AllMatches | ForEach-Object {$_.Matches.Value} | Select-Object -First 4; git show HEAD:js/intercepts_compare.html | Select-String -Pattern '\"nmatch\":\\\\d+|\"npd\":\\\\d+' -AllMatches | ForEach-Object {$_.Matches.Value} | Select-Object -First 4)"
     ]
   }
 }

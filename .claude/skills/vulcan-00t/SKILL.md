@@ -15,14 +15,19 @@ description: >-
 **Read this FIRST. Do not re-derive what is already known. Nine months of
 testing live in this repo — stand on it.**
 
-> **▶ RESUMING? READ `reference/RESUME-2026-07-08.md` FIRST.** ALLOCATION RULE
-> CRACKED (2026-07-05 Fable session): idless (C-face) new vertex = serpentine
-> MIRROR of its ref on the adjacent emission leg, `n = S − r` (per-strip
-> counter `n −= d`), verified 89.6% strict / ~93% with slips vs GT edges; 40%
-> of true mesh edges are slot-offset-1 (emission order IS a serpentine walk);
-> refs round-robin ~13 concurrent rails in mirror pairs. Residual wall: per-
-> strip INIT (n0 = fold slot, d) encoding. Next: densify answer key (Opus,
-> spec in doc) → read INIT bytes (Fable). Older: RESUME-2026-07-07/06/05/04.
+> **▶ RESUMING? READ `reference/RESUME-2026-07-10.md` FIRST.** Fable session
+> (2026-07-05): executed the 57-site n0/d read — **impossible as specced: the
+> 57 "INIT sites" are rail-fragment starts, not strip starts** (26/57 n0
+> already referenced earlier; byte-identical windows across sheet repeats).
+> Pinned instead: n0 IS a serpentine fold/column boundary (10–18× enrichment
+> at emission-adjacency breaks) → derived, not stored; d = −sign(rail dir)
+> 13/14; folds are NOT FULL-announced (record type can't mark them); the only
+> value near INIT delims is the previous ref (circular); e002/e004 ≠ rail
+> birth/death at current clusterer quality. THE DOOR: ref-group first-op
+> 6-bit channels form interleaved +6 arithmetic chains whose run structure
+> looks like the round-robin SCHEDULE — decode it for GT-free strip
+> segmentation (spec in doc). Scripts: `python/init_read*.py`.
+> Prior: RESUME-2026-07-09 (densify dead), 07-08 (allocation rule), 07/06/05/04.
 
 ## MODEL ROUTING (cost control — user directive 2026-07-05)
 Fable is expensive; use it ONLY for detective work. Route sessions:
@@ -42,7 +47,12 @@ Fable is expensive; use it ONLY for detective work. Route sessions:
 1. **We do NOT make things up.** No invented values, no plausible-sounding decode.
 2. **No hero jobs. No ground-truth cheating.** Using the DXF/CSV to place vertices
    is NOT a decode — DXF/CSV are for SCORING ONLY. A "win" that needs the answer
-   isn't a win.
+   isn't a win. **And never SHOW answer-key-assisted output as decode results**
+   (the 2026-07-03 "all-green 2923/2975" viewer incident): every viewer/report
+   displays GT-free decode only, with provenance labeled
+   (`generate_compare.py` argv[4]); scoreboard numbers state their category —
+   teacher-forced / candidate-recall / GT-free are different things and only
+   GT-free counts.
 3. **It must decode ANY file with NO ground truth.** Ground-truth-free or not solved.
 4. **No defeatist narration.** State findings and decisions plainly; keep moving.
 5. **Full backlog index: `reference/backlog-index.md`** — every MD, every passed and

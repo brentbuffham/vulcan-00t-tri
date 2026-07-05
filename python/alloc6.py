@@ -9,7 +9,7 @@ from collections import Counter, defaultdict
 
 groups, rails, ref_events = pickle.load(open('rails.pkl','rb'))
 P = np.load('P_base.npy')
-G = np.loadtxt(r'C:\Users\brent\AppData\Local\Temp\claude\C--Users-brent-desktop-git-vulcan-00t-tri\6045a728-103e-40d9-818d-ffe48c95ac26\scratchpad\intercepts_gt.csv', delimiter=',')
+G = np.loadtxt('intercepts_gt.csv', delimiter=',')
 F = np.load('faces_gt.npy')
 TOL = 0.002
 

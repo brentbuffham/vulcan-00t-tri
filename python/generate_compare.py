@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """Generate a self-contained Three.js HTML comparing the DXF GT surface (wireframe)
 with the decoded OOT points (green=within 1m of GT, red=miss). Data embedded so it
-opens with a double-click (no server/CORS)."""
+opens with a double-click (no server/CORS).
+
+USER RULE (2026-07-05, non-negotiable): the points shown MUST come from a
+GT-FREE decode of the .00t alone. The DXF is allowed here for SCORING/COLORING
+ONLY. Never feed this viewer output from any answer-key-assisted matcher
+(closing_solve.py etc.) — that is a lie, not a decode. Pass argv[4] = a
+provenance label naming the decoder that produced the points."""
 import sys, json
 import numpy as np
 from scipy.spatial import cKDTree
 dxf=sys.argv[1]; xyz=sys.argv[2]; outhtml=sys.argv[3]
+prov=sys.argv[4] if len(sys.argv)>4 else 'UNLABELED DECODER'
 # reuse parse_dxf
 import importlib.util
 spec=importlib.util.spec_from_file_location('pd','python/parse_dxf.py')
@@ -50,7 +57,8 @@ tree=cKDTree(V); dd,_=tree.query(D); match=(dd<1.0)
 Vc=(V-c).round(3); Dc=(D-c).round(3)
 data=dict(verts=Vc.flatten().tolist(), faces=[x for f in faces for x in f],
           pts=Dc.flatten().tolist(), matched=match.astype(int).tolist(),
-          nv=len(V), nf=len(faces), npd=len(D), nmatch=int(match.sum()))
+          nv=len(V), nf=len(faces), npd=len(D), nmatch=int(match.sum()),
+          prov=prov)
 html='''<!DOCTYPE html><html><head><meta charset=utf-8><title>Intercepts: OOT vs DXF</title>
 <style>body{margin:0;background:#111;color:#ddd;font:13px sans-serif;overflow:hidden}
 #i{position:absolute;top:8px;left:8px;background:#000a;padding:10px;border-radius:6px;line-height:1.6}
@@ -78,7 +86,7 @@ const gv=new THREE.BufferGeometry();gv.setAttribute('position',new THREE.Float32
 const gpts=new THREE.Points(gv,new THREE.PointsMaterial({color:0x55ddff,size:2.0}));sc.add(gpts);
 // frame camera
 g.computeBoundingSphere();const bs=g.boundingSphere;cam.position.set(bs.center.x,bs.center.y-bs.radius*1.5,bs.radius*1.5);ctr.target.copy(bs.center);ctr.update();
-document.getElementById('i').innerHTML=`<b>Intercepts: OOT decode vs DXF</b><br>GT: ${D.nv} verts, ${D.nf} tris<br>Decoded pts: ${D.npd} (<span style=color:#3f3>green=match&lt;1m</span> <span style=color:#f55>red=miss</span>)<br>Matched: ${D.nmatch}/${D.npd} (${(100*D.nmatch/D.npd).toFixed(1)}%)<br><button id=bg>GT points (cyan)</button><button id=bm>GT surface</button><button id=bp>decoded pts</button>`;
+document.getElementById('i').innerHTML=`<b>Intercepts: GT-FREE .00t decode vs DXF</b><br><span style="color:#fa3">Points = ${D.prov} decoding the .00t ALONE.<br>DXF used for the green/red scoring overlay ONLY — never fed to the decoder.</span><br>GT: ${D.nv} verts, ${D.nf} tris<br>Decoded pts: ${D.npd} (<span style=color:#3f3>green=match&lt;1m</span> <span style=color:#f55>red=miss</span>)<br>Matched: ${D.nmatch}/${D.npd} (${(100*D.nmatch/D.npd).toFixed(1)}%)<br><button id=bg>GT points (cyan)</button><button id=bm>GT surface</button><button id=bp>decoded pts</button>`;
 document.getElementById('bg').onclick=()=>{gpts.visible=!gpts.visible};
 document.getElementById('bm').onclick=()=>{mesh.visible=!mesh.visible;wire.visible=!wire.visible};
 document.getElementById('bp').onclick=()=>{pts.visible=!pts.visible};

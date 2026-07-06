@@ -68,9 +68,9 @@ button{background:#234;color:#ddd;border:1px solid #456;padding:5px 9px;border-r
 <script type=module>
 import*as THREE from'three';import{OrbitControls}from'three/addons/controls/OrbitControls.js';
 const D=__DATA__;
-const sc=new THREE.Scene();const cam=new THREE.PerspectiveCamera(60,innerWidth/innerHeight,0.1,1e5);
+const sc=new THREE.Scene();const _asp=innerWidth/innerHeight;const camO=new THREE.OrthographicCamera(-100*_asp,100*_asp,100,-100,0.1,1e5);const camP=new THREE.PerspectiveCamera(60,_asp,0.1,1e5);let cam=camO;
 const r=new THREE.WebGLRenderer({antialias:true});r.setSize(innerWidth,innerHeight);document.body.appendChild(r.domElement);
-const ctr=new OrbitControls(cam,r.domElement);
+let ctr=new OrbitControls(cam,r.domElement);let _bsC=new THREE.Vector3(),_bsR=1;
 // GT mesh
 const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute(D.verts,3));g.setIndex(D.faces);g.computeVertexNormals();
 const mesh=new THREE.Mesh(g,new THREE.MeshBasicMaterial({color:0x114433,transparent:true,opacity:0.5,side:THREE.DoubleSide}));
@@ -85,12 +85,17 @@ const pts=new THREE.Points(pg,new THREE.PointsMaterial({size:1.5,vertexColors:tr
 const gv=new THREE.BufferGeometry();gv.setAttribute('position',new THREE.Float32BufferAttribute(D.verts,3));
 const gpts=new THREE.Points(gv,new THREE.PointsMaterial({color:0x55ddff,size:2.0}));sc.add(gpts);
 // frame camera
-g.computeBoundingSphere();const bs=g.boundingSphere;cam.position.set(bs.center.x,bs.center.y-bs.radius*1.5,bs.radius*1.5);ctr.target.copy(bs.center);ctr.update();
-document.getElementById('i').innerHTML=`<b>Intercepts: GT-FREE .00t decode vs DXF</b><br><span style="color:#fa3">Points = ${D.prov} decoding the .00t ALONE.<br>DXF used for the green/red scoring overlay ONLY — never fed to the decoder.</span><br>GT: ${D.nv} verts, ${D.nf} tris<br>Decoded pts: ${D.npd} (<span style=color:#3f3>green=match&lt;1m</span> <span style=color:#f55>red=miss</span>)<br>Matched: ${D.nmatch}/${D.npd} (${(100*D.nmatch/D.npd).toFixed(1)}%)<br><button id=bg>GT points (cyan)</button><button id=bm>GT surface</button><button id=bp>decoded pts</button>`;
+g.computeBoundingSphere();const bs=g.boundingSphere;_bsC.copy(bs.center);_bsR=bs.radius;const _a=innerWidth/innerHeight,_h=bs.radius*1.2;camO.top=_h;camO.bottom=-_h;camO.left=-_h*_a;camO.right=_h*_a;camO.near=0.1;camO.far=bs.radius*100;camO.updateProjectionMatrix();camP.near=0.1;camP.far=bs.radius*100;camP.updateProjectionMatrix();const _p0=new THREE.Vector3(bs.center.x,bs.center.y-bs.radius*1.5,bs.center.z+bs.radius*1.5);camO.position.copy(_p0);camP.position.copy(_p0);ctr.target.copy(bs.center);ctr.update();
+document.getElementById('i').innerHTML=`<b>Intercepts: GT-FREE .00t decode vs DXF</b><br><span style="color:#fa3">Points = ${D.prov} decoding the .00t ALONE.<br>DXF used for the green/red scoring overlay ONLY — never fed to the decoder.</span><br>GT: ${D.nv} verts, ${D.nf} tris<br>Decoded pts: ${D.npd} (<span style=color:#3f3>green=match&lt;1m</span> <span style=color:#f55>red=miss</span>)<br>Matched: ${D.nmatch}/${D.npd} (${(100*D.nmatch/D.npd).toFixed(1)}%)<br><button id=bg>GT points (cyan)</button><button id=bm>GT surface</button><button id=bp>decoded pts</button><br><button id=bo>Ortho [O]</button><button id=bv>Plan view [V]</button>`;
 document.getElementById('bg').onclick=()=>{gpts.visible=!gpts.visible};
 document.getElementById('bm').onclick=()=>{mesh.visible=!mesh.visible;wire.visible=!wire.visible};
 document.getElementById('bp').onclick=()=>{pts.visible=!pts.visible};
-addEventListener('resize',()=>{cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix();r.setSize(innerWidth,innerHeight)});
+function setCam(c){if(c===cam)return;const t=ctr.target.clone(),p=cam.position.clone();ctr.dispose();cam=c;cam.position.copy(p);ctr=new OrbitControls(cam,r.domElement);ctr.target.copy(t);ctr.update();document.getElementById('bo').textContent=(cam===camO?'Ortho [O]':'Persp [P]')}
+function planView(){cam.position.set(_bsC.x,_bsC.y,_bsC.z+_bsR*2.5);cam.up.set(0,1,0);ctr.target.copy(_bsC);ctr.update()}
+document.getElementById('bo').onclick=()=>setCam(cam===camO?camP:camO);
+document.getElementById('bv').onclick=planView;
+addEventListener('keydown',e=>{const k=e.key.toLowerCase();if(k==='o')setCam(camO);else if(k==='p')setCam(camP);else if(k==='v')planView()});
+addEventListener('resize',()=>{const _a=innerWidth/innerHeight;camO.left=-camO.top*_a;camO.right=camO.top*_a;camO.updateProjectionMatrix();camP.aspect=_a;camP.updateProjectionMatrix();r.setSize(innerWidth,innerHeight)});
 (function loop(){requestAnimationFrame(loop);ctr.update();r.render(sc,cam)})();
 </script></body></html>'''
 html=html.replace('__DATA__',json.dumps(data))

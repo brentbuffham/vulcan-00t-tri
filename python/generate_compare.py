@@ -53,10 +53,16 @@ for t in tris:
 V=np.array(verts)
 D=np.loadtxt(xyz,delimiter=',')
 c=V.mean(0)
-tree=cKDTree(V); dd,_=tree.query(D); match=(dd<1.0)
+MATCH_TOL=0.25  # metres; tightened from 1.0 so near-but-wrong-vertex hits don't read as matches
+tree=cKDTree(V); dd,_=tree.query(D); match=(dd<MATCH_TOL)
+# category: 1=full match; 2=X/Y correct but Z wrong (the Z-only miss class); 0=genuinely off
+treeXY=cKDTree(V[:,:2]); ddxy,_=treeXY.query(D[:,:2])
+zmiss=(~match)&(ddxy<MATCH_TOL)
+cat=np.where(match,1,np.where(zmiss,2,0))
 Vc=(V-c).round(3); Dc=(D-c).round(3)
 data=dict(verts=Vc.flatten().tolist(), faces=[x for f in faces for x in f],
-          pts=Dc.flatten().tolist(), matched=match.astype(int).tolist(),
+          pts=Dc.flatten().tolist(), matched=match.astype(int).tolist(), cat=cat.astype(int).tolist(),
+          nzmiss=int(zmiss.sum()),
           nv=len(V), nf=len(faces), npd=len(D), nmatch=int(match.sum()),
           prov=prov)
 html='''<!DOCTYPE html><html><head><meta charset=utf-8><title>Intercepts: OOT vs DXF</title>
@@ -78,22 +84,25 @@ const wire=new THREE.LineSegments(new THREE.WireframeGeometry(g),new THREE.LineB
 sc.add(mesh);sc.add(wire);
 // decoded points: split by match so green(5px) and red(3px) can differ in size.
 // sizeAttenuation:false => size is in screen pixels (matches "5px/3px/1px").
-const posG=[],posR=[];
-for(let k=0;k<D.matched.length;k++){const x=D.pts[k*3],y=D.pts[k*3+1],z=D.pts[k*3+2];
-  if(D.matched[k]){posG.push(x,y,z)}else{posR.push(x,y,z)}}
+// 3 classes: green=full match(5px), yellow=X/Y ok but Z wrong(4px), red=off(4px)
+const posG=[],posZ=[],posR=[];
+for(let k=0;k<D.cat.length;k++){const x=D.pts[k*3],y=D.pts[k*3+1],z=D.pts[k*3+2];
+  if(D.cat[k]===1){posG.push(x,y,z)}else if(D.cat[k]===2){posZ.push(x,y,z)}else{posR.push(x,y,z)}}
 const pgG=new THREE.BufferGeometry();pgG.setAttribute('position',new THREE.Float32BufferAttribute(posG,3));
 const ptsG=new THREE.Points(pgG,new THREE.PointsMaterial({color:0x33ff55,size:5.0,sizeAttenuation:false}));sc.add(ptsG);
+const pgZ=new THREE.BufferGeometry();pgZ.setAttribute('position',new THREE.Float32BufferAttribute(posZ,3));
+const ptsZ=new THREE.Points(pgZ,new THREE.PointsMaterial({color:0xffcc22,size:4.0,sizeAttenuation:false}));sc.add(ptsZ);
 const pgR=new THREE.BufferGeometry();pgR.setAttribute('position',new THREE.Float32BufferAttribute(posR,3));
-const ptsR=new THREE.Points(pgR,new THREE.PointsMaterial({color:0xff3333,size:3.0,sizeAttenuation:false}));sc.add(ptsR);
-// GT vertices: small 1px cyan dots (matched greens form a halo around them)
+const ptsR=new THREE.Points(pgR,new THREE.PointsMaterial({color:0xff3333,size:4.0,sizeAttenuation:false}));sc.add(ptsR);
+// GT vertices: small 2px cyan dots (matched greens form a halo around them)
 const gv=new THREE.BufferGeometry();gv.setAttribute('position',new THREE.Float32BufferAttribute(D.verts,3));
-const gpts=new THREE.Points(gv,new THREE.PointsMaterial({color:0x55ddff,size:1.0,sizeAttenuation:false}));sc.add(gpts);
+const gpts=new THREE.Points(gv,new THREE.PointsMaterial({color:0x55ddff,size:2.0,sizeAttenuation:false}));sc.add(gpts);
 // frame camera
 g.computeBoundingSphere();const bs=g.boundingSphere;_bsC.copy(bs.center);_bsR=bs.radius;const _a=innerWidth/innerHeight,_h=bs.radius*1.2;camO.top=_h;camO.bottom=-_h;camO.left=-_h*_a;camO.right=_h*_a;camO.near=0.1;camO.far=bs.radius*100;camO.updateProjectionMatrix();camP.near=0.1;camP.far=bs.radius*100;camP.updateProjectionMatrix();const _p0=new THREE.Vector3(bs.center.x,bs.center.y-bs.radius*1.5,bs.center.z+bs.radius*1.5);camO.position.copy(_p0);camP.position.copy(_p0);ctr.target.copy(bs.center);ctr.update();
-document.getElementById('i').innerHTML=`<b>Intercepts: GT-FREE .00t decode vs DXF</b><br><span style="color:#fa3">Points = ${D.prov} decoding the .00t ALONE.<br>DXF used for the green/red scoring overlay ONLY — never fed to the decoder.</span><br>GT: ${D.nv} verts, ${D.nf} tris<br>Decoded pts: ${D.npd} (<span style=color:#3f3>green=match&lt;1m</span> <span style=color:#f55>red=miss</span>)<br>Matched: ${D.nmatch}/${D.npd} (${(100*D.nmatch/D.npd).toFixed(1)}%)<br><button id=bg>GT points (cyan)</button><button id=bm>GT surface</button><button id=bp>decoded pts</button><br><button id=bo>Ortho [O]</button><button id=bv>Plan view [V]</button>`;
+document.getElementById('i').innerHTML=`<b>Intercepts: GT-FREE .00t decode vs DXF</b><br><span style="color:#fa3">Points = ${D.prov} decoding the .00t ALONE.<br>DXF used for the green/red scoring overlay ONLY — never fed to the decoder.</span><br>GT: ${D.nv} verts, ${D.nf} tris<br>Decoded pts: ${D.npd} (<span style=color:#3f3>green=match&lt;250mm</span> <span style=color:#fc2>yellow=XY-ok Z-off (${D.nzmiss})</span> <span style=color:#f55>red=miss</span>)<br>Matched: ${D.nmatch}/${D.npd} (${(100*D.nmatch/D.npd).toFixed(1)}%)<br><button id=bg>GT points (cyan)</button><button id=bm>GT surface</button><button id=bp>decoded pts</button><br><button id=bo>Ortho [O]</button><button id=bv>Plan view [V]</button>`;
 document.getElementById('bg').onclick=()=>{gpts.visible=!gpts.visible};
 document.getElementById('bm').onclick=()=>{mesh.visible=!mesh.visible;wire.visible=!wire.visible};
-document.getElementById('bp').onclick=()=>{ptsG.visible=!ptsG.visible;ptsR.visible=!ptsR.visible};
+document.getElementById('bp').onclick=()=>{ptsG.visible=!ptsG.visible;ptsZ.visible=!ptsZ.visible;ptsR.visible=!ptsR.visible};
 function setCam(c){if(c===cam)return;const t=ctr.target.clone(),p=cam.position.clone();ctr.dispose();cam=c;cam.position.copy(p);ctr=new OrbitControls(cam,r.domElement);ctr.target.copy(t);ctr.update();document.getElementById('bo').textContent=(cam===camO?'Ortho [O]':'Persp [P]')}
 function planView(){cam.position.set(_bsC.x,_bsC.y,_bsC.z+_bsR*2.5);cam.up.set(0,1,0);ctr.target.copy(_bsC);ctr.update()}
 document.getElementById('bo').onclick=()=>setCam(cam===camO?camP:camO);

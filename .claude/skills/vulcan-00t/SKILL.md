@@ -15,19 +15,19 @@ description: >-
 **Read this FIRST. Do not re-derive what is already known. Nine months of
 testing live in this repo — stand on it.**
 
-> **▶ RESUMING? READ `reference/RESUME-2026-07-10.md` FIRST.** Fable session
-> (2026-07-05): executed the 57-site n0/d read — **impossible as specced: the
-> 57 "INIT sites" are rail-fragment starts, not strip starts** (26/57 n0
-> already referenced earlier; byte-identical windows across sheet repeats).
-> Pinned instead: n0 IS a serpentine fold/column boundary (10–18× enrichment
-> at emission-adjacency breaks) → derived, not stored; d = −sign(rail dir)
-> 13/14; folds are NOT FULL-announced (record type can't mark them); the only
-> value near INIT delims is the previous ref (circular); e002/e004 ≠ rail
-> birth/death at current clusterer quality. THE DOOR: ref-group first-op
-> 6-bit channels form interleaved +6 arithmetic chains whose run structure
-> looks like the round-robin SCHEDULE — decode it for GT-free strip
-> segmentation (spec in doc). Scripts: `python/init_read*.py`.
-> Prior: RESUME-2026-07-09 (densify dead), 07-08 (allocation rule), 07/06/05/04.
+> **▶ RESUMING? READ `reference/RESUME-2026-07-11.md` FIRST, then
+> `REF_INDEX_DECODE.md`.** 2026-07-09/10: **vertex-REF decode CRACKED &
+> reproduced** (commit e8e7e9d). The old low-byte splice fabricated ~1600
+> PHANTOM refs; correct rule = marker+first-op framing, `01 hh ll` absolute
+> ref (1..2974), `00 pp≥0x80` short-splice, `00 pp<0x80` = STRUCTURAL not a
+> ref. Same-group shared-edge adjacency **15%→72.7%** (|d|=1 8/8=100%); groups
+> 5738 ≈ 5724 GT faces (1:1). **CONSEQUENCE: the "rails" were splice artifacts**
+> — real refs are sparse per-fold ANCHORS (step −95..−160), so `rails.pkl` +
+> ALL JUMP=6 segmentation (ma_beam/replay/slotanchor) are dead; re-derive from
+> `refs_v2.pkl`. NEXT: re-cluster strips from anchors + phase-clock turns → feed
+> the strip machine (Fable). Scripts: `python/ma_refdecode*.py`.
+> Prior: RESUME-2026-07-10 (57 INIT sites = rail fragments, n0=fold boundary,
+> now partly moot), 07-09 (densify dead), 07-08 (allocation rule), 07/06/05/04.
 
 ## MODEL ROUTING (cost control — user directive 2026-07-05)
 Fable is expensive; use it ONLY for detective work. Route sessions:

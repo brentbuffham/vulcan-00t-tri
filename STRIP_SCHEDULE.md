@@ -128,6 +128,90 @@ COORD-side derivation (the fold/column-boundary structure of the serpentine
 value stream), feeding the FACE-side S = base(c_r)+top(c_n). This links the
 two decoders — it is the coord-topology joint solve flagged since 07-05.
 
+## §COLUMN PARTITION SESSION (2026-07-11 Fable; col_partition.py, col_probe1..10)
+
+Task: GT-free `slot -> column` partition of the coord emission, feeding
+S = base(col_r) + top(col_n). Deliverable: `python/col_partition.py` ->
+`python/columns_v1.pkl` ({'colof' array slot->col, 'bounds', 'u'}).
+
+### What the emission actually is (GT-free geometry, from P_v11 alone)
+
+- The serpentine is a boustrophedon over parallel scan LINES: within a
+  column the decoded point advances a ~4.0 m step along a fixed direction
+  (~55 deg for the main region); at a fold it hops ~3-4 m laterally to the
+  next line and reverses. w = XY.u_perp is a STAIRCASE (levels +-0.1 m,
+  3-4 m apart) — the sharpest column signal in P_v11.
+- **The assumed "~25 columns of ~120" is WRONG.** True structure ≈
+  110-130 columns of ~25 slots (teacher fold spacing ~= ΔfitS/2 ~= 25-27).
+  The −95..−160 A->A refs steps are multi-column strip switches, not pitch.
+- **Interloper slots are REAL**: inside a column's slot range, sparse slots
+  belong to concurrent threads elsewhere (GT confirms e.g. slot 453 truly
+  sits 180 m off the local line). They inherit the enclosing column in slot
+  arithmetic; fitS still walks straight through them.
+- **S-form resolved: S = base(col_r) + top(col_n) is UNIVERSAL** (both
+  sweep directions) — verified by hand on the 437/461/485 column pair
+  (forward 921/922, backward 923, both = base_r+top_n). The strip20-26
+  asc/dsc form split was an artifact: for adjacent columns br+tn and tr+bn
+  differ by len_r−len_n ≈ 0-3, inside the +-2 window.
+
+### Partition method (all GT-free) and ladder numbers
+
+Winning detector: sliding-median (win 9) staircase on w + run cleanup
+(merge same level / delete interloper bursts / absorb orphans) + optimal-
+split boundary refinement on raw w (interlopers don't vote). Failed
+alternatives (tested, don't retry): global (w,slot) line clustering (11%);
+DP segmentation with trimmed line-fit cost (68% either — PCA fits get
+hijacked by interlopers); per-region local axes (115 fake regions, 59%);
+rail-interval boundary pruning (bogus rails cross true folds, 53%).
+
+- Partition: **261 columns, median len 8** (over-segmented ~2x vs true
+  ~110-130; extra splits come from v11 decode-error bursts).
+- **L1 [GT-free folds vs fitS-implied odd-S folds, teacher key]: recall
+  58/68 = 85.3% (+-2)**; precision 19.2% vs this key — but the key only
+  covers backward-rail folds (68 of ~120), so true precision is bounded
+  below ~45%, not 19%.
+- **L2 [teacher-forced check, fitS-verified events, +-2]:
+  S = base(col_r)+top(col_n) = 441/707 = 62.4%** (baseline 21.2%,
+  strip26). Either-anchoring diagnostic 87.3%. Rails all-events-hit
+  140/242. Residual histogram is centered (mode +1) with fat +-3..15
+  tails = boundary placement noise.
+- L3 not run: gate was L2 >= 80%.
+
+### The decisive decomposition (col_probe8/9/10) — S is nearly free, the
+### blocker is ONE BIT per rail
+
+Mirror-geometry voting, GT-free: for a rail's refs, sweep S; the mirror
+n = S−r must land 2-6 m (P_v11 XY) from r. Result per rail:
+- unrestricted vote: |S_geo − fitS| <= 2 on **66.7%** of 201 rails
+  [GT-scored]; the misses are almost all SIDE flips — both adjacent lines
+  contain a ~3.5 m partner, so the vote has two peaks (left/right).
+- **given a 1-bit side oracle (n<r vs n>r): 90.4%** (178/197)
+  [teacher-forced, exactly 1 bit]. So geometry+stream already pin S to
+  within the +-2 stagger once the side is known.
+- GT-free side coverage today: 36% of rails have only ONE strong peak
+  (mesh edge / thread gaps) and are 81.8% correct [GT-scored].
+- Side is NOT predictable from column sweep direction, r-trend, or column
+  parity (col_probe9: all ~50-56%). It is the strip identity bit — which
+  of the two adjacent column-pairs the rail serves = the A/B phase
+  question already open on the face side.
+
+### Honest state of "S is GT-free"
+
+S is **62.4% GT-free via the partition formula** (teacher-forced check
+category) and **90.4% with one teacher bit per rail** via geometry voting.
+NOT yet at the 80% GT-free gate. Two independent residual walls:
+1. **The side bit per rail** (biggest, ~24 points of headroom): candidate
+   sources — the op/phase channel (`00 pp` lo v>=9 birth markers), or a
+   global round-robin tiling argument (live rails must serve consecutive
+   column pairs).
+2. **P_v11-invisible folds**: some true folds do not exist in the decoded
+   positions at all — v11's XY walked STRAIGHT through a GT reversal
+   (e.g. fold 973: w constant, along-line coordinate monotone through the
+   fold; GT reverses). No partition from P_v11 can find these; needs the
+   coord pass-2 decode (also the map-coverage track). Stream flags do NOT
+   mark folds (col_probe7: FULL/k0 proximity to teacher folds ==
+   random) — strip24's conclusion re-confirmed quantitatively.
+
 ## WHAT REMAINS FOR A GT-FREE FACES DECODE (ranked)
 
 1. **GT-free S** (the wall's core). S = r+n links the strip's two columns.

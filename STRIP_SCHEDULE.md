@@ -311,6 +311,28 @@ chain-adjacency, mirror-in-refs (50–52%).
   the ones only an exact-cover replay can pin — on both sides of the
   scoreboard.
 
+## §COVERAGE CEILING (2026-07-12 Opus; side3..side9) — first GT-free faces + the real cap
+
+Ran the strip machine with GT-free S (side_rule) end-to-end and rendered it.
+- GT-free faces viewer: `js/intercepts_faces.html` (side4_emit → side5_viewer).
+- **Precision where checkable: 85.6%** (564/659 scorable tris GT-correct;
+  BEATS noisy teacher 82.8% — fitS is fog on ambiguous folds). But that is a
+  CONDITIONAL metric.
+- **Honest coverage: 9.2% of the 5724-face mesh** (525 distinct GT faces),
+  1078 tris emitted = 18.8%. DO NOT report 85.6% as progress.
+- Extending S 239→311 rails (side8, global-apex snap) moved coverage almost
+  nothing (1078→1113 tris): **S was NOT the bottleneck at this stage.**
+- **THE CAP (side9): the per-quad machine tops out at ~18–37% of the mesh**
+  because it only emits between CONSECUTIVE same-rail turns, and rails_v3
+  fragments strips — 435/670 rails have ≤2 turns; 286 turns stranded in
+  size-1 rails emit nothing.
+- **The real path to full coverage: STITCH rail fragments into complete
+  strips across folds, then emit one last-3-of-sequence face per group.**
+  Math closes: 1716 ref + 3432 idless groups ≈ 5724 mesh faces. Stitching
+  rule (candidate): at a fold, ref/mirror columns swap, so the next rail's
+  ref-range ≈ this rail's mirror-range [S−r_hi, S−r_lo]; chain A→B on that
+  overlap + apex/S transition. This is the next build (Opus, spec-shaped).
+
 ## WHAT REMAINS FOR A GT-FREE FACES DECODE (ranked)
 
 1. **GT-free S** (the wall's core). S = r+n links the strip's two columns.

@@ -3,15 +3,17 @@ Per quad turn: split by SHORTER decoded (P_v11) diagonal -> 2 triangles.
 Per fan turn: 1 triangle. Output slot-triples + per-tri GT-correct flag
 (scoring overlay only). Saves decoded_faces.json {tris, good}.
 """
-import pickle, json
+import pickle, json, sys
 from collections import Counter, defaultdict
 import numpy as np
 
+RULE = sys.argv[1] if len(sys.argv) > 1 else 'side_rule.pkl'
+OUT = sys.argv[2] if len(sys.argv) > 2 else 'decoded_faces.json'
 P = np.load('P_v11_intercepts.npy')
 groups = pickle.load(open('refs_v3.pkl', 'rb'))
 rv = pickle.load(open('rails_v3.pkl', 'rb'))
 rails, assign, refs = rv['rails'], rv['assign'], rv['refs']
-sr = pickle.load(open('side_rule.pkl', 'rb'))
+sr = pickle.load(open(RULE, 'rb'))
 Sgt = {rid: v[1] for rid, v in sr.items()}
 F = np.load('faces_gt.npy')
 faceset = set(tuple(sorted(f)) for f in F)
@@ -89,5 +91,5 @@ print('  GT-correct among scorable: %d/%d = %.1f%% [GT-scored]'
 json.dump({'tris': [list(map(int, t)) for t in tris],
            'good': good.astype(int).tolist(),
            'scor': scor.astype(int).tolist()},
-          open('decoded_faces.json', 'w'))
-print('wrote decoded_faces.json')
+          open(OUT, 'w'))
+print('wrote', OUT)

@@ -59,6 +59,35 @@ replay at 90–100%.
       or fan face (r, n_prev, n_k).
     S is per-strip(-per-fold) constant; currently TEACHER-FORCED (GT votes).
 
+## LO-CHANNEL SESSION 2 (2026-07-11 later; strip11..strip19)
+
+Re-tokenized with lo capture (`strip11_lochannel.py` → `refs_v3.pkl`, has
+`lo` + `ops` per group). Census: 1685 lo events; 424 zeros; nonzero alphabet
+DOMINATED by 1..11 (~980 events); carrier = idless e003 groups (931×1 event).
+
+Tested and REFUTED (all ~chance):
+- lo = revisit countdown / distinct-rails-until-revisit / prev-visit gap
+  (`strip12`, ~8%).
+- lo = rail age / turns-to-death / |r−r0| / |r−r_end| / turns-to-fold
+  (`strip13`, ~5–10%).
+- lo = unique strip slot-ID in round-robin table (`strip14`: concurrent
+  rails share modal lo at chance 50%; neighbors 89/90/99/106 all modal 4).
+
+POSITIVE (unfinished):
+- **lo is near-constant per rail** (92/111 rails ≤3 distinct values) and
+  **drifts regionally with the sweep** (5→4→3→2→1 over gi 400–3200, then
+  8→7→6…) — a region/column-coordinate-like field, NOT strip identity.
+- Median r rises monotonically with v for v=1..8 (665→2290).
+- On mirror-VERIFIED events (map11[r]–map11[n] GT-edge): **v≤8 ∈
+  {n>>8, (n>>8)−1} at 63.2%** (v==n>>8 40.7%); identical rate on
+  unverified ⇒ miss is the rule-form, not fitS noise. No offset/threshold
+  variant beats ~37% exact ((n−128)>>8 = (S−r0−128)>>8 = 124/339).
+- **v≥9 (9/10/11, 189 events) = separate subfield**: 38% at rail BIRTH
+  (~4× base), not fold/fan-correlated.
+
+Honest state: lo = COMPOSITE channel; v≤8 tracks the alloc-slot high byte
+REGION (2–3× chance, not exact), v≥9 birth-marker-ish. NOT yet the S source.
+
 ## WHAT REMAINS FOR A GT-FREE FACES DECODE (ranked)
 
 1. **GT-free S** (the wall's core). S = r+n links the strip's two columns.

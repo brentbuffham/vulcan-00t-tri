@@ -233,6 +233,84 @@ untested (probe9 tried column parity, not live-rank). Second candidate: the
 concurrency birth/death schedule (e002/e004) fixes which pair a new rail
 takes. This is the same A/B-phase bit open on the face side.
 
+## §SIDE-BIT HUNT 2 (2026-07-11 Fable; side2_*.py) — "side" REFRAMED as fold
+## identity; teacher key proven ~coin below margin 2; GT-free rule 90.5% on
+## the reliably-labelled band
+
+### Global-state hypotheses ALL WASHED (side2_tiling / side2_spatial /
+### side2_physical / side2_alloc / side2_sform — do not retry)
+- Round-robin live-rank (rank%2 by r_med or col, top/bot of live pack,
+  above-live-median): 54–57% [teacher-forced].
+- Temporal coherence: side in birth-gi order lag-1 = 51.9%; in rmed order
+  55.2%; XY nearest-neighbour rail 52.1%; rails within 15 slots 55.1%.
+  The bit has NO time or space banding.
+- Frontier drift (slope of recent births' r_med), rmed-vs-prev: ~54%.
+- Physical side vs local sweep direction (w-staircase drift): 46.7% — the
+  alloc line is NOT consistently the un-swept side.
+- Shingle-chain timing (mirror slots ref'd AFTER vs BEFORE): aggregate
+  refutes (true n: 304 before / 297 after) — round-robin pipeline destroys
+  before/after separation at turn granularity.
+- S-form refs (230) do NOT announce the strip constant: r_A+r_S==S 1/108;
+  they sit at birth(138)/mid(47)/last(45) — not a strip-open channel.
+
+### THE REFRAME (side2_look window dump, decisive)
+Rails sharing S≈921/922/923: refs walk 439→478 while mirrors walk 483→444 —
+symmetric about slot ~461. **S = 2 × fold apex. The strip is the ZIP of one
+serpentine fold** (pairs (a−k, a+k+1) around apex a). A rail's two geometry
+peaks are the folds ABOVE and BELOW its line — BOTH real folds; the "side
+bit" = WHICH fold the rail zips (not an A/B byte, not schedule state).
+S values are GLOBAL: 56 of 152 distinct fitS are shared by 146 rails; the
+apex set ≈ the serpentine fold list (median spacing 28.5 — matches the
+~25-slot column pitch, NOT ~70).
+
+### The teacher key is UNRELIABLE exactly where the rule is hardest
+- Raw fitS margin (top vote − runner-up value) = 0 on ALL 81
+  geometry-tied rails — but that conflates ±1 stagger with side ambiguity.
+- Apex-clustered margin (votes summed within ±3, top apex − 2nd apex):
+  every interior vertex has GT edges to BOTH adjacent lines, so below
+  margin ~2 the label is the vote tie-break, not the mesh. Direct evidence:
+  the strip5 quad check accepts BOTH diagonals (A or B) → local GT scoring
+  passes for EITHER side choice; and no rule can beat ~50% against an
+  arbitrary tie-break, yet accuracy rises monotonically with margin (below).
+- An exact-cover teacher T2 (rails claim diagonal-checked GT triangles,
+  ICM minimizes double-claims, side2_final) agrees with fitS 92.3%
+  (95.3% on firm) but is itself sparse-claim-noisy on the ambiguous rails.
+
+### GT-free rule (side2_score.py → side_rule.pkl {rid:(side, S)})
+Two-sided mirror-geometry peaks (P_v11 XY + rails_v3 refs, col_probe10
+vote) → cluster all peaks into a GLOBAL apex list (105 clusters; captures
+121/152 distinct fitS at ±2; true S among a rail's ≤2 candidates 89.0%
+[teacher check]) → assign each rail to one candidate by same-family
+position-occupancy conflict + peak-strength tiebreak + ICM.
+Scores vs apex-clustered teacher [teacher-forced check; event-weighted in
+parens]; 239 rails predicted, 208 teacher-labelled overlap:
+- apex-margin≥4 (45 rails): side **95.6%** (96.1%), S(±2) 80.0% (82.8%)
+- apex-margin≥3 (74):       side **90.5%** (89.8%), S(±2) 81.1% (81.2%)
+- apex-margin≥1 (145):      side 80.7% (82.2%),     S(±2) 73.1% (75.0%)
+- all labelled (208):       side 61.5% (65.2%) — dominated by margin-0/1
+  rails whose labels are tie-break artifacts (a variant solver scored 33%
+  on margin-0: anti-correlated with an arbitrary coin = label noise).
+Washed solver variants: cross-family attraction (57.9% on 2-cand),
+apex-level (family-blind) occupancy (59.4%), fine geometry (dmean/dstd/
+parallelism/step/dz: 48–62%), gi-proximity to apex activity (48.5%),
+chain-adjacency, mirror-in-refs (50–52%).
+
+### Honest state / what the wall actually is now
+- The "one bit per rail" framing is RETIRED: the bit is fold identity, and
+  the blocker is no longer finding a signal — it is that BOTH fold choices
+  are locally GT-consistent, so neither the vertex-adjacency teacher nor
+  per-quad scoring can even LABEL the hard rails. End-to-end honest gain:
+  S(±2) event-weighted 62.4% (old formula, L2) → **75.0%** on the
+  margin≥1 band, **81.2%** on the firm band [teacher-forced check].
+- Gate for the strip-machine GT-free replay (≥90% overall side) NOT met on
+  the full population; not re-run.
+- To finish the side/S question the decode and the teacher must both go
+  GLOBAL: full-machine replay with turn assignment for the 3944 idless
+  groups + exact-cover of the face set (each face emitted once). That is
+  remainder items 3+4, now joined: the ambiguous rails' sides are exactly
+  the ones only an exact-cover replay can pin — on both sides of the
+  scoreboard.
+
 ## WHAT REMAINS FOR A GT-FREE FACES DECODE (ranked)
 
 1. **GT-free S** (the wall's core). S = r+n links the strip's two columns.

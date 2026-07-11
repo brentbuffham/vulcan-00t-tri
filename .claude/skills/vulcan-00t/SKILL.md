@@ -15,19 +15,20 @@ description: >-
 **Read this FIRST. Do not re-derive what is already known. Nine months of
 testing live in this repo — stand on it.**
 
-> **▶ RESUMING? READ `reference/RESUME-2026-07-11.md` FIRST, then
-> `REF_INDEX_DECODE.md`.** 2026-07-09/10: **vertex-REF decode CRACKED &
-> reproduced** (commit e8e7e9d). The old low-byte splice fabricated ~1600
-> PHANTOM refs; correct rule = marker+first-op framing, `01 hh ll` absolute
-> ref (1..2974), `00 pp≥0x80` short-splice, `00 pp<0x80` = STRUCTURAL not a
-> ref. Same-group shared-edge adjacency **15%→72.7%** (|d|=1 8/8=100%); groups
-> 5738 ≈ 5724 GT faces (1:1). **CONSEQUENCE: the "rails" were splice artifacts**
-> — real refs are sparse per-fold ANCHORS (step −95..−160), so `rails.pkl` +
-> ALL JUMP=6 segmentation (ma_beam/replay/slotanchor) are dead; re-derive from
-> `refs_v2.pkl`. NEXT: re-cluster strips from anchors + phase-clock turns → feed
-> the strip machine (Fable). Scripts: `python/ma_refdecode*.py`.
-> Prior: RESUME-2026-07-10 (57 INIT sites = rail fragments, n0=fold boundary,
-> now partly moot), 07-09 (densify dead), 07-08 (allocation rule), 07/06/05/04.
+> **▶ RESUMING? READ `reference/RESUME-2026-07-12.md` FIRST, then
+> `STRIP_SCHEDULE.md`.** 2026-07-11: **rail schedule structure CRACKED** —
+> refs_v2 refs form ~10–13 CONCURRENT ±1 rails (one per live strip, spacing ≈
+> column pitch ~70), round-robin turns (modal turn = 1 ref + 1 idless = one
+> quad); the −95..−160 "anchor steps" were switches BETWEEN strips, NOT
+> per-fold pitch (07-11's sparse-anchor framing superseded; refs_v2.pkl itself
+> stands). Strict ±1 clustering → `rails_v3.pkl`; strip machine teacher-forced
+> **quad rate 82.3%** (was 56.3%), mirror n=S−r edges 92.7%, clean rails
+> 90–100%. REFUTED: free-running alloc counter (must mirror-resync per turn),
+> 1:1 group↔DXF face order. NEXT (Fable): GT-free S — lo-channel `00 pp<0x80`
+> vs clean rails, coord-side fold boundaries, e002/e004 push/pop on long
+> rails. Scripts: `python/strip*.py`.
+> Prior: RESUME-2026-07-11 (ref decode cracked, phantom-splice bug), 07-10
+> (channel=global phase clock), 07-09/08 (allocation rule), 07/06/05/04.
 
 ## MODEL ROUTING (cost control — user directive 2026-07-05)
 Fable is expensive; use it ONLY for detective work. Route sessions:

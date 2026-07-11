@@ -4,9 +4,10 @@ Decoded faces colored green=GT-correct / red=wrong (connectivity scoring).
 TRUTH-ONLY: faces + points are GT-free decode; DXF/map11 used for coloring
 ONLY. Labels state provenance + partial coverage.
 """
-import json
+import json, pickle
 import numpy as np
 
+map11, _ = pickle.load(open('map11.pkl', 'rb'))  # scoring only
 P = np.load('P_v11_intercepts.npy')            # slot-ordered decoded xyz (GT-free)
 V = np.loadtxt('intercepts_gt.csv', delimiter=',')   # GT verts (scoring only)
 Fg = np.load('faces_gt.npy')                   # GT faces (scoring only)
@@ -26,14 +27,24 @@ tris = df['tris']; goodf = df['good']; scorf = df['scor']
 dfaces = [x for t in tris for x in t]
 fclass = [2 if (scorf[i] and goodf[i]) else (1 if scorf[i] else 0)
           for i in range(len(tris))]
-nscor = int(np.sum(scorf)); ngood = int(np.sum(np.array(goodf) & np.array(scorf)))
+gf = np.array(goodf).astype(bool); sf = np.array(scorf).astype(bool)
+nscor = int(sf.sum()); ngoods = int((gf & sf).sum())
+# distinct GT faces correctly emitted (dedup) = true mesh coverage
+faceset = {tuple(sorted(f)): i for i, f in enumerate(Fg)}
+hit = set()
+for t, g in zip(tris, gf):
+    if g:
+        gs = tuple(sorted(map11[s] for s in t))
+        if gs in faceset:
+            hit.add(faceset[gs])
+ndistinct = len(hit)
 
 data = dict(
     verts=Vc.flatten().tolist(), faces=[int(x) for f in Fg for x in f],
     pts=Pc.flatten().tolist(), cat=cat.astype(int).tolist(),
     dfaces=dfaces, fclass=fclass,
     nv=len(V), nf=len(Fg), npd=len(P), nmatch=int(match.sum()),
-    ntri=len(tris), nscor=nscor, ngood=ngood,
+    ntri=len(tris), nscor=nscor, ngoods=ngoods, ngood=ndistinct,
     prov='decode_v11_z (coords) + strip machine w/ GT-free S (side_rule)')
 
 HTML = r'''<!DOCTYPE html><html><head><meta charset=utf-8><title>Intercepts: GT-free decoded FACES</title>
@@ -82,7 +93,8 @@ document.getElementById('i').innerHTML=`<b>Intercepts: GT-FREE decoded FACES (fi
 <span style="color:#fa3">Points AND triangles both decoded from the .00t ALONE (${D.prov}). DXF used for scoring/coloring ONLY — never fed to the decoder.</span><br>
 GT surface (faint teal wire): ${D.nv} verts, ${D.nf} tris.<br>
 Decoded pts ${D.npd}: <span style=color:#3f3>green match&lt;250mm</span> <span style=color:#fc2>yellow XY-ok</span> <span style=color:#f55>red miss</span> (${(100*D.nmatch/D.npd).toFixed(1)}% placed).<br>
-<b>Decoded faces ${D.ntri}</b> (<span style=color:#3f8>green = correct connectivity</span> <span style=color:#f44>red = wrong</span> <span style=color:#999>grey = unscorable slot</span>): <b>${(100*D.ngood/D.nscor).toFixed(1)}%</b> GT-correct on the ${D.nscor} scorable tris. PARTIAL coverage (~149 rails); full mesh needs the exact-cover replay.<br>
+<b>Decoded faces: ${D.ntri} emitted = ${(100*D.ntri/D.nf).toFixed(1)}% of the ${D.nf}-face mesh; ${D.ngood} distinct GT faces correct = <span style="color:#3f8">${(100*D.ngood/D.nf).toFixed(1)}% of the mesh decoded so far.</span></b><br>
+(<span style=color:#3f8>green correct</span> <span style=color:#f44>red wrong</span> <span style=color:#999>grey unscorable</span>; long red streaks = faces on a still-misplaced vertex.) Precision where checkable: ${(100*D.ngoods/D.nscor).toFixed(1)}% (${D.ngoods}/${D.nscor}). PARTIAL (~149 rails) — coverage grows with the exact-cover replay + coord pass-2.<br>
 <button id=bm>GT surface</button><button id=bp>decoded pts</button><button id=bf>decoded faces</button><button id=bu>unscorable faces</button><button id=bo>Ortho/Persp [O]</button><button id=bv>Plan [V]</button>`;
 document.getElementById('bm').onclick=()=>{wire.visible=!wire.visible};
 document.getElementById('bp').onclick=()=>{ptsG.visible=!ptsG.visible;ptsZ.visible=!ptsZ.visible;ptsR.visible=!ptsR.visible};
@@ -98,6 +110,7 @@ addEventListener('resize',()=>{const _a=innerWidth/innerHeight;camO.left=-camO.t
 (function loop(){requestAnimationFrame(loop);ctr.update();r.render(sc,cam);})();
 </script></body></html>'''
 open('../js/intercepts_faces.html', 'w').write(HTML.replace('__DATA__', json.dumps(data)))
-print('wrote js/intercepts_faces.html  (%d decoded tris; %d/%d scorable GT-correct = %.1f%%; %d/%d pts placed)'
-      % (data['ntri'], data['ngood'], data['nscor'],
-         100*data['ngood']/data['nscor'], data['nmatch'], data['npd']))
+print('wrote js/intercepts_faces.html')
+print('  %d tris emitted = %.1f%% of %d-face mesh' % (data['ntri'], 100*data['ntri']/data['nf'], data['nf']))
+print('  %d distinct GT faces correct = %.1f%% of mesh DECODED' % (data['ngood'], 100*data['ngood']/data['nf']))
+print('  precision where checkable: %d/%d = %.1f%%' % (data['ngoods'], data['nscor'], 100*data['ngoods']/data['nscor']))

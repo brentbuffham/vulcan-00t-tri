@@ -212,6 +212,27 @@ NOT yet at the 80% GT-free gate. Two independent residual walls:
    mark folds (col_probe7: FULL/k0 proximity to teacher folds ==
    random) — strip24's conclusion re-confirmed quantitatively.
 
+## §SIDE-BIT SWEEP (2026-07-11 Opus; side1_sweep.py) — byte channels WASH, escalate to tiling
+
+Target: per-rail side bit = sign((S−r_med)−r_med) from fitS teacher key
+(242 rails, balance 130/112). col_probe9 already washed sweep-dir/r-trend/
+parity. This sweep tested every FACE-SIDE byte channel — ALL wash:
+- fop_lead 55.9%, delim 55.4%, ref form(A/S) 55.4%, lo_birth≥9 53.7%.
+- **MYSTERY_A candidate bit-flips REFUTED**: idless payload nibble 2X vs 4X
+  splits 58/51 & 59/51; finalizer 40:1b vs 20:1b splits 71/66 & 43/34 —
+  both pure chance. The side is NOT the payload/finalizer bit.
+- fop_arg 63.9% and lo_modal 64.8% are OVERFIT (42 / 26 distinct values,
+  ~5 rails each); lo_birth 91.7% is only 12 rails (noise).
+
+Conclusion: the side bit is not in any local byte — it is GLOBAL STATE.
+NEXT (Fable, open hypothesis): the round-robin TILING argument. ~13 rails
+live at once, each serving an adjacent column-pair; if live rails shingle
+the surface (rail k serves (c,c+1), rail k+1 serves (c+1,c+2)…), the side
+falls out of a rail's RANK among concurrent live rails ordered by col_r —
+untested (probe9 tried column parity, not live-rank). Second candidate: the
+concurrency birth/death schedule (e002/e004) fixes which pair a new rail
+takes. This is the same A/B-phase bit open on the face side.
+
 ## WHAT REMAINS FOR A GT-FREE FACES DECODE (ranked)
 
 1. **GT-free S** (the wall's core). S = r+n links the strip's two columns.

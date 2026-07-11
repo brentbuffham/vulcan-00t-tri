@@ -88,6 +88,46 @@ POSITIVE (unfinished):
 Honest state: lo = COMPOSITE channel; v≤8 tracks the alloc-slot high byte
 REGION (2–3× chance, not exact), v≥9 birth-marker-ish. NOT yet the S source.
 
+## S-ATTACK SESSION 3 (2026-07-11 Opus; strip20..strip26) — S model PINNED, blocked on column segmentation
+
+Executed RESUME-07-12 steps 1–2. Two attacks ruled out, ONE model confirmed.
+
+**Step 1 lo-channel high-byte sweep (strip20/21) — DEAD for S.** Raw idless
+record = `e003 · 00 · fop · 00 pp(=lo) · payload · finalizer` (lo sits right
+after the fop). Broad sweep on verified-mirror events: NO candidate (n>>8,
+(n±128)>>8, r>>8, (S−r_next)>>8, n//270, fop_arg/lead fields) beats **38%**.
+`lo | fop_lead` shows only a coarse monotone trend (lead 0x42→low lo,
+0x44/45→high lo) ⇒ lo is a spatial region tag co-varying with the sweep,
+NOT a mechanical S field. Confirmed dead.
+
+**Step 2a emission frontier (strip22) — DEAD.** corr(mirror n, global alloc
+counter E_all) = 0.32; |resid|<128 only 17%. Slot ≠ face-side alloc order.
+Adjacent-birth ΔS not clustered at 0 (rails born together are in different
+columns). n monotone within a rail = 164/165 (trivial: r monotone).
+
+**Step 2b boustrophedon column model (strip23/25/26) — MODEL CONFIRMED,
+column segmentation is the blocker.** Physical law: r ascends column c while
+mirror n = S−r descends the spatially-adjacent column, so
+**S = base(c_r) + base(c_n) + len(c_n) − 1 = base(c_r) + top(c_n)** (one
+horizontal mesh edge; the two forms are algebraically identical). Evidence:
+- both equivalent forms tie at **21.2%** (±2) with position-derived columns
+  (strip26), vs 9% with holey mesh-adjacency columns (strip23) — the model
+  FORM is right; the rate tracks column-map quality.
+- REFUTED sub-case: mirror column is NOT slot-contiguous with the ref column
+  (S ≠ 2·r_lo−1 / 2·r_hi+1 / r_lo+r_hi, all <5%, strip25) — so S can't come
+  from the rail's own r-range; it needs the mirror column's absolute base.
+- Blocker: no clean GT-free column segmentation exists. map11 is holey
+  (28 singleton "columns" of 124); position-jump detection over-segments
+  (233 cols, median slot-len 5, vs true ~25 cols of ~120) because the
+  serpentine wiggles within a column. `full_flags.npy`/`k0_sites.pkl` are
+  coord-carry artifacts, not column boundaries.
+
+**THE WALL, precisely:** GT-free S needs the true column partition of the
+coord emission order (slot → column, with correct bases/lengths). That is a
+COORD-side derivation (the fold/column-boundary structure of the serpentine
+value stream), feeding the FACE-side S = base(c_r)+top(c_n). This links the
+two decoders — it is the coord-topology joint solve flagged since 07-05.
+
 ## WHAT REMAINS FOR A GT-FREE FACES DECODE (ranked)
 
 1. **GT-free S** (the wall's core). S = r+n links the strip's two columns.

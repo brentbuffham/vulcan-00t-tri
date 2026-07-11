@@ -23,10 +23,14 @@ testing live in this repo — stand on it.**
 > per-fold pitch (07-11's sparse-anchor framing superseded; refs_v2.pkl itself
 > stands). Strict ±1 clustering → `rails_v3.pkl`; strip machine teacher-forced
 > **quad rate 82.3%** (was 56.3%), mirror n=S−r edges 92.7%, clean rails
-> 90–100%. REFUTED: free-running alloc counter (must mirror-resync per turn),
-> 1:1 group↔DXF face order. NEXT (Fable): GT-free S — lo-channel `00 pp<0x80`
-> vs clean rails, coord-side fold boundaries, e002/e004 push/pop on long
-> rails. Scripts: `python/strip*.py`.
+> 90–100%. REFUTED: free-running alloc counter, group↔DXF face order.
+> **S-FORM PINNED (07-11 Opus, strip20..26): S = base(col_r)+top(col_n)** —
+> boustrophedon horizontal-edge sum (21% with position-columns, gated by
+> column-map quality). RULED OUT as S source: lo-channel (≤38%), emission
+> frontier (corr 0.32), rail's own r-range (<5%). **THE WALL = a GT-free
+> `slot→column` partition of the coord emission (~25 cols/~120); a coord+face
+> JOINT solve** (mine k0/full_flags folds or A→A −95..−160 column hops).
+> Scripts: `python/strip*.py`.
 > Prior: RESUME-2026-07-11 (ref decode cracked, phantom-splice bug), 07-10
 > (channel=global phase clock), 07-09/08 (allocation rule), 07/06/05/04.
 

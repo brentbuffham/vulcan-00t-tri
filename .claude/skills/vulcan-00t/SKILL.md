@@ -16,21 +16,21 @@ description: >-
 testing live in this repo — stand on it.**
 
 > **▶ RESUMING? READ `reference/RESUME-2026-07-12.md` FIRST, then
-> `STRIP_SCHEDULE.md`.** 2026-07-11: **rail schedule structure CRACKED** —
-> refs_v2 refs form ~10–13 CONCURRENT ±1 rails (one per live strip, spacing ≈
-> column pitch ~70), round-robin turns (modal turn = 1 ref + 1 idless = one
-> quad); the −95..−160 "anchor steps" were switches BETWEEN strips, NOT
-> per-fold pitch (07-11's sparse-anchor framing superseded; refs_v2.pkl itself
-> stands). Strict ±1 clustering → `rails_v3.pkl`; strip machine teacher-forced
-> **quad rate 82.3%** (was 56.3%), mirror n=S−r edges 92.7%, clean rails
-> 90–100%. REFUTED: free-running alloc counter, group↔DXF face order.
-> **S-FORM PINNED (07-11 Opus, strip20..26): S = base(col_r)+top(col_n)** —
-> boustrophedon horizontal-edge sum (21% with position-columns, gated by
-> column-map quality). RULED OUT as S source: lo-channel (≤38%), emission
-> frontier (corr 0.32), rail's own r-range (<5%). **THE WALL = a GT-free
-> `slot→column` partition of the coord emission (~25 cols/~120); a coord+face
-> JOINT solve** (mine k0/full_flags folds or A→A −95..−160 column hops).
-> Scripts: `python/strip*.py`.
+> `STRIP_SCHEDULE.md` + `Z_RECONSTRUCTION_HUNT.md`.** 2026-07-12: **S went
+> GT-free** (`S = 2×fold apex`; a strip = the ZIP of one serpentine fold, side =
+> which fold it zips → `side_rule.pkl`, 90.5% @apex-margin≥3) and **first GT-free
+> faces render** (`side13_viewer.py` → `js/intercepts_faces.html`, honest 4-class:
+> topology-correct vs vert-placed). **HONEST STATE = coords 52% / faces 9.2%
+> distinct-GT coverage** — a real PLATEAU. The spikes in the viewer are a COORD
+> problem (only 52% verts placed), NOT faces. **FOUR LEVERS RULED DEAD 07-12
+> (do not retry):** strip-stitching (+1 face, rail fragmentation caps it —
+> `side9/side12`), S-extension 239→311 (marginal), coord residual filter §7.2
+> (no-op — `decode_v12_z.py`), and **faces-for-Z joint bootstrap REFUTED**
+> (`side14`: face topology 2.07 m vs XY-nearest 0.031 m median — coords & faces
+> are far LESS coupled than the docs assumed). **TWO LIVE FRONTS, both detective:**
+> (A) crack the EXACT coord Z predictor (Fable — `plane_ref()` median-of-XY-nearest
+> is only a stand-in; 52% ceiling = surface bootstrap feeding on its own output),
+> (B) alloc turn-assignment for the ~593 uncovered refs to lift faces past 9.2%.
 > Prior: RESUME-2026-07-11 (ref decode cracked, phantom-splice bug), 07-10
 > (channel=global phase clock), 07-09/08 (allocation rule), 07/06/05/04.
 

@@ -245,6 +245,9 @@ happens not to reference vertex 0 cannot be misdetected on reload. Preserve the
 into a `vulZ` container is a separate step and not required to interoperate with
 consumers that read the raw form.)
 
+Reference writer: `js/vulcan00TWriter.js` (`write00t({vertices, faces})` →
+`ArrayBuffer`); its output round-trips through `parse00t()`.
+
 ---
 
 ## 6. Verification

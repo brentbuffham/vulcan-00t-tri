@@ -1,19 +1,33 @@
 ---
 name: vulcan-00t
 description: >-
-  Reverse-engineering the Maptek Vulcan .00t triangulation binary format (decode
-  vertices + EdgeBreaker faces, and build vulcan00TParser.js for Kirra). Trigger
-  whenever the work touches: .00t files, Vulcan/Maptek triangulation, the
-  oot-parser / vulcan00TParser, EdgeBreaker/CLERS face decode, the coord TAG/SEP/
-  count/DELTA grammar, axis state machine, the toy test files (cube/fan/prism/
-  sphere/hexhole/nonround/linear/plane/triangle), or the production HEAVE .00t.
-  Loads 9 MONTHS of proven rules + dead ends so we DON'T re-derive them.
+  Maptek Vulcan .00t triangulation binary format. SOLVED: the file is a vulZ
+  FastLZ-compressed paged container; decompress then read plain big-endian f64
+  vertices + u32 face-index triples (see 00T_FORMAT.md; parser is
+  js/vulcan00TParser.js). Trigger whenever the work touches: .00t files,
+  Vulcan/Maptek triangulation, vulcan00TParser, or building .00t support for
+  Kirra. NOTE: the old coord TAG/DELTA grammar, axis state machine, and
+  EdgeBreaker/CLERS face decode are DISPROVEN historical context — do not resume
+  them; go straight to 00T_FORMAT.md.
 ---
 
 # Vulcan .00t reverse-engineering
 
-**Read this FIRST. Do not re-derive what is already known. Nine months of
-testing live in this repo — stand on it.**
+> **✅ FORMAT SOLVED — STOP. Read [`00T_FORMAT.md`](../../../00T_FORMAT.md) first.**
+> The `.00t` is a `vulZ` **FastLZ-compressed paged container**. Decompress it
+> (8-byte-record pointer-tree walk → FastLZ-inflate each page → reassemble at
+> `page_number × page_size`) and the geometry is plain fixed-stride binary:
+> absolute **big-endian f64** vertex triples + explicit **big-endian u32**
+> face-index triples. There is **no** coordinate TAG/DELTA grammar, **no** axis
+> state machine, and **no** EdgeBreaker/CLERS face decode — every one of those
+> was this project reverse-engineering the *compressor's output* as if it were
+> the data model. The working parser is `js/vulcan00TParser.js`; it decodes all
+> fixtures exactly (100% verts + faces vs DXF, including the 10 201-vertex grid).
+> Everything below is **historical context only** — do not resume the grammar
+> hunt.
+
+**Historical (pre-breakthrough) notes follow. Nine months of testing live in
+this repo; they are kept as a record of the journey, not as instructions.**
 
 > **▶ RESUMING? READ `reference/RESUME-2026-07-11.md` FIRST, then
 > `REF_INDEX_DECODE.md`.** 2026-07-09/10: **vertex-REF decode CRACKED &

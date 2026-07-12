@@ -1,6 +1,15 @@
 # vulcan-00t-tri
 00t files are a Maptek Triangulation binary format there are no known parsers or decoders for this format.  This library is an attempt to decode and reverse engineer the format for wider use.
 
+> **✅ SOLVED — see [`00T_FORMAT.md`](00T_FORMAT.md) for the correct specification.**
+> The `.00t` format is a `vulZ` FastLZ-compressed, paged container. Decompress
+> it and the geometry is plain fixed-stride binary (absolute big-endian double
+> vertices + explicit integer face-index triples). The narrative below —
+> "truncated big-endian doubles", FULL/DELTA coordinate compression, and
+> EdgeBreaker/CLERS face topology — describes patterns in the *compressed* byte
+> stream and is **superseded**; it is retained as historical record of the
+> reverse-engineering journey. The working parser is `js/vulcan00TParser.js`.
+
 # Vulcan .00t Triangulation Parser
 
 **Reverse-engineered parser for Maptek Vulcan `.00t` binary triangulation files.**

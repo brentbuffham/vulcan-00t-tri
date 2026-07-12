@@ -1,5 +1,10 @@
 # Cube grammar research — toward a single decoder
 
+> **⚠️ SUPERSEDED.** This explores the disproven coordinate-grammar / EdgeBreaker
+> model. The `.00t` format is a `vulZ` FastLZ-compressed container — see
+> **[`00T_FORMAT.md`](00T_FORMAT.md)** for the correct spec. Retained as
+> historical record.
+
 User directive (2026-05-08): "Only decode the encoder. There would be one
 decoder for one file. It would have a set of rules, and those rules would be
 followed flawlessly every time."

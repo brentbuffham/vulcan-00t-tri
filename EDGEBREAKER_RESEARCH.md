@@ -1,5 +1,11 @@
 # EdgeBreaker Research — Cross-Reference Findings
 
+> **⚠️ SUPERSEDED.** `.00t` faces are **not** EdgeBreaker/CLERS-encoded — they
+> are explicit big-endian integer index triples inside a `vulZ` FastLZ-compressed
+> container. The "topology opcodes" this research chased were back-references in
+> the compression stream. See **[`00T_FORMAT.md`](00T_FORMAT.md)** for the
+> correct spec. Retained as historical record.
+
 ## Sources
 
 1. **Original EdgeBreaker** (Rossignac 1999) — PDF binary couldn't be parsed via WebFetch.

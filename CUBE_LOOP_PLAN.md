@@ -1,5 +1,9 @@
 # CUBE Decoding Loop — Plan
 
+> **⚠️ SUPERSEDED.** Plan for the disproven grammar model. Format is solved via
+> `vulZ` FastLZ decompression — see **[`00T_FORMAT.md`](00T_FORMAT.md)**.
+> Historical record.
+
 > **Started 2026-05-08** after pivoting from SPHERE.
 
 ## Targets

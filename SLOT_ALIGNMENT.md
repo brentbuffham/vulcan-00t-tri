@@ -1,5 +1,10 @@
 # Slot alignment (MYSTERY_A_HUNT §NEXT #1) — executed, BLOCKED, redirected (2026-07-08 Opus)
 
+> **⚠️ SUPERSEDED.** This slot-alignment work targeted the disproven
+> coordinate-grammar model. The `.00t` format is a `vulZ` FastLZ-compressed
+> container — see **[`00T_FORMAT.md`](00T_FORMAT.md)**. Retained as historical
+> record.
+
 Task from MYSTERY_A_HUNT.md: pin decode_v11's 11 dropped emissions (2964 rows
 vs 2975 GT verts) to get absolute true-slot indexing, "Opus-executable,"
 prerequisite for the scheduler attack. Scripts: `python/ma_slotdiag.py`

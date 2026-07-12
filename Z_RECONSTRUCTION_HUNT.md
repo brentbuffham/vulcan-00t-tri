@@ -142,6 +142,29 @@ reference — unchanged MISFRAME_CENSUS diagnosis).
 - OB34 is still bottlenecked by FULL/band harvest (X band 37320..69627 junk)
   — the Z rule can't engage there until framing improves.
 
+## 6b. 2026-07-12 pass-2 attempts — BOTH spec'd levers DEAD (side14, decode_v12_z)
+
+- **§7.2 residual filter (decode_v12_z.py, DROP_TH arg): NO EFFECT.** Dropping
+  band-corrupted priors (|z − anchor-surface| > TH, confident IQR) before the
+  pass-2+ re-decode moved the score by 0 (52.1% at TH=2, and TH=0.5/1.0 the
+  +5 verts came entirely from adding a 4th pass, not the filter — confirmed
+  by TH=0 4-pass = same 52.2%). Cause: plane_ref's median-of-planes is
+  ALREADY robust to a minority of corrupt priors, so removing them changes no
+  medians. Filter is a no-op; do not pursue.
+- **Faces-for-Z (side14_facez_oracle.py): REFUTES §6's hope.** Using our
+  decoded faces' TOPOLOGICAL neighbours for the Z plane is FAR WORSE than
+  XY-nearest — on the 137 yellows inside a correct decoded face: median err
+  **2.07 m (face-topology) vs 0.031 m (XY-nearest)**; half-window 1% vs 82%;
+  face strictly better on 1/137. Mesh neighbours are the vertex's ring
+  (spans local relief) = a bad plane set; XY-nearest 8 form a tight local
+  patch. **So the faces decode will NOT close the Z gap** — coord and faces
+  are far less coupled than §6 speculated. The 52% ceiling is SURFACE
+  BOOTSTRAP quality (decoder's own 52%-correct output as priors), not
+  neighbour selection and not missing topology.
+- Implication: to push coords past 52% needs better bootstrap (more/better
+  ANCHORS, or the exact encoder predictor — still unknown, median-of-planes
+  is a stand-in), NOT the joint solve. Redirects the coord track.
+
 ## 7. Spec-shaped next step (for an Opus session)
 
 1. **Placement-flip census, cross-file** (cheap): on SYLVANIA pins (better

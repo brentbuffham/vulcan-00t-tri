@@ -1,5 +1,11 @@
 # History of Tests — Vulcan .00t Parser Reverse Engineering
 
+> **ℹ️ Historical record.** This log predates the breakthrough that `.00t` is a
+> `vulZ` FastLZ-compressed container. Most findings here describe patterns in the
+> *compressed* byte stream (mistaken for a coordinate grammar / EdgeBreaker
+> topology). For the correct, verified format see
+> **[`00T_FORMAT.md`](00T_FORMAT.md)**.
+
 **Started:** ~January 2026  
 **Last Updated:** 2026-04-25  
 **Status:** Triangle, Plane, Cube, Linear Strip vertices solved; faces partial on some

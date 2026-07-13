@@ -1,5 +1,11 @@
 # Vulcan .00t — Real Structural Wins
 
+> **ℹ️ Historical record.** These "wins" were derived against the *compressed*
+> byte stream, before the format was recognized as a `vulZ` FastLZ container.
+> Container-level facts (magic, pages) still hold; the coordinate/topology
+> "rules" are superseded. For the correct, verified format see
+> **[`00T_FORMAT.md`](00T_FORMAT.md)**.
+
 Crystallized list of byte-derived rules and discoveries that are **proven**.
 Each entry: the rule, byte signature, where it lives, the test that found it.
 

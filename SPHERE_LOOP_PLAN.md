@@ -1,5 +1,9 @@
 # SPHERE Decoding Loop — Plan
 
+> **⚠️ SUPERSEDED.** Plan for the disproven grammar model; the sphere's "axis
+> overlap" was a compression artifact and it now decodes exactly (50v/96f). See
+> **[`00T_FORMAT.md`](00T_FORMAT.md)**. Historical record.
+
 > **Status (2026-05-08): PAUSED.** User requested pivot to a focused effort on
 > cube1.00t–cube5.00t. See `CUBE_LOOP_PLAN.md`. Cron job 4f18b0f4 cancelled.
 > Last iter: 9. Last score: 2/50. Resume by reinstating the cron with this plan.

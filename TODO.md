@@ -1,5 +1,11 @@
 # TODO — Vulcan .00t Parser
 
+> **⚠️ SUPERSEDED.** The open problems below (Mysteries A–E: the C/R/L rule,
+> tag-encoded coords, DELTA reference override, axis overlap) are all moot — they
+> were artifacts of reading a `vulZ` FastLZ-compressed stream as if it were the
+> data model. The format is solved; see **[`00T_FORMAT.md`](00T_FORMAT.md)** and
+> `js/vulcan00TParser.js`. Retained as historical record.
+
 **Read this FIRST before making any changes. Then check `HistoryOfTests.md` and recent git commits.**
 
 ---

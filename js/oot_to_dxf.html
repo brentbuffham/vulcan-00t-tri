@@ -215,158 +215,40 @@ body{display:flex;flex-direction:column}
 <input type="file" id="fileInput" multiple accept=".00t,.00T" style="display:none">
 <input type="file" id="folderInput" webkitdirectory style="display:none">
 
+<!-- Bridge the ES-module parser onto window for the classic script below. -->
+<script type="module">
+  import { parse00t } from './vulcan00TParser.js?v=vulz';
+  window.parse00t = parse00t;
+</script>
 <script>
 // ═══════════════════════════════════════════════════════════════
-// 00t PARSER (pure JS, zero dependencies)
+// 00t PARSER — production vulcan00TParser.js (vulZ / FastLZ).
+// The old inline DELTA/EdgeBreaker decoder is retired; see 00T_FORMAT.md.
+// Faces now decode natively, so a sidecar .dxf is optional.
 // ═══════════════════════════════════════════════════════════════
 
-function isSep(b) { return (b & 0x07) === 0x07 && b >= 0x07; }
-
-function readBEDouble(buf, off) {
-  const dv = new DataView(buf.buffer || buf, buf.byteOffset || 0);
-  // Build 8 bytes manually to handle offset in Uint8Array
-  const tmp = new ArrayBuffer(8);
-  const tv = new DataView(tmp);
-  for (let i = 0; i < 8; i++) tv.setUint8(i, off + i < buf.length ? buf[off + i] : 0);
-  return tv.getFloat64(0, false);
-}
-
-function findBytes(data, needle, start = 0) {
-  outer: for (let i = start; i <= data.length - needle.length; i++) {
-    for (let j = 0; j < needle.length; j++) if (data[i+j] !== needle[j]) continue outer;
-    return i;
-  }
-  return -1;
-}
-
-function rfindBytes(data, needle, start, end) {
-  outer: for (let i = end - needle.length; i >= start; i--) {
-    for (let j = 0; j < needle.length; j++) if (data[i+j] !== needle[j]) continue outer;
-    return i;
-  }
-  return -1;
-}
-
 function parseOOT(arrayBuffer) {
-  const data = new Uint8Array(arrayBuffer);
   const warnings = [];
   const result = { vertices: [], faces: [], coordValues: [], faceVertexIndices: [],
     nVertsHeader: 0, nFacesHeader: 0, warnings, success: false };
-
-  if (data.length < 64) { warnings.push('File too small'); return result; }
-  const magic = (data[0]<<24)|(data[1]<<16)|(data[2]<<8)|data[3];
-  if (magic !== 0xEAFBA78A) { warnings.push('Bad magic: 0x' + magic.toString(16)); return result; }
-
-  // Find Variant marker (with fallbacks)
-  let dataStart = -1;
-  const varNeedle = [0x56,0x61,0x72,0x69,0x61,0x6E,0x74,0x00]; // "Variant\0"
-  let vi = findBytes(data, varNeedle);
-  if (vi >= 0) {
-    dataStart = vi + 8;
-  } else {
-    // Fallback: find "Created External"
-    const ceNeedle = [0x43,0x72,0x65,0x61,0x74,0x65,0x64]; // "Created"
-    let ce = findBytes(data, ceNeedle);
-    if (ce >= 0) {
-      let v2 = findBytes(data, varNeedle.slice(0,7), ce + 16);
-      if (v2 >= 0) { dataStart = v2 + 8; warnings.push('Variant via CE fallback'); }
-    }
-    // Fallback 2: pre-coord header pattern
-    if (dataStart < 0) {
-      const altM = [0x20,0xE0,0x06,0x00,0x00,0x43];
-      let ai = findBytes(data, altM);
-      if (ai >= 0) { dataStart = ai; warnings.push('Using alt header fallback'); }
-    }
-    if (dataStart < 0) { warnings.push('No Variant marker found'); return result; }
+  if (typeof window.parse00t !== 'function') {
+    warnings.push('Parser module not loaded yet — try again');
+    return result;
   }
-
-  if (dataStart + 23 >= data.length) { warnings.push('Data section too short'); return result; }
-
-  result.nVertsHeader = data[dataStart + 12];
-  result.nFacesHeader = data[dataStart + 19];
-
-  // Find attribute suffix
-  const attrSuffix = [0x00,0x05,0x40,0x04,0x00,0x0A,0x20,0x08,0x07];
-  let attrPos = findBytes(data, attrSuffix, dataStart);
-  if (attrPos < 0) attrPos = data.length;
-
-  const regionStart = dataStart + 23;
-  const regionEnd = attrPos;
-
-  // Find first coordinate
-  let coordOff = 0;
-  for (let i = regionStart; i < regionEnd - 2; i++) {
-    if (data[i] <= 0x06 && (data[i+1] === 0x40 || data[i+1] === 0x41)) { coordOff = i; break; }
+  try {
+    const r = window.parse00t(arrayBuffer);
+    result.vertices = r.vertices.map(v => [v[0] || 0, v[1] || 0, v[2] || 0]);
+    result.faces = r.faces;
+    result.faceVertexIndices = r.faces.flat();
+    result.coordValues = r.vertices.flat();
+    result.nVertsHeader = r.vertexCount;
+    result.nFacesHeader = r.faceCount;
+    if (!r.magicOk) warnings.push('Not a vulZ container — parsed as a flat raw image');
+    result.success = result.vertices.length > 0;
+    if (!result.success) warnings.push('No geometry decoded');
+  } catch (e) {
+    warnings.push('Parse error: ' + e.message);
   }
-
-  // Find face section marker (last "20 00")
-  let faceMarker = rfindBytes(data, [0x20,0x00], regionStart, attrPos);
-  const coordEnd = (faceMarker > regionStart) ? faceMarker : regionEnd;
-  const faceStart = (faceMarker > regionStart) ? faceMarker + 2 : -1;
-
-  // Decode coordinates
-  const prev = new Uint8Array(8);
-  let pos = coordOff;
-  while (pos < coordEnd) {
-    const b = data[pos];
-    if (b <= 0x06) {
-      const cnt = b, nB = cnt + 1;
-      if (pos + 1 + nB > coordEnd) break;
-      const stored = data.slice(pos+1, pos+1+nB);
-      const res = new Uint8Array(8);
-      if (stored[0]===0x40||stored[0]===0x41||stored[0]===0xC0||stored[0]===0xC1) {
-        for (let i=0;i<nB;i++) res[i]=stored[i];
-      } else {
-        res[0] = prev[0];
-        for (let i=0;i<nB;i++) res[i+1]=stored[i];
-        for (let i=nB+1;i<8;i++) res[i]=prev[i];
-      }
-      const tmp = new ArrayBuffer(8); const tv = new DataView(tmp);
-      for (let i=0;i<8;i++) tv.setUint8(i,res[i]);
-      const val = tv.getFloat64(0,false);
-      result.coordValues.push(val);
-      for (let i=0;i<8;i++) prev[i]=res[i];
-      pos += 1+nB;
-    } else if (isSep(b)) { pos++; }
-    else if (pos+1 < coordEnd) { pos+=2; }
-    else break;
-  }
-
-  // Decode face vertex indices
-  if (faceStart > 0) {
-    let fp = faceStart;
-    while (fp < regionEnd) {
-      const b = data[fp];
-      if (b <= 0x06) {
-        const cnt = b, nB = cnt+1;
-        if (fp+1+nB > regionEnd) break;
-        for (let i=0;i<nB;i++) {
-          const v = data[fp+1+i];
-          if (v >= 1 && v <= result.nVertsHeader) result.faceVertexIndices.push(v);
-        }
-        fp += 1+nB;
-      } else if (isSep(b)) { fp++; }
-      else if (fp+1 < regionEnd) { fp+=2; }
-      else break;
-    }
-  }
-
-  // Build vertices (sequential axis-change heuristic)
-  if (result.coordValues.length >= 3) {
-    let cx = result.coordValues[0], cy = result.coordValues[1], cz = result.coordValues[2];
-    result.vertices.push([cx, cy, cz]);
-    for (let i = 3; i < result.coordValues.length; i++) {
-      const v = result.coordValues[i];
-      const dx = Math.abs(v-cx), dy = Math.abs(v-cy), dz = Math.abs(v-cz);
-      if (dx <= dy && dx <= dz) cx = v;
-      else if (dy <= dz) cy = v;
-      else cz = v;
-      result.vertices.push([cx, cy, cz]);
-    }
-  }
-
-  if (result.coordValues.length === 0) warnings.push('No coordinates decoded');
-  else result.success = true;
   return result;
 }
 

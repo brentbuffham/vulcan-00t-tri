@@ -1,5 +1,12 @@
 # Session Summary — Pick-Up Notes
 
+> **⚠️ SUPERSEDED.** These pick-up notes are built around the disproven
+> coordinate-grammar / EdgeBreaker model (Modes A–E, hardcoded cube sequence,
+> "axis overlap"). The `.00t` format is a `vulZ` FastLZ-compressed container;
+> decompress first and every file decodes exactly. See
+> **[`00T_FORMAT.md`](00T_FORMAT.md)** for the correct spec and
+> `js/vulcan00TParser.js` for the working parser. Retained as historical record.
+
 **Last working state:** commit `c5ef144` — pushed to origin/main.
 
 ## TL;DR

@@ -1,5 +1,12 @@
 # Decoding Vulcan .00t Triangulation Files
 
+> **⚠️ SUPERSEDED.** The format model in this document (delta-compressed
+> truncated big-endian doubles and EdgeBreaker/CLERS face topology) has been
+> disproven. The `.00t` file is a `vulZ` FastLZ-compressed container; once
+> decompressed the geometry is plain fixed-stride binary. See
+> **[`00T_FORMAT.md`](00T_FORMAT.md)** for the correct, verified specification.
+> This file is retained only as historical record.
+
 **Step-by-step guide to the reverse-engineered binary format.**
 
 This document describes how to read a Maptek Vulcan `.00t` triangulation file and extract vertices and faces without the Vulcan SDK or licence. The format was reverse-engineered through binary analysis of test files with known geometries.

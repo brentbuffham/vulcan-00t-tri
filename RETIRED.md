@@ -46,5 +46,24 @@ All five viewers (`js/oot-read.html`, `js/oot-compare.html`, `js/oot-viewer.html
   `VULCAN-RESUME.md`, `WINS.md`, `Z_RECONSTRUCTION_HUNT.md`, `COLD_VALIDATION.md`,
   `TODO.md`.
 
+### Post-cutoff local research merged in 2026-07-13 (also RETIRED)
+
+A local branch of coordinate/faces experiments (the 07-11/07-12 EdgeBreaker "strip
+/ rail / side / coord-codec" line) was merged into `main` on 2026-07-13 to preserve
+the learnings. It is **kept in place and accessible, but is RETIRED — same status
+as everything above.** These files postdate the cutoff so were not named earlier:
+
+- **Root doc:** `STRIP_SCHEDULE.md` (the "rails are real" scheduler write-up).
+  `Z_RECONSTRUCTION_HUNT.md` is already listed above.
+- **Python scripts:** `python/side*.py`, `python/strip*.py`, `python/col*.py`,
+  `python/decode_v12_z.py`, and their `*.pkl`/`*.npy`/`*.json` artifacts
+  (`rails_v2.pkl`, `rails_v3.pkl`, `refs_v3.pkl`, `columns_v1.pkl`,
+  `side_rule*.pkl`, `decoded_faces*.json`, etc.).
+- **Viewer:** `js/intercepts_faces.html` (GT-free faces coverage viewer — NOT one
+  of the canonical viewers; do not use for real decodes).
+
+All disproven for the same reason: they modelled FastLZ compressor output as a data
+model. Kept for the record only.
+
 The retired research is kept in git history for the record; it should not guide any
 future work. If you are picking this up: read `00T_FORMAT.md`, then `TRIAGE.md`.

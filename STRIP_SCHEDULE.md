@@ -1,3 +1,9 @@
+> ⛔ **RETIRED / DISPROVEN — DO NOT USE OR RESUME.** The `.00t` format is SOLVED
+> (vulZ/FastLZ container → plain big-endian f64 verts + u32 face triples). This
+> "strip/rail scheduler" was FastLZ compressor output mistaken for a data model;
+> there is no rail/strip topology. Kept for the record only. See `00T_FORMAT.md`,
+> then `RETIRED.md` / `TRIAGE.md`.
+
 # Strip schedule — the rails are REAL (interleaved), scheduler structure cracked open (2026-07-11 Fable session)
 
 Input: RESUME-2026-07-11 step 1 (re-cluster strips from `refs_v2.pkl` anchors).

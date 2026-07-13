@@ -12,11 +12,18 @@ in this repo. They compile as part of the Incline project (they use `glam`,
 
 ## Files
 
-| File | Vulcan format | What it decodes |
-|---|---|---|
-| `tri00t.rs` | `.00t` triangulation | vulZ/FastLZ container → BE f64 vertices + u32 face triples. See `../00T_FORMAT.md`. |
-| `bmf.rs` | `.bmf` / `.bdf` block model (TBMS2.0) | 0x808-paged container, page-table tree, per-variable numeric/named columns, block bounds, orientation. |
-| `isis.rs` | `.dgd.isis` / `.dgd.isix` design database | vulZ container → 117-byte SEGCRD records: polylines, text, layers, colour palette, index sidecar. |
+| File | Vulcan format | JS port | Python port | What it decodes |
+|---|---|---|---|---|
+| `tri00t.rs` | `.00t` triangulation | `js/vulcan00TParser.js` (+ writer) | `python/vulcan00t_parser.py` | vulZ/FastLZ container → BE f64 vertices + u32 face triples. See `../00T_FORMAT.md`. |
+| `bmf.rs` | `.bmf` / `.bdf` block model (TBMS2.0) | `js/vulcanBmfParser.js` | `python/vulcan_bmf_parser.py` | 0x808-paged container, page-table tree, per-variable numeric/named columns, block bounds, orientation. |
+| `isis.rs` | `.dgd.isis` / `.dgd.isix` design database | `js/vulcanIsisParser.js` | `python/vulcan_isis_parser.py` | vulZ container → 117-byte SEGCRD records: polylines, text, layers, colour palette, index sidecar. |
+
+The `isis` ports reuse the `.00t` port's vulZ decoder (`decodeVulz` / `decode_vulz_archive`).
+One caveat: `js/vulcan00TParser.js`'s `decodeVulz` does not yet return the auxiliary
+(PNG-gallery) stream, so `vulcanIsisParser.js` falls back to the main image for
+gallery layer names (the Python port has `aux`). Ports are verified to parse/compile
+and import; they are **not** yet functionally validated against real `.bmf`/`.dgd.isis`
+fixtures (none are in this repo).
 
 ## The shared key: `vulZ`
 

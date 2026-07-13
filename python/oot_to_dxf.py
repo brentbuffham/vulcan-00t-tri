@@ -30,8 +30,10 @@ from PyQt6.QtGui import QColor, QDragEnterEvent, QDropEvent
 
 import ezdxf
 
+from vulcan00t_parser import parse_00t, ReadError
+
 # ══════════════════════════════════════════════════════════════════════
-# 00t PARSER
+# 00t PARSER — production vulcan00t_parser.py (vulZ / FastLZ)
 # ══════════════════════════════════════════════════════════════════════
 
 def is_separator(b: int) -> bool:
@@ -59,176 +61,37 @@ class OotResult:
 
 
 def parse_oot(filepath: str) -> OotResult:
-    """Parse a Vulcan .00t file and extract coordinates and face data."""
-    result = OotResult(filepath=filepath)
+    """Parse a Vulcan .00t file via the production vulZ/FastLZ parser.
 
+    The old inline DELTA/EdgeBreaker decoder is retired (pre-2026-07-13 work);
+    faces now decode natively, so a sidecar .dxf is optional. See 00T_FORMAT.md.
+    """
+    result = OotResult(filepath=filepath)
     try:
         with open(filepath, 'rb') as f:
             raw = f.read()
-    except Exception as e:
+    except OSError as e:
         result.warnings.append(f"Cannot read file: {e}")
         return result
 
-    # Validate header
-    if len(raw) < 64:
-        result.warnings.append("File too small")
+    try:
+        tri = parse_00t(raw)
+    except ReadError as e:
+        result.warnings.append(f"Parse error: {e}")
         return result
 
-    magic = raw[0:4]
-    sig = raw[4:8]
-    if magic != b'\xea\xfb\xa7\x8a' or sig != b'vulZ':
-        result.warnings.append(f"Bad magic/signature: {magic.hex()}/{sig}")
-        return result
-
-    # Find data section — scan for "Created External" then "Variant\0"
-    # These can be at different page offsets depending on the file's page chain
-    variant_idx = raw.find(b'Variant\x00')
-    if variant_idx < 0:
-        # Some 00t files have data at non-standard page offsets.
-        # Try scanning for the pre-coord header pattern: 20 E0 06 00 00 43
-        alt_marker = bytes([0x20, 0xE0, 0x06, 0x00, 0x00, 0x43])
-        alt_idx = raw.find(alt_marker)
-        if alt_idx >= 0:
-            data_start = alt_idx
-            result.warnings.append(f"No Variant marker; using alt header at 0x{alt_idx:04X}")
-        else:
-            # Last resort: scan every 2048-byte page boundary for "Created External"
-            ce_idx = raw.find(b'Created External')
-            if ce_idx >= 0:
-                # Variant should be ~20 bytes after "Created External\0"
-                search_from = ce_idx + 18
-                var_local = raw.find(b'Variant', search_from, search_from + 32)
-                if var_local >= 0:
-                    nul = raw.find(b'\x00', var_local + 7, var_local + 9)
-                    data_start = (nul + 1) if nul >= 0 else (var_local + 8)
-                    result.warnings.append(f"Found CE at 0x{ce_idx:04X}")
-                else:
-                    data_start = search_from
-                    result.warnings.append(f"Found CE without Variant at 0x{ce_idx:04X}")
-            else:
-                result.warnings.append("No Variant marker found and no fallback matched")
-                return result
-    else:
-        data_start = variant_idx + 8
-    if data_start + 23 >= len(raw):
-        result.warnings.append("Data section too short")
-        return result
-
-    d = raw[data_start:]
-    result.n_verts_header = d[12]
-    result.n_faces_header = d[19]
-
-    # Find attribute block end marker
-    attr_suffix = bytes([0x00, 0x05, 0x40, 0x04, 0x00, 0x0A, 0x20, 0x08, 0x07])
-    attr_pos = raw.find(attr_suffix, data_start)
-    if attr_pos < 0:
-        attr_pos = len(raw)
-
-    region = d[23:attr_pos - data_start]  # skip 23-byte pre-coord header
-
-    # Find first coordinate
-    coord_offset = 0
-    for i in range(len(region) - 2):
-        if region[i] <= 0x06 and region[i + 1] in (0x40, 0x41):
-            coord_offset = i
-            break
-
-    # Find face section marker (last "20 00" before attributes)
-    face_marker_pos = -1
-    search_region = raw[data_start + 23 + coord_offset:attr_pos]
-    # Search backwards for 20 00
-    for i in range(len(search_region) - 2, 0, -1):
-        if search_region[i] == 0x20 and search_region[i + 1] == 0x00:
-            face_marker_pos = i
-            break
-
-    coord_end = len(region)
-    if face_marker_pos > 0:
-        coord_end = coord_offset + face_marker_pos
-
-    # ── Decode coordinates ──
-    pos = coord_offset
-    prev = [0] * 8
-
-    while pos < coord_end:
-        if pos >= len(region):
-            break
-        b = region[pos]
-
-        if b <= 0x06:
-            count = b
-            n_bytes = count + 1
-            if pos + 1 + n_bytes > len(region):
-                break
-
-            stored = list(region[pos + 1:pos + 1 + n_bytes])
-
-            if stored and stored[0] in (0x40, 0x41, 0xC0, 0xC1):
-                r = stored + [0] * (8 - n_bytes)
-            else:
-                r = [prev[0]] + stored + list(prev[n_bytes + 1:8])
-
-            r = (r + [0] * 8)[:8]
-            val = read_be_double(bytes(r))
-            result.coord_values.append(val)
-            prev = r
-            pos += 1 + n_bytes
-
-        elif is_separator(b):
-            pos += 1
-        elif pos + 1 < len(region):
-            pos += 2
-        else:
-            break
-
-    # ── Decode face vertex indices ──
-    if face_marker_pos > 0:
-        face_start = coord_offset + face_marker_pos + 2  # skip the "20 00"
-        fpos = face_start
-        while fpos < len(region):
-            b = region[fpos]
-            if b <= 0x06:
-                count = b
-                n_bytes = count + 1
-                if fpos + 1 + n_bytes > len(region):
-                    break
-                for i in range(n_bytes):
-                    v = region[fpos + 1 + i]
-                    if 1 <= v <= result.n_verts_header:
-                        result.face_vertex_indices.append(v)
-                fpos += 1 + n_bytes
-            elif is_separator(b):
-                fpos += 1
-            elif fpos + 1 < len(region):
-                fpos += 2
-            else:
-                break
-
-    # ── Build vertices from coordinate values ──
-    if len(result.coord_values) >= 3:
-        cx, cy, cz = result.coord_values[0], result.coord_values[1], result.coord_values[2]
-        result.vertices.append((cx, cy, cz))
-
-        for i in range(3, len(result.coord_values)):
-            v = result.coord_values[i]
-            dx = abs(v - cx)
-            dy = abs(v - cy)
-            dz = abs(v - cz)
-            if dx <= dy and dx <= dz:
-                cx = v
-            elif dy <= dz:
-                cy = v
-            else:
-                cz = v
-            result.vertices.append((cx, cy, cz))
-
-    if len(result.coord_values) == 0:
-        result.warnings.append("No coordinates decoded (file may use 7-8 byte coords)")
-    else:
-        result.success = True
-
+    result.vertices = list(tri.vertices)
+    result.faces = list(tri.faces)
+    result.face_vertex_indices = [i for face in tri.faces for i in face]
+    result.coord_values = [c for v in tri.vertices for c in v]
+    result.n_verts_header = tri.vertex_count
+    result.n_faces_header = tri.face_count
+    if not tri.magic_ok:
+        result.warnings.append('Not a vulZ container - parsed as a flat raw image')
+    result.success = len(tri.vertices) > 0
+    if not result.success:
+        result.warnings.append('No geometry decoded')
     return result
-
 
 def try_load_sidecar_dxf(oot_path: str) -> Optional[List[Tuple[int, int, int]]]:
     """Try to load face connectivity from a matching .dxf sidecar file."""

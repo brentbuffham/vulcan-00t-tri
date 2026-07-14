@@ -113,7 +113,16 @@ loop:
 Notes:
 * **Stale copies.** Rewritten pages can leave old versions in the file. The tree
   names the current copy; a run-scanned page never overwrites a tree-referenced
-  slot.
+  slot. **Slot numbering must follow tree-naming order, not a single global
+  sequential cursor** — otherwise a run that walks into an orphan (an old copy of
+  a rewritten page left in an `advance` chain) consumes the slot a later
+  tree-named page owns, pushing that live page out of range and silently dropping
+  it (`missing_pages` stays 0, so no recovery fires). Anchor each run's slot to
+  its start page's index in tree-naming order; the global cursor is only the
+  fallback for flat/older files and the `ignore_numbers` recovery. Fixed +
+  verified in `ROSETTA/tri00t_v2.rs` (see `ROSETTA/STALE_PAGE_FIX.md`); the
+  original `ROSETTA/tri00t.rs` still exhibits the bug. Repro:
+  `SOLID_MM_O31A_0504_8123.00t` (v1 drops ~1067/1475 faces; v2 → 741/1475).
 * **Older/flat files** point the root straight at the first page of a contiguous
   run; run-scanning covers them.
 * A decode is **complete** only if every one of `total_pages` slots was filled.
